@@ -1,0 +1,87 @@
+﻿# ============================================================
+#  System Windykacja - .gitignore
+# ============================================================
+
+# â”€â”€ Python â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+*.whl
+
+# â”€â”€ Srodowiska wirtualne â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# â”€â”€ Zmienne srodowiskowe - NIGDY nie commituj .env â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+.env
+backend/.env
+worker/.env
+!.env.example
+
+# â”€â”€ Logi aplikacji - zawartosc ignorowana, katalog sledzony â”€
+logs/*.log
+logs/*.jsonl
+backend/logs/*.log
+backend/logs/*.jsonl
+worker/logs/*.log
+worker/logs/*.jsonl
+# Zachowaj katalogi w repo
+!logs/.gitkeep
+!backend/logs/.gitkeep
+
+# â”€â”€ Snapshoty i archiwa - tylko pliki ignorowane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+snapshots/**/*.json.gz
+snapshots/**/*.json
+archives/**/*.json.gz
+archives/**/*.json
+!snapshots/.gitkeep
+!archives/.gitkeep
+
+# â”€â”€ Redis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+dump.rdb
+redis.log
+
+# â”€â”€ IDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# â”€â”€ Narzedzia statyczne Python â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# â”€â”€ Docker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# docker-compose.override.yml moze zawierac lokalne nadpisania
+docker-compose.override.yml
+
+# â”€â”€ Alembic - nie ignorujemy wersji migracji â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# backend/alembic/versions/ - sledzony w repo
+
+# â”€â”€ Tymczasowe PDF (jezeli kiedys beda zapisywane) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+backend/pdfs/
+*.pdf
+
+# â”€â”€ Certyfikaty SSL (jesli beda lokalne) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+*.pem
+*.key
+*.crt
+*.p12
+
+nbproject
