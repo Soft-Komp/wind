@@ -119,13 +119,14 @@ BEGIN
 END;
 GO
 
--- ---- Comments ----
+-- ---- Comments (v1.5: Tresc + UzytkownikID NOT NULL) ----
 CREATE OR ALTER TRIGGER dbo_ext.trg_Comments_UpdatedAt
 ON dbo_ext.Comments
 AFTER UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
+    -- Kolumny: ID_COMMENT, ID_KONTRAHENTA, Tresc, UzytkownikID, IsActive
     IF NOT UPDATE(UpdatedAt)
     BEGIN
         UPDATE dbo_ext.Comments

@@ -78,9 +78,11 @@ class User(AuditMixin, Base):
     audit_logs: Mapped[list["AuditLog"]] = relationship(  # type: ignore[name-defined]
         "AuditLog", back_populates="user"
     )
-    comments: Mapped[list["Comment"]] = relationship(  # type: ignore[name-defined]
-        "Comment", back_populates="user"
-    )
+    comments: Mapped[list["Comment"]] = relationship(
+    "Comment",
+    back_populates="uzytkownik",
+    foreign_keys="[Comment.uzytkownik_id]",
+)
 
     def __repr__(self) -> str:
         return f"<User id={self.id_user} username={self.username!r} role={self.id_role}>"
