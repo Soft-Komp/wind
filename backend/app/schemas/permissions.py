@@ -1,67 +1,66 @@
-"""
-Schematy Pydantic v2 — Uprawnienia.
+"""Permission — Pydantic schemas (CRUD + list/detail).
 
-Standard: CRUD + ListItem/Detail + ListQuery (page/limit, domyślny limit=12).
+Zgodne z BaseResponse/PaginatedResponse.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.base import BaseResponse, PaginatedResponse
+from app.schemas.base import BaseResponse, PaginatedResponse, PaginationParams
 
-
-# ---------------------------------------------------------------------------
-# Permission
-# ---------------------------------------------------------------------------
-
-class PermissionBase(BaseModel):
+class PermissionCreate(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    permission_name: str = Field(..., max_length=100)
-    description: str | None = Field(None, max_length=200)
-    category: str = Field(..., max_length=50)
+    permission_name: str = Field(...)
+    description: str | None | None = Field(default=None)
+    category: str = Field(...)
 
-
-class {Entity}Create({Entity}Base):
-    pass
 
 
 class PermissionUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    permission_name: str | None = Field(None, max_length=100)
-    description: str | None = Field(None, max_length=200)
-    category: str | None = Field(None, max_length=50)
+    permission_name: str | None = Field(default=None)
+    description: str | None | None = Field(default=None)
+    category: str | None = Field(default=None)
+
 
 
 class PermissionRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True, extra='ignore')
-    id_permission: int | None = Field(None)
-    permission_name: str = Field(..., max_length=100)
-    description: str | None = Field(None, max_length=200)
-    category: str = Field(..., max_length=50)
+    model_config = ConfigDict(extra='forbid', from_attributes=True)
+    id_permission: int = Field(...)
+    permission_name: str = Field(...)
+    description: str | None | None = Field(default=None)
+    category: str = Field(...)
+    created_at: datetime = Field(...)
+    updated_at: datetime | None | None = Field(default=None)
+    is_active: bool = Field(...)
+
 
 
 class PermissionListItem(BaseModel):
-    model_config = ConfigDict(from_attributes=True, extra='ignore')
-    id_permission: int | None = Field(None)
-    permission_name: str = Field(..., max_length=100)
-    description: str | None = Field(None, max_length=200)
-    category: str = Field(..., max_length=50)
+    model_config = ConfigDict(extra='forbid', from_attributes=True)
+    id_permission: int = Field(...)
+    permission_name: str = Field(...)
+    description: str | None | None = Field(default=None)
+
 
 
 class PermissionDetail(PermissionRead):
+    """Szczegóły (na start = pełny Read; można rozszerzyć o relacje)."""
     pass
 
 
-class PermissionListQuery(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    page: int = Field(1, ge=1)
-    limit: int = Field(12, ge=1, le=500)
-    sort: str | None = None
-
 
 PermissionResponse = BaseResponse[PermissionRead]
+
 PermissionDetailResponse = BaseResponse[PermissionDetail]
+
 PermissionListResponse = PaginatedResponse[PermissionListItem]
 
 
+
+class PermissionListQuery(PaginationParams):
+    """Query params dla listy: paginacja + sortowanie."""
+    sort: str | None = Field(default=None)

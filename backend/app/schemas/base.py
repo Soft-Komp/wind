@@ -307,7 +307,7 @@ class PaginationParams(BaseModel):
         description="Numer strony (zaczyna się od 1).",
     )
     limit: int = Field(
-        default=20,
+        default=12,
         ge=1,
         le=500,
         description="Liczba elementów na stronie. Maksymalnie 500.",
