@@ -1,74 +1,164 @@
--- ============================================================
--- Seed: domyślna konfiguracja SystemConfig
--- Wszystkie klucze opisane w USTALENIA_PROJEKTU v1.5
+-- =============================================================================
+-- SEED 05 — SystemConfig (8 kluczy konfiguracyjnych)
+-- =============================================================================
+-- Plik:    database/seeds/05_system_config.sql
+-- Wersja:  1.1.0  (v1.5: dodano master_key.pin_hash — AUDIT R6)
+-- Data:    2026-02-18
+-- Zgodny:  USTALENIA_PROJEKTU v1.6 §5.2, TABELE_REFERENCJA v1.0 §11
 --
--- WAŻNE — logika MERGE:
---   ConfigValue  → INSERT przy nowym kluczu / NIE nadpisuje istniejącej
---   Description  → zawsze aktualizowana (opis może się zmienić w projekcie)
+-- IDEMPOTENTNY — MERGE:
+--   INSERT jeśli klucz nie istnieje.
+--   UPDATE jeśli klucz istnieje — ale NIE nadpisuje master_key.pin_hash
+--   jeśli ma już niepustą wartość (chroni przed przypadkowym resetem).
 --
--- Idempotentny — bezpieczny do wielokrotnego uruchomienia
--- ============================================================
+-- ⚠️  master_key.pin_hash:
+--     Po seedzie wartość = '' (pusty string — placeholder).
+--     Uruchom: python database/setup.py --set-master-pin
+--     Skrypt:
+--       1. Pyta o PIN (bez echa terminala)
+--       2. Hashuje bcrypt (rounds=12)
+--       3. UPDATE SystemConfig SET ConfigValue=hash WHERE ConfigKey='master_key.pin_hash'
+--     NIGDY nie commituj rzeczywistego hasha do repozytorium!
+-- =============================================================================
 
 USE [WAPRO];
 GO
 
-MERGE dbo_ext.SystemConfig AS target
-USING (VALUES
-    (
-        N'cors.allowed_origins',
-        N'http://0.53:3000,http://localhost:3000',
-        N'Biała lista domen CORS. Wartości oddzielone przecinkiem. Zarządzaj przez endpoint /system/cors.'
-    ),
-    (
-        N'otp.expiry_minutes',
-        N'15',
-        N'TTL kodu OTP w minutach. Dotyczy: password_reset i 2fa.'
-    ),
-    (
-        N'delete_token.ttl_seconds',
-        N'60',
-        N'TTL tokenu potwierdzającego usunięcie (dwuetapowe DELETE). Wartość w sekundach.'
-    ),
-    (
-        N'impersonation.max_hours',
-        N'4',
-        N'Maksymalny czas trwania sesji impersonacji w godzinach. Uprawnienie: auth.impersonate.'
-    ),
-    (
-        N'master_key.enabled',
-        N'true',
-        N'Czy MASTER_KEY jest aktywny. false = dostęp serwisowy wyłączony bez restartu.'
-    ),
-    (
-        N'master_key.pin_hash',
-        N'',
-        N'Hash argon2 PINu wymaganego przy użyciu MASTER_KEY. Puste = PIN nieaktywny. NIGDY nie wpisuj plain PINu.'
-    ),
-    (
-        N'schema_integrity.reaction',
-        N'BLOCK',
-        N'Reakcja na niezgodność checksumu schematu przy starcie. Wartości: WARN / ALERT / BLOCK.'
-    ),
-    (
-        N'snapshot.retention_days',
-        N'30',
-        N'Liczba dni przechowywania snapshotów dbo_ext. Starsze usuwa cron.'
-    )
-) AS source (ConfigKey, ConfigValue, Description)
-ON target.ConfigKey = source.ConfigKey
-WHEN NOT MATCHED THEN
-    INSERT (ConfigKey, ConfigValue, Description, IsActive, CreatedAt)
-    VALUES (source.ConfigKey, source.ConfigValue, source.Description, 1, GETDATE())
-WHEN MATCHED THEN
-    -- Aktualizuj TYLKO opis — nie nadpisuj wartości zmienionej przez admina
-    UPDATE SET Description = source.Description;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
 GO
 
-PRINT 'Seed 05 zakończony. 8 kluczy konfiguracyjnych w SystemConfig.';
-PRINT '';
-PRINT 'UWAGA: master_key.pin_hash jest pusty.';
-PRINT 'Jeśli PIN jest wymagany, ustaw go ręcznie:';
-PRINT '  UPDATE dbo_ext.SystemConfig';
-PRINT '    SET ConfigValue = ''<argon2_hash_pinu>''';
-PRINT '  WHERE ConfigKey   = ''master_key.pin_hash'';';
+PRINT '=== SEED 05: SystemConfig — START ===';
+PRINT 'Czas: ' + CONVERT(NVARCHAR, GETDATE(), 120);
+
+BEGIN TRANSACTION;
+BEGIN TRY
+
+    -- =========================================================================
+    -- MERGE: 8 kluczy konfiguracyjnych
+    -- Warunek UPDATE: nie nadpisuj master_key.pin_hash jeśli już ustawiony
+    -- =========================================================================
+    MERGE [dbo_ext].[SystemConfig] AS target
+    USING (
+        SELECT ConfigKey, ConfigValue, Description FROM (VALUES
+
+            (
+                N'cors.allowed_origins',
+                N'http://0.53:3000,http://localhost:3000',
+                N'Lista dozwolonych origins CORS (przecinkami). Zmiana działa natychmiast po odświeżeniu cache Redis (TTL 5 min).'
+            ),
+            (
+                N'otp.expiry_minutes',
+                N'15',
+                N'Czas ważności kodu OTP do resetu hasła (minuty). Zakres: 5–60.'
+            ),
+            (
+                N'delete_token.ttl_seconds',
+                N'60',
+                N'Czas ważności tokenu potwierdzającego DELETE (sekundy). Po tym czasie token wygasa i operacja wymaga ponownego zainicjowania.'
+            ),
+            (
+                N'impersonation.max_hours',
+                N'4',
+                N'Maksymalny czas trwania sesji impersonacji (godziny). Po tym czasie token impersonacji wygasa automatycznie.'
+            ),
+            (
+                N'master_key.enabled',
+                N'true',
+                N'Czy dostęp przez Master Key jest aktywny (true/false). Wyłącz w środowiskach produkcyjnych gdy nie jest potrzebny.'
+            ),
+            (
+                N'master_key.pin_hash',
+                N'',
+                N'Hash bcrypt (rounds=12) PIN-u do Master Key. WYMAGANE ustawienie przed produkcją: python database/setup.py --set-master-pin'
+            ),
+            (
+                N'schema_integrity.reaction',
+                N'BLOCK',
+                N'Reakcja na wykrycie zmian schematu poza Alembic: WARN (log + kontynuuj) / ALERT (log + SSE) / BLOCK (SystemExit(1)).'
+            ),
+            (
+                N'snapshot.retention_days',
+                N'30',
+                N'Liczba dni przechowywania snapshotów automatycznych. Starsze pliki usuwane przez ARQ cron podczas tworzenia nowego snapshotu.'
+            )
+
+        ) AS src (ConfigKey, ConfigValue, Description)
+    ) AS source
+        ON target.[ConfigKey] = source.[ConfigKey]
+    WHEN NOT MATCHED BY TARGET THEN
+        INSERT ([ConfigKey], [ConfigValue], [Description], [IsActive], [CreatedAt])
+        VALUES (source.[ConfigKey], source.[ConfigValue], source.[Description], 1, GETDATE())
+    WHEN MATCHED THEN
+        UPDATE SET
+            -- Aktualizuj Description zawsze (może się zmienić w nowej wersji)
+            [Description] = source.[Description],
+            [UpdatedAt]   = GETDATE(),
+            -- Aktualizuj ConfigValue tylko jeśli:
+            -- (a) klucz NIE jest master_key.pin_hash (pin nigdy nie resetujemy)
+            -- (b) LUB target.ConfigValue jest pusty (pierwsza inicjalizacja)
+            [ConfigValue] = CASE
+                WHEN target.[ConfigKey] = N'master_key.pin_hash'
+                     AND LTRIM(RTRIM(target.[ConfigValue])) <> N''
+                THEN target.[ConfigValue]   -- zachowaj istniejący hash PIN-u
+                ELSE source.[ConfigValue]   -- aktualizuj pozostałe
+            END;
+
+    DECLARE @affected INT = @@ROWCOUNT;
+    PRINT 'SystemConfig: ' + CAST(@affected AS NVARCHAR) + ' rekordów wstawionych/zaktualizowanych.';
+
+    -- =========================================================================
+    -- Weryfikacja — log stanu wszystkich kluczy
+    -- =========================================================================
+    PRINT '';
+    PRINT 'Stan konfiguracji po seedzie:';
+    SELECT
+        [ConfigKey],
+        -- Maskuj wartość PIN-u w logach
+        CASE
+            WHEN [ConfigKey] = N'master_key.pin_hash'
+            THEN CASE
+                     WHEN LTRIM(RTRIM([ConfigValue])) = N''
+                     THEN N'[PUSTY — WYMAGANA KONFIGURACJA]'
+                     ELSE N'[USTAWIONY — ' + CAST(LEN([ConfigValue]) AS NVARCHAR) + N' znaków]'
+                 END
+            ELSE [ConfigValue]
+        END AS ConfigValue,
+        [IsActive],
+        CONVERT(NVARCHAR, [CreatedAt], 120) AS CreatedAt,
+        CONVERT(NVARCHAR, [UpdatedAt], 120) AS UpdatedAt
+    FROM [dbo_ext].[SystemConfig]
+    ORDER BY [ConfigKey];
+
+    -- Ostrzeżenie jeśli pin_hash pusty
+    DECLARE @pin_hash NVARCHAR(MAX);
+    SET @pin_hash = (
+        SELECT [ConfigValue]
+        FROM [dbo_ext].[SystemConfig]
+        WHERE [ConfigKey] = N'master_key.pin_hash'
+    );
+
+    IF LTRIM(RTRIM(ISNULL(@pin_hash, N''))) = N''
+    BEGIN
+        PRINT '';
+        PRINT '⚠️  UWAGA: master_key.pin_hash jest pusty!';
+        PRINT '   Master Key nie będzie działał do czasu ustawienia PIN-u.';
+        PRINT '   Uruchom: python database/setup.py --set-master-pin';
+    END
+
+    COMMIT TRANSACTION;
+    PRINT '';
+    PRINT '=== SEED 05: SystemConfig — OK ===';
+
+END TRY
+BEGIN CATCH
+    ROLLBACK TRANSACTION;
+    DECLARE @msg  NVARCHAR(2048) = ERROR_MESSAGE();
+    DECLARE @line INT            = ERROR_LINE();
+    DECLARE @sev  INT            = ERROR_SEVERITY();
+    PRINT '=== SEED 05: BŁĄD ===';
+    PRINT 'Linia:     ' + CAST(@line AS NVARCHAR);
+    PRINT 'Wiadomość: ' + @msg;
+    RAISERROR(@msg, @sev, 1);
+END CATCH
 GO
