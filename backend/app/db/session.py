@@ -425,3 +425,34 @@ async def close_db_connection() -> None:
             str(exc),
             exc_info=True,
         )
+
+
+async def close_db_engine() -> None:
+    """
+    Alias dla zgodności z main.py – deleguje do close_db_connection().
+    """
+    await close_db_connection()
+
+    # Alias dla zgodności wstecznej – stare endpointy mogą używać get_async_session
+get_async_session = get_db
+
+from redis.asyncio import Redis
+
+_redis_client: Redis | None = None
+
+
+def get_redis_client() -> Redis:
+    """
+    Zwraca singleton klienta Redis opartego na settings.redis_url.
+
+    Używane m.in. do cache, limitów itd.
+    """
+    global _redis_client
+
+    if _redis_client is None:
+        _redis_client = Redis.from_url(
+            settings.redis_url,
+            max_connections=settings.redis_max_connections,
+        )
+
+    return _redis_client

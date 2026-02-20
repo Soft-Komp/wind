@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
-    BitString,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -125,10 +125,9 @@ class User(Base):
 
     is_active: Mapped[bool] = mapped_column(
         "IsActive",
-        # MSSQL BIT — True/False mapowane jako 1/0
-        Integer,
+        Boolean,  # mapuje się w MSSQL na BIT
         nullable=False,
-        server_default=text("1"),
+        server_default=text("1"),  # 1 = TRUE, 0 = FALSE
         comment="Soft delete: 1=aktywny, 0=usunięty — nigdy fizyczny DELETE",
     )
 

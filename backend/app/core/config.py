@@ -557,5 +557,19 @@ def _create_settings() -> Settings:
         sys.exit(1)
 
 
-# Jedyna instancja — importowana w całej aplikacji
-settings: Settings = _create_settings()
+# ---------------------------------------------------------------------------
+# Singleton / lazy loading – jedyna instancja Settings w całej aplikacji
+# ---------------------------------------------------------------------------
+
+from functools import lru_cache
+
+@lru_cache
+def get_settings() -> Settings:
+    """
+    Główna funkcja do pobierania konfiguracji.
+    Używana w całej aplikacji: from app.core.config import get_settings
+    """
+    return _create_settings()
+
+# Dla miejsc, które importują `settings` bezpośrednio:
+settings: Settings = get_settings()

@@ -61,7 +61,7 @@ bcrypt==4.2.1
 # slowapi = Redis-backed rate limiter dla FastAPI (oparty na limits)
 # Użycie: endpointy auth (login, OTP) — PLAN_PRAC.md §"Rate limiting — do dodania"
 
-slowapi==0.5.7
+slowapi==0.1.9
 
 
 # ─── Redis / kolejka zadań ────────────────────────────────────────────────────
