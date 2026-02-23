@@ -96,8 +96,8 @@ Błędy zawsze jako tablica w polu `errors`:
 """
 _APP_VERSION = "1.0.0"
 _APP_CONTACT = {
-    "name": "Administrator Systemu",
-    "email": "admin@windykacja.local",
+    "name": "System Windykacja",
+    "email": "admin@windykacja.pl",
 }
 
 # Klucz Redis dla cache CORS (spójny z SystemConfig i cors_middleware)

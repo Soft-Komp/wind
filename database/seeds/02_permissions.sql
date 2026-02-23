@@ -19,9 +19,6 @@
 -- Wymaganie: 01_roles.sql musi być wykonany wcześniej (brak FK ale logika).
 -- =============================================================================
 
-USE [WAPRO];
-GO
-
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO

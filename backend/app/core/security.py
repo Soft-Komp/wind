@@ -36,6 +36,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger(__name__)
 
+# Typy tokenów JWT — używane w dependencies.py i api/*.py
+TOKEN_TYPE_ACCESS  = "access"
+TOKEN_TYPE_REFRESH = "refresh"
+
 # Lazy import — unikamy circular import (security importuje z config)
 # Importy wewnętrzne realizowane w funkcjach które ich potrzebują
 

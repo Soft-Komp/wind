@@ -17,9 +17,6 @@
 -- Wymagania: 01_roles.sql musi być wykonany wcześniej (potrzebne ID_ROLE).
 -- =============================================================================
 
-USE [WAPRO];
-GO
-
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO
@@ -102,15 +99,15 @@ BEGIN TRY
     -- Weryfikacja stanu konta
     -- =========================================================================
     SELECT
-        [ID_USER],
-        [Username],
-        [Email],
-        [FullName],
-        [IsActive],
+        u.[ID_USER],
+        u.[Username],
+        u.[Email],
+        u.[FullName],
+        u.[IsActive],
         r.[RoleName],
-        CONVERT(NVARCHAR, [CreatedAt], 120) AS CreatedAt,
+        CONVERT(NVARCHAR, u.[CreatedAt], 120) AS CreatedAt,
         CASE
-            WHEN [PasswordHash] LIKE N'$argon2id$v=19$PLACEHOLDER%'
+            WHEN u.[PasswordHash] LIKE N'$argon2id$v=19$PLACEHOLDER%'
             THEN N'⚠️  PLACEHOLDER — wymagana zmiana!'
             ELSE N'✅ Hash ustawiony'
         END AS PasswordStatus

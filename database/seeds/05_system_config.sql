@@ -21,9 +21,6 @@
 --     NIGDY nie commituj rzeczywistego hasha do repozytorium!
 -- =============================================================================
 
-USE [WAPRO];
-GO
-
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO

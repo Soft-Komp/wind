@@ -4,13 +4,19 @@ Historia wszystkich wysłanych monitów (email, SMS, print).
 ID_KONTRAHENTA to referencja do tabeli WAPRO.KONTRAHENT — read-only, bez FK constraint.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+if TYPE_CHECKING:
+    from app.db.models.user import User
 
 MONIT_TYPES = frozenset({"email", "sms", "print"})
 MONIT_STATUSES = frozenset({
@@ -121,6 +127,14 @@ class MonitHistory(Base):
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         "UpdatedAt", DateTime, nullable=True, onupdate=datetime.utcnow,
+    )
+
+    # ── Relacje ───────────────────────────────────────────────────────────────
+    user: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
+        "User",
+        back_populates="monit_history",
+        foreign_keys=[id_user],
+        lazy="select",
     )
 
     def __repr__(self) -> str:

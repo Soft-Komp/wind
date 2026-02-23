@@ -70,6 +70,9 @@ class Settings(BaseSettings):
       - Ukrywa SecretStr w repr/logach
     """
 
+    ACCESS_TOKEN_EXPIRE_HOURS: int = 1      # np. 1 godzina
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7      # np. 7 dni
+
     model_config = SettingsConfigDict(
         # Plik .env w katalogu roboczym lub w /app (Docker)
         env_file=(".env", "/app/.env"),
