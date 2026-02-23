@@ -113,8 +113,8 @@ async def my_permissions(
 
     return BaseResponse.ok(
         data={
-            "user_id": current_user.ID_USER,
-            "role_id": current_user.RoleID,
+            "user_id": current_user.id_user,
+            "role_id": current_user.role_id,
             "permissions": sorted(permissions),
             "total": len(permissions),
         },

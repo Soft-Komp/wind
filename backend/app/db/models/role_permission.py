@@ -5,12 +5,12 @@ Brak soft-delete — przypisania są albo aktywne albo nie istnieją.
 Brak UpdatedAt — operacja jest zawsze delete + insert (CRUD).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base
+from .base import Base, _utcnow 
 
 
 class RolePermission(Base):
@@ -38,7 +38,7 @@ class RolePermission(Base):
         "CreatedAt",
         DateTime,
         nullable=False,
-        default=datetime.utcnow,
+        default=_utcnow,           # ← było: datetime.utcnow
         server_default=text("GETDATE()"),
         comment="Kiedy przypisano uprawnienie do roli",
     )

@@ -754,11 +754,11 @@ async def _get_role_permissions(
 
     # Cache miss → DB query
     stmt = (
-        select(Permission.PermissionName)
-        .join(RolePermission, RolePermission.ID_PERMISSION == Permission.ID_PERMISSION)
+        select(Permission.permission_name)
+        .join(RolePermission, RolePermission.id_permission == Permission.id_permission)
         .where(
-            RolePermission.ID_ROLE == role_id,
-            Permission.IsActive == 1,
+            RolePermission.id_role == role_id,
+            Permission.is_active == True,  # noqa: E712
         )
     )
     result = await db.execute(stmt)
@@ -830,7 +830,7 @@ def require_permission(permission: str):
         request_id: Annotated[str, Depends(get_request_id)],
         client_ip: Annotated[str, Depends(get_client_ip)],
     ) -> User:
-        user_id = current_user.ID_USER
+        user_id = current_user.id_user
         role_id = current_user.RoleID
 
         # L1 cache: per-user per-permission
@@ -841,7 +841,7 @@ def require_permission(permission: str):
                 has_perm = l1_cached == b"1"
                 if not has_perm:
                     _log_permission_denied(
-                        user_id, current_user.Username,
+                        user_id, current_user.username,
                         permission, "l1_cache_denied",
                         request_id, client_ip,
                     )
@@ -890,7 +890,7 @@ def require_permission(permission: str):
                 {
                     "event": "permission_granted",
                     "user_id": user_id,
-                    "username": current_user.Username,
+                    "username": current_user.username,
                     "permission": permission,
                     "role_id": role_id,
                     "request_id": request_id,

@@ -418,42 +418,25 @@ class UserDetailResponse(BaseModel):
     Można ograniczyć na poziomie endpointu dla roli User/ReadOnly.
     """
 
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
-    id: int = Field(..., alias="ID_USER")
-    username: str = Field(..., alias="Username")
-    email: str = Field(..., alias="Email")
-    full_name: Optional[str] = Field(default=None, alias="FullName")
-    is_active: bool = Field(..., alias="IsActive")
-    role_id: int = Field(..., alias="RoleID")
-
-    # Zagnieżdżona rola — ładowana przez JOIN w serwisie
-    role: Optional[RoleInUserResponse] = Field(
-        default=None,
-        description="Dane roli użytkownika.",
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+        from_attributes=True,   # ← DODANE
     )
 
-    # Lista uprawnień — ładowana z RolePermissions przez JOIN
-    permissions: List[str] = Field(
-        default_factory=list,
-        description="Lista uprawnień w formacie 'kategoria.akcja'.",
-    )
-
-    # Timestamps
-    created_at: datetime = Field(..., alias="CreatedAt")
-    updated_at: Optional[datetime] = Field(default=None, alias="UpdatedAt")
-    last_login_at: Optional[datetime] = Field(default=None, alias="LastLoginAt")
-
-    # Status blokady
-    is_locked: bool = Field(
-        default=False,
-        description="Czy konto jest aktualnie zablokowane (LockedUntil > NOW).",
-    )
-    locked_until: Optional[datetime] = Field(
-        default=None,
-        alias="LockedUntil",
-        description="Data odblokowania. None jeśli konto nie jest zablokowane.",
-    )
+    id: int = Field(..., alias="id_user")          # ORM atrybut: id_user
+    username: str = Field(...)                      # ORM atrybut: username
+    email: str = Field(...)                         # ORM atrybut: email
+    full_name: Optional[str] = Field(default=None) # ORM atrybut: full_name
+    is_active: bool = Field(...)                    # ORM atrybut: is_active
+    role: Optional["RoleInUserResponse"] = Field(default=None)
+    permissions: List[str] = Field(default_factory=list)
+    role_id: int = Field(...)                       # ORM atrybut: role_id
+    created_at: datetime = Field(...)               # ORM atrybut: created_at
+    updated_at: Optional[datetime] = Field(default=None)
+    last_login_at: Optional[datetime] = Field(default=None)
+    is_locked: bool = Field(default=False)
+    locked_until: Optional[datetime] = Field(default=None)
 
 
 class UserListItemResponse(BaseModel):
@@ -464,21 +447,22 @@ class UserListItemResponse(BaseModel):
     Szczegóły ładowane osobno przez GET /users/{id}.
     """
 
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
-    id: int = Field(..., alias="ID_USER")
-    username: str = Field(..., alias="Username")
-    email: str = Field(..., alias="Email")
-    full_name: Optional[str] = Field(default=None, alias="FullName")
-    is_active: bool = Field(..., alias="IsActive")
-    role_id: int = Field(..., alias="RoleID")
-    role_name: Optional[str] = Field(
-        default=None,
-        description="Nazwa roli — z JOIN.",
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+        from_attributes=True,   # ← DODANE
     )
+
+    id: int = Field(..., alias="id_user")
+    username: str = Field(...)
+    email: str = Field(...)
+    full_name: Optional[str] = Field(default=None)
+    is_active: bool = Field(...)
+    role_id: int = Field(...)
+    role_name: Optional[str] = Field(default=None)
     is_locked: bool = Field(default=False)
-    last_login_at: Optional[datetime] = Field(default=None, alias="LastLoginAt")
-    created_at: datetime = Field(..., alias="CreatedAt")
+    last_login_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(...)
 
 
 # ---------------------------------------------------------------------------
@@ -488,29 +472,37 @@ class UserListItemResponse(BaseModel):
 class UserCreatedResponse(BaseModel):
     """Dane nowo utworzonego użytkownika — odpowiedź POST /users (201)."""
 
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+        from_attributes=True,   # ← DODANE
+    )
 
-    id: int = Field(..., alias="ID_USER")
-    username: str = Field(..., alias="Username")
-    email: str = Field(..., alias="Email")
-    full_name: Optional[str] = Field(default=None, alias="FullName")
-    role_id: int = Field(..., alias="RoleID")
-    is_active: bool = Field(..., alias="IsActive")
-    created_at: datetime = Field(..., alias="CreatedAt")
+    id: int = Field(..., alias="id_user")
+    username: str = Field(...)
+    email: str = Field(...)
+    full_name: Optional[str] = Field(default=None)
+    role_id: int = Field(...)
+    is_active: bool = Field(...)
+    created_at: datetime = Field(...)
 
 
 class UserUpdatedResponse(BaseModel):
     """Dane zaktualizowanego użytkownika — odpowiedź PUT /users/{id} (200)."""
 
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+        from_attributes=True,   # ← DODANE
+    )
 
-    id: int = Field(..., alias="ID_USER")
-    username: str = Field(..., alias="Username")
-    email: str = Field(..., alias="Email")
-    full_name: Optional[str] = Field(default=None, alias="FullName")
-    role_id: int = Field(..., alias="RoleID")
-    is_active: bool = Field(..., alias="IsActive")
-    updated_at: Optional[datetime] = Field(default=None, alias="UpdatedAt")
+    id: int = Field(..., alias="id_user")
+    username: str = Field(...)
+    email: str = Field(...)
+    full_name: Optional[str] = Field(default=None)
+    role_id: int = Field(...)
+    is_active: bool = Field(...)
+    updated_at: Optional[datetime] = Field(default=None)
 
 
 # ---------------------------------------------------------------------------

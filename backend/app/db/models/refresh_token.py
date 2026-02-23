@@ -7,7 +7,7 @@ Czas życia: 30 dni (REFRESH_TOKEN_EXPIRE_DAYS z .env).
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base
 
@@ -30,6 +30,7 @@ class RefreshToken(Base):
         nullable=False,
         comment="FK → Users",
     )
+    user_id = synonym("id_user")
     token: Mapped[str] = mapped_column(
         "Token", String(500), nullable=False,
         comment="SHA-256 hash refresh tokenu — NIE plain token",

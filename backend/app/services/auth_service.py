@@ -60,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core import security
 from app.db.models.audit_log import AuditLog
 from app.db.models.master_access_log import MasterAccessLog
 from app.db.models.otp_code import OtpCode
@@ -836,8 +837,13 @@ async def login(
         _ph.hash("dummy_password_to_prevent_timing_attack")
         logger.warning(
             "Logowanie NIEUDANE: użytkownik '%s' nie istnieje (IP=%s)",
-            username_clean, ip_clean,
-            extra={"username": username_clean, "ip": ip_clean, "reason": "user_not_found"},
+            username_clean,
+            ip_clean,
+            extra={
+                "username": username_clean,
+                "ip": ip_clean,
+                "reason": "user_not_found",
+            },
         )
         await audit_service.log_failed_login(
             db,
@@ -847,21 +853,26 @@ async def login(
         )
         raise AuthError("Nieprawidłowy login lub hasło", code="invalid_credentials")
 
+    # ⬇️ Dopiero TUTAJ, kiedy wiemy że user != None
+    user_id = user.id_user
+    username_db = user.username
+    hashed_password = user.password_hash
+
     # 4. Sprawdź blokadę konta
     if user.locked_until and user.locked_until > datetime.now(timezone.utc):
         logger.warning(
             "Logowanie NIEUDANE: konto zablokowane user_id=%d (IP=%s, locked_until=%s)",
-            user.id_user, ip_clean, user.locked_until.isoformat(),
+            user_id, ip_clean, user.locked_until.isoformat(),
             extra={
-                "user_id": user.id_user,
+                "user_id": user_id,
                 "locked_until": user.locked_until.isoformat(),
             },
         )
         await audit_service.log_auth(
             db,
             action="user_login",
-            user_id=user.id_user,
-            username=user.username,
+            user_id=user_id,
+            username=username_db,
             success=False,
             error_message="account_locked",
             ip_address=ip_clean,
@@ -869,19 +880,19 @@ async def login(
         raise AccountLockedError(locked_until=user.locked_until)
 
     # 5. Weryfikacja hasła argon2id
-    password_ok = verify_password(password_clean, user.password_hash)
+    password_ok = verify_password(password_clean, hashed_password)
 
     if not password_ok:
         # Inkrementuj licznik nieudanych prób
-        new_attempts = await _increment_failed_login(db, user.id_user)
+        new_attempts = await _increment_failed_login(db, user_id)
 
         logger.warning(
             "Logowanie NIEUDANE: złe hasło user_id=%d, username=%s, "
             "attempt=%d/%d (IP=%s)",
-            user.id_user, user.username, new_attempts, _MAX_FAILED_ATTEMPTS, ip_clean,
+            user_id, username_db, new_attempts, _MAX_FAILED_ATTEMPTS, ip_clean,
             extra={
-                "user_id": user.id_user,
-                "username": user.username,
+                "user_id": user_id,
+                "username": username_db,
                 "failed_attempts": new_attempts,
                 "max_attempts": _MAX_FAILED_ATTEMPTS,
                 "ip": ip_clean,
@@ -899,11 +910,10 @@ async def login(
     permissions = _user_permissions(user)
     role_name = user.role.role_name if user.role else "Unknown"
 
-    # 7. Tworzenie tokenów
     settings = _get_settings()
     access_token, access_expires_at = _create_access_token(
-        user_id=user.id_user,
-        username=user.username,
+        user_id=user_id,
+        username=username_db,
         role=role_name,
         permissions=permissions,
     )
@@ -913,18 +923,23 @@ async def login(
 
     # 8. Zapisz RefreshToken
     await _save_refresh_token(
-        db, user.id_user, hashed_refresh, refresh_expires_at, ip_clean, user_agent
+        db,
+        user_id,
+        hashed_refresh,
+        refresh_expires_at,
+        ip_clean,
+        user_agent,
     )
 
     # 9. Aktualizuj LastLoginAt, zeruj failed attempts
-    await _reset_failed_login(db, user.id_user)
+    await _reset_failed_login(db, user_id)
 
     # 10. Opcjonalne rehash (argon2 parametry zmieniły się)
-    if password_needs_rehash(user.password_hash):
+    if password_needs_rehash(hashed_password):
         new_hash = hash_password(password_clean)
         await db.execute(
             update(User)
-            .where(User.id_user == user.id_user)
+            .where(User.id_user == user_id)
             .values(
                 password_hash=new_hash,
                 updated_at=datetime.now(timezone.utc),
@@ -933,16 +948,16 @@ async def login(
         await db.commit()
         logger.info(
             "Hasło użytkownika %d zrehashowane (aktualizacja parametrów argon2)",
-            user.id_user,
-            extra={"user_id": user.id_user},
+            user_id,
+            extra={"user_id": user_id}
         )
 
     # 11. AuditLog (fire-and-forget)
     await audit_service.log_auth(
         db,
         action="user_login",
-        user_id=user.id_user,
-        username=user.username,
+        user_id=user_id,
+        username=username_db,
         success=True,
         details={
             "ip": ip_clean,
@@ -955,10 +970,10 @@ async def login(
 
     logger.info(
         "Logowanie UDANE: user_id=%d, username=%s, role=%s (IP=%s)",
-        user.id_user, user.username, role_name, ip_clean,
+        user_id, username_db, role_name, ip_clean,
         extra={
-            "user_id": user.id_user,
-            "username": user.username,
+            "user_id": user_id,
+            "username": username_db,
             "role": role_name,
             "ip": ip_clean,
             "permissions_count": len(permissions),
@@ -974,8 +989,8 @@ async def login(
         refresh_token=raw_refresh,
         token_type="bearer",
         expires_in=max(0, access_expires_in),
-        user_id=user.id_user,
-        username=user.username,
+        user_id=user_id,
+        username=username_db,
         role=role_name,
         permissions=permissions,
     )
@@ -1134,10 +1149,10 @@ async def refresh(
     permissions = _user_permissions(user)
     role_name = user.role.role_name if user.role else "Unknown"
 
-    new_access_token, access_expires_at = _create_access_token(
+    new_access_token, access_expires_at = security.create_access_token(
         user_id=user.id_user,
         username=user.username,
-        role=role_name,
+        role_id=user.role_id,
         permissions=permissions,
     )
 

@@ -13,12 +13,19 @@ WAŻNE — async driver:
   connection string: mssql+aioodbc:///?odbc_connect=DRIVER={ODBC Driver 18...}
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, text
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
 
+def _utcnow() -> datetime:
+    """
+    Zwraca aktualny czas UTC jako datetime aware.
+    Zastępuje deprecated datetime.utcnow() (usunięte w Python 3.14).
+    Używane jako callable w default= i onupdate= SQLAlchemy.
+    """
+    return datetime.now(timezone.utc)
 
 class Base(DeclarativeBase):
     """Deklaratywna baza ORM. Wszystkie modele dbo_ext dziedziczą po tej klasie."""
@@ -36,7 +43,7 @@ class TimestampMixin:
         "CreatedAt",
         DateTime,
         nullable=False,
-        default=datetime.utcnow,
+        default=_utcnow,           # ← było: datetime.utcnow
         server_default=text("GETDATE()"),
         comment="Data i czas utworzenia rekordu (UTC)",
     )
@@ -45,7 +52,7 @@ class TimestampMixin:
         "UpdatedAt",
         DateTime,
         nullable=True,
-        onupdate=datetime.utcnow,
+        onupdate=_utcnow,          # ← było: datetime.utcnow
         comment="Data i czas ostatniej modyfikacji — ORM i trigger MSSQL",
     )
 
