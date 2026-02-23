@@ -164,7 +164,7 @@ async def login(
 
     return BaseResponse.ok(
         data=token_pair.__dict__,
-        code="auth.login_success",
+        code=200,
     )
 
 

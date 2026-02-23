@@ -142,6 +142,11 @@ class BaseResponse(BaseModel, Generic[DataT]):
         ge=100,
         le=599,
     )
+    app_code: str | None = Field(
+        default=None,
+        description="Aplikacyjny kod odpowiedzi (np. users.created, validation.error)",
+        examples=["users.created", "validation.error"],
+    )
     errors: list[ErrorDetail] = Field(
         default_factory=list,
         description=(
@@ -155,12 +160,12 @@ class BaseResponse(BaseModel, Generic[DataT]):
     )
 
     @classmethod
-    def ok(cls, data: DataT, code: int = 200) -> "BaseResponse[DataT]":
+    def ok(cls, data: DataT, code: int = 200, app_code: str | None = None) -> "BaseResponse[DataT]":
         """
         Factory method dla sukcesów.
         Użycie: return BaseResponse.ok(user_data)
         """
-        return cls(code=code, errors=[], data=data)
+        return cls(code=code, errors=[], data=data, app_code=app_code)
 
     @classmethod
     def error(
@@ -168,6 +173,7 @@ class BaseResponse(BaseModel, Generic[DataT]):
         message: str,
         field: str = "__root__",
         code: int = 400,
+        app_code: str | None = None,
     ) -> "BaseResponse[None]":
         """
         Factory method dla pojedynczego błędu.
@@ -177,6 +183,7 @@ class BaseResponse(BaseModel, Generic[DataT]):
             code=code,
             errors=[ErrorDetail(field=field, message=message)],
             data=None,
+            app_code=app_code,
         )
 
     @classmethod

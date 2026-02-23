@@ -70,6 +70,22 @@ class Settings(BaseSettings):
       - Ukrywa SecretStr w repr/logach
     """
 
+    ACCESS_TOKEN_EXPIRE_HOURS: int = 1      # np. 1 godzina
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7      # np. 7 dni
+
+    SECRET_KEY: SecretStr = Field(
+        "CHANGE_ME_IN_ENV",  # tylko fallback na dev, w produkcji ZAWSZE z env
+        env="SECRET_KEY",
+    )
+    ALGORITHM: str = Field("HS256", env="ALGORITHM")
+
+    # Master Key (jeśli używasz master_access)
+    MASTER_KEY: SecretStr = Field(
+        "CHANGE_MASTER_KEY_IN_ENV",
+        env="MASTER_KEY",
+    )
+
+
     model_config = SettingsConfigDict(
         # Plik .env w katalogu roboczym lub w /app (Docker)
         env_file=(".env", "/app/.env"),
