@@ -65,6 +65,9 @@ from app.db.models.master_access_log import MasterAccessLog
 from app.db.models.otp_code import OtpCode
 from app.db.models.refresh_token import RefreshToken
 from app.db.models.user import User
+from app.db.models.role import Role
+from app.db.models.role_permission import RolePermission
+from app.db.models.permission import Permission
 from app.services import audit_service
 from app.services import config_service
 
@@ -273,13 +276,10 @@ def _constant_time_compare(val1: str, val2: str) -> bool:
     )
 
 
-def _sanitize_credential(value: str, max_len: int = 255) -> str:
-    """
-    Sanityzacja kredencjałów wejściowych przed przetwarzaniem.
-    - NFC normalization
-    - Strip whitespace
-    - Truncate do max_len (ochrona przed hash-flooding)
-    """
+def _sanitize_credential(value, max_len: int = 255) -> str:
+    # Obsłuż SecretStr z Pydantic
+    if hasattr(value, "get_secret_value"):
+        value = value.get_secret_value()
     normalized = unicodedata.normalize("NFC", value)
     stripped = normalized.strip()
     return stripped[:max_len]
@@ -598,7 +598,9 @@ async def _get_user_by_username(
     result = await db.execute(
         select(User)
         .options(
-            selectinload(User.role).selectinload("permissions"),
+            selectinload(User.role)
+            .selectinload(Role.role_permissions)
+            .selectinload(RolePermission.permission),
         )
         .where(User.username == username, User.is_active == True)
     )
@@ -612,7 +614,9 @@ async def _get_user_by_id(
     result = await db.execute(
         select(User)
         .options(
-            selectinload(User.role).selectinload("permissions"),
+            selectinload(User.role)
+            .selectinload(Role.role_permissions)
+            .selectinload(RolePermission.permission),
         )
         .where(User.id == user_id, User.is_active == True)
     )
@@ -636,13 +640,15 @@ async def _get_user_by_email(
 def _user_permissions(user: User) -> list[str]:
     """Wyciąga listę uprawnień z załadowanego użytkownika."""
     try:
-        if user.role and hasattr(user.role, "permissions"):
-            return [
-                p.permission_name
-                for p in user.role.permissions
-                if p.is_active
-            ]
+        if user.role and hasattr(user.role, "role_permissions"):
+            perms: list[str] = []
+            for rp in user.role.role_permissions:
+                perm = getattr(rp, "permission", None)
+                if perm and getattr(perm, "is_active", True):
+                    perms.append(perm.permission_name)
+            return perms
     except Exception:
+        # w razie czego: nie blokujemy logowania przez błąd w mapowaniu
         pass
     return []
 
@@ -800,7 +806,10 @@ async def login(
     """
     # 1. Sanityzacja
     username_clean = _sanitize_credential(username.lower().strip(), max_len=50)
-    password_clean = _sanitize_credential(password, max_len=1000)
+    password_clean = _sanitize_credential(
+        password.get_secret_value() if hasattr(password, "get_secret_value") else password,
+        max_len=1000,
+    )
     ip_clean = (ip or "unknown")[:45]
 
     logger.info(

@@ -1,0 +1,159 @@
+# =============================================================================
+# docker-compose.yml — System Windykacja
+# =============================================================================
+# Środowisko: lokalne (dev/staging)
+# MSSQL:  zewnętrzny, sieć lokalna — 192.168.0.53 (NIE w kontenerze)
+# Redis:  kontener lokalny
+# API:    kontener lokalny, port 8000
+# Worker: TODO Faza 6 — ARQ (niezaimplementowany, odkomentuj gdy gotowy)
+#
+# Uruchomienie:
+#   1. Skopiuj .env.example → .env i uzupełnij hasła
+#   2. docker-compose up --build
+#   3. API dostępne na http://localhost:8000
+#   4. Docs: http://localhost:8000/api/v1/docs
+#
+# Zatrzymanie:
+#   docker-compose down
+#
+# Zatrzymanie + usunięcie danych Redis:
+#   docker-compose down -v
+# =============================================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # REDIS — cache, pub/sub SSE, broker ARQ
+  # ─────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: windykacja_redis
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel notice
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --requirepass "${REDIS_PASSWORD:-}"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: >
+        sh -c '
+          if [ -n "${REDIS_PASSWORD:-}" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG
+          else
+            redis-cli ping | grep -q PONG
+          fi
+        '
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # API — FastAPI backend
+  # ─────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: windykacja_api
+    env_file:
+      - .env
+    environment:
+      # MSSQL — zewnętrzny serwer w sieci lokalnej
+      # Kontenery Docker Desktop mogą bezpośrednio dosięgnąć 192.168.0.53
+      DB_HOST: "${DB_HOST:-192.168.0.53}"
+      DB_PORT: "${DB_PORT:-1433}"
+      DB_NAME: "${DB_NAME}"
+      DB_USER: "${DB_USER:-sa}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      DB_TRUST_SERVER_CERTIFICATE: "${DB_TRUST_SERVER_CERTIFICATE:-true}"
+      DB_ENCRYPT: "${DB_ENCRYPT:-false}"
+
+      # Redis — usługa w tym samym compose
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+
+      # Aplikacja
+      APP_ENV: "${APP_ENV:-development}"
+      DEBUG: "${DEBUG:-true}"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Hot reload w dev — mapuje cały backend do kontenera
+      - ./backend:/app
+      # Wolumeny trwałe — logi/snapshoty/archiwa poza kontenerem
+      - ./logs:/app/logs
+      - ./snapshots:/app/snapshots
+      - ./archives:/app/archives
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # WORKER — ARQ (TODO: Faza 6 — odkomentuj po implementacji)
+  # ─────────────────────────────────────────────────────────────────────────
+  # worker:
+  #   build:
+  #     context: ./worker
+  #     dockerfile: Dockerfile
+  #   container_name: windykacja_worker
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     DB_HOST: "${DB_HOST:-192.168.0.53}"
+  #     DB_PORT: "${DB_PORT:-1433}"
+  #     DB_NAME: "${DB_NAME}"
+  #     DB_USER: "${DB_USER:-sa}"
+  #     DB_PASSWORD: "${DB_PASSWORD}"
+  #     REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+  #   volumes:
+  #     - ./worker:/app
+  #     - ./logs:/app/logs
+  #     - ./snapshots:/app/snapshots
+  #     - ./archives:/app/archives
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - windykacja_net
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WOLUMENY
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  redis_data:
+    driver: local
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIECI
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  windykacja_net:
+    driver: bridge

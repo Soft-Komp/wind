@@ -118,7 +118,7 @@ def _create_ix_roz_kontrahent_dlugi() -> None:
                     [TERMIN_PLATNOSCI],
                     [TYP_DOK]
                 )
-                WHERE [TYP_DOK] = N'F'
+                WHERE [TYP_DOK] = 'F'
                   AND [CZY_ROZLICZONY] = 0
             WITH (
                 FILLFACTOR          = 85,
@@ -173,8 +173,8 @@ def _create_ix_roz_faktura_kontrahent() -> None:
                     [CZY_PRZETERMINOWANY],
                     [FORMA_PLATNOSCI]
                 )
-                WHERE [TYP_DOK] = N'F'
-                  AND [STRONA]   = N'WN'
+                WHERE [TYP_DOK] = 'F'
+                  AND [STRONA]   = 'WN'
             WITH (
                 FILLFACTOR          = 85,
                 ONLINE              = OFF,

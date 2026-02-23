@@ -226,9 +226,7 @@ class User(Base):
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog",
         back_populates="user",
-        foreign_keys="[AuditLog.user_id]",
-        viewonly=True,
-        lazy="select",
+        foreign_keys="[AuditLog.id_user]",   # ← nazwa atrybutu Python (lowercase)
     )
 
     # ── Historia monitów (One-to-Many) ────────────────────────────────────────
