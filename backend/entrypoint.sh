@@ -164,6 +164,29 @@ else
   exit 1
 fi
 
+log_info "Uruchamiam seedery (roles, permissions, admin, system_config)..."
+
+SEED_DIR="/app/database/seeds"  # <--- tu musi wskazywać na to, co zmontowaliśmy w compose
+
+for FILE in 01_roles.sql 02_permissions.sql 03_role_permissions.sql 04_admin_user.sql 05_system_config.sql; do
+  PATH_SQL="${SEED_DIR}/${FILE}"
+  if [ -f "$PATH_SQL" ]; then
+    log_info "[SEED] uruchamiam ${FILE}"
+    /opt/mssql-tools18/bin/sqlcmd \
+      -S "tcp:${DB_HOST},${DB_PORT}" \
+      -d "${DB_NAME}" \
+      -U "${DB_USER}" \
+      -P "${DB_PASSWORD}" \
+      -C -b -I \
+      -i "$PATH_SQL" \
+      || { log_error "[SEED] ${FILE} FAILED"; exit 1; }
+  else
+    log_warn "[SEED] pomijam ${FILE} (brak pliku)"
+  fi
+done
+
+log_ok "[SEED] gotowe."
+
 # ─────────────────────────────────────────────────────────────────────────────
 # KROK 6: Uruchom serwer
 # ─────────────────────────────────────────────────────────────────────────────

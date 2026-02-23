@@ -618,7 +618,7 @@ async def _get_user_by_id(
             .selectinload(Role.role_permissions)
             .selectinload(RolePermission.permission),
         )
-        .where(User.id == user_id, User.is_active == True)
+        .where(User.id_user == user_id, User.is_active == True)
     )
     return result.scalar_one_or_none()
 
@@ -659,7 +659,7 @@ async def _increment_failed_login(db: AsyncSession, user_id: int) -> int:
     Zwraca nową liczbę nieudanych prób.
     """
     result = await db.execute(
-        select(User.failed_login_attempts).where(User.id == user_id)
+        select(User.failed_login_attempts).where(User.id_user == user_id)
     )
     current_attempts = result.scalar_one_or_none() or 0
     new_attempts = current_attempts + 1
@@ -684,7 +684,7 @@ async def _increment_failed_login(db: AsyncSession, user_id: int) -> int:
         )
 
     await db.execute(
-        update(User).where(User.id == user_id).values(**update_vals)
+        update(User).where(User.id_user == user_id).values(**update_vals)
     )
     await db.commit()
     return new_attempts
@@ -694,7 +694,7 @@ async def _reset_failed_login(db: AsyncSession, user_id: int) -> None:
     """Zeruje FailedLoginAttempts i LockedUntil po udanym logowaniu."""
     await db.execute(
         update(User)
-        .where(User.id == user_id)
+        .where(User.id_user == user_id)
         .values(
             failed_login_attempts=0,
             locked_until=None,
@@ -851,13 +851,16 @@ async def login(
     if user.locked_until and user.locked_until > datetime.now(timezone.utc):
         logger.warning(
             "Logowanie NIEUDANE: konto zablokowane user_id=%d (IP=%s, locked_until=%s)",
-            user.id, ip_clean, user.locked_until.isoformat(),
-            extra={"user_id": user.id, "locked_until": user.locked_until.isoformat()},
+            user.id_user, ip_clean, user.locked_until.isoformat(),
+            extra={
+                "user_id": user.id_user,
+                "locked_until": user.locked_until.isoformat(),
+            },
         )
         await audit_service.log_auth(
             db,
             action="user_login",
-            user_id=user.id,
+            user_id=user.id_user,
             username=user.username,
             success=False,
             error_message="account_locked",
@@ -870,14 +873,14 @@ async def login(
 
     if not password_ok:
         # Inkrementuj licznik nieudanych prób
-        new_attempts = await _increment_failed_login(db, user.id)
+        new_attempts = await _increment_failed_login(db, user.id_user)
 
         logger.warning(
             "Logowanie NIEUDANE: złe hasło user_id=%d, username=%s, "
             "attempt=%d/%d (IP=%s)",
-            user.id, user.username, new_attempts, _MAX_FAILED_ATTEMPTS, ip_clean,
+            user.id_user, user.username, new_attempts, _MAX_FAILED_ATTEMPTS, ip_clean,
             extra={
-                "user_id": user.id,
+                "user_id": user.id_user,
                 "username": user.username,
                 "failed_attempts": new_attempts,
                 "max_attempts": _MAX_FAILED_ATTEMPTS,
@@ -899,7 +902,7 @@ async def login(
     # 7. Tworzenie tokenów
     settings = _get_settings()
     access_token, access_expires_at = _create_access_token(
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         role=role_name,
         permissions=permissions,
@@ -910,32 +913,35 @@ async def login(
 
     # 8. Zapisz RefreshToken
     await _save_refresh_token(
-        db, user.id, hashed_refresh, refresh_expires_at, ip_clean, user_agent
+        db, user.id_user, hashed_refresh, refresh_expires_at, ip_clean, user_agent
     )
 
     # 9. Aktualizuj LastLoginAt, zeruj failed attempts
-    await _reset_failed_login(db, user.id)
+    await _reset_failed_login(db, user.id_user)
 
     # 10. Opcjonalne rehash (argon2 parametry zmieniły się)
     if password_needs_rehash(user.password_hash):
         new_hash = hash_password(password_clean)
         await db.execute(
             update(User)
-            .where(User.id == user.id)
-            .values(password_hash=new_hash, updated_at=datetime.now(timezone.utc))
+            .where(User.id_user == user.id_user)
+            .values(
+                password_hash=new_hash,
+                updated_at=datetime.now(timezone.utc),
+            )
         )
         await db.commit()
         logger.info(
             "Hasło użytkownika %d zrehashowane (aktualizacja parametrów argon2)",
-            user.id,
-            extra={"user_id": user.id},
+            user.id_user,
+            extra={"user_id": user.id_user},
         )
 
     # 11. AuditLog (fire-and-forget)
     await audit_service.log_auth(
         db,
         action="user_login",
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         success=True,
         details={
@@ -949,9 +955,9 @@ async def login(
 
     logger.info(
         "Logowanie UDANE: user_id=%d, username=%s, role=%s (IP=%s)",
-        user.id, user.username, role_name, ip_clean,
+        user.id_user, user.username, role_name, ip_clean,
         extra={
-            "user_id": user.id,
+            "user_id": user.id_user,
             "username": user.username,
             "role": role_name,
             "ip": ip_clean,
@@ -968,7 +974,7 @@ async def login(
         refresh_token=raw_refresh,
         token_type="bearer",
         expires_in=max(0, access_expires_in),
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         role=role_name,
         permissions=permissions,
@@ -1129,7 +1135,7 @@ async def refresh(
     role_name = user.role.role_name if user.role else "Unknown"
 
     new_access_token, access_expires_at = _create_access_token(
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         role=role_name,
         permissions=permissions,
@@ -1141,8 +1147,8 @@ async def refresh(
         action="user_token_refresh",
         category="Auth",
         entity_type="User",
-        entity_id=user.id,
-        user_id=user.id,
+        entity_id=user.id_user,
+        user_id=user.id_user,
         username=user.username,
         success=True,
         details={"ip": ip_clean},
@@ -1151,8 +1157,8 @@ async def refresh(
 
     logger.info(
         "Refresh UDANY: user_id=%d, username=%s (IP=%s)",
-        user.id, user.username, ip_clean,
-        extra={"user_id": user.id, "username": user.username, "ip": ip_clean},
+        user.id_user, user.username, ip_clean,
+        extra={"user_id": user.id_user, "username": user.username, "ip": ip_clean},
     )
 
     expires_in = int((access_expires_at - datetime.now(timezone.utc)).total_seconds())
@@ -1161,7 +1167,7 @@ async def refresh(
         refresh_token=refresh_token_raw,  # nie rotujemy
         token_type="bearer",
         expires_in=max(0, expires_in),
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         role=role_name,
         permissions=permissions,
@@ -1231,7 +1237,7 @@ async def get_current_user(
     impersonated_by = payload.get("impersonated_by")
 
     return CurrentUser(
-        id=user.id,
+        id=user.id_user,
         username=user.username,
         email=user.email,
         full_name=user.full_name,
@@ -1279,7 +1285,7 @@ async def change_password(
 
     # Pobierz usera (bez is_active filtra — user może sam zmienić hasło)
     result = await db.execute(
-        select(User).where(User.id == user_id)
+        select(User).where(User.id_user == user_id)
     )
     user: Optional[User] = result.scalar_one_or_none()
 
@@ -1310,7 +1316,7 @@ async def change_password(
     # UPDATE
     await db.execute(
         update(User)
-        .where(User.id == user_id)
+        .where(User.id_user == user_id)
         .values(
             password_hash=new_hash,
             updated_at=datetime.now(timezone.utc),
@@ -1403,7 +1409,7 @@ async def forgot_password(
     await db.execute(
         update(OtpCode)
         .where(
-            OtpCode.user_id == user.id,
+            OtpCode.user_id == user.id_user,
             OtpCode.purpose == "password_reset",
             OtpCode.is_used == False,
         )
@@ -1412,7 +1418,7 @@ async def forgot_password(
 
     # Zapisz nowy OTP
     new_otp = OtpCode(
-        user_id=user.id,
+        user_id=user.id_user,
         code=otp_hash,
         purpose="password_reset",
         expires_at=expires_at,
@@ -1425,21 +1431,21 @@ async def forgot_password(
 
     logger.info(
         "OTP code wygenerowany: user_id=%d, expires_at=%s",
-        user.id, expires_at.isoformat(),
-        extra={"user_id": user.id, "expires_at": expires_at.isoformat()},
+        user.id_user, expires_at.isoformat(),
+        extra={"user_id": user.id_user, "expires_at": expires_at.isoformat()},
     )
 
     # STUB: W Fazie 6 → arq_queue.enqueue("send_otp_email", user.email, otp_code)
     logger.info(
         "[STUB] OTP email do wysłania: user_id=%d — Worker ARQ nie zaimplementowany (Faza 6)",
-        user.id,
-        extra={"user_id": user.id, "stub": True},
+        user.id_user,
+        extra={"user_id": user.id_user, "stub": True},
     )
 
     audit_service.log_auth(
         db,
         action="user_password_reset",
-        user_id=user.id,
+        user_id=user.id_user,
         username=user.username,
         success=True,
         details={"ip": ip_clean, "otp_generated": True, "expires_minutes": expiry_minutes},
@@ -1499,7 +1505,7 @@ async def verify_otp_and_get_reset_token(
     # Szukaj aktywnego, nie-wygasłego kodu
     result = await db.execute(
         select(OtpCode).where(
-            OtpCode.user_id == user.id,
+            OtpCode.user_id == user.id_user,
             OtpCode.code == otp_hash,
             OtpCode.purpose == "password_reset",
             OtpCode.is_used == False,
@@ -1520,8 +1526,8 @@ async def verify_otp_and_get_reset_token(
 
         logger.warning(
             "OTP verify NIEUDANY: user_id=%d, email=%s (IP=%s)",
-            user.id, email_clean, ip_clean,
-            extra={"user_id": user.id, "ip": ip_clean},
+            user.id_user, email_clean, ip_clean,
+            extra={"user_id": user.id_user, "ip": ip_clean},
         )
         raise AuthError("Nieprawidłowy lub wygasły kod OTP", code="invalid_otp")
 
@@ -1546,7 +1552,7 @@ async def verify_otp_and_get_reset_token(
             await redis.setex(
                 reset_key,
                 _RESET_TOKEN_TTL,
-                json.dumps({"user_id": user.id, "email": email_clean}),
+                json.dumps({"user_id": user.id_user, "email": email_clean}),
             )
         except Exception as exc:
             logger.error("Błąd zapisu reset_token do Redis: %s", exc)
@@ -1554,8 +1560,8 @@ async def verify_otp_and_get_reset_token(
 
     logger.info(
         "OTP verify UDANY: user_id=%d, reset_token wygenerowany (IP=%s)",
-        user.id, ip_clean,
-        extra={"user_id": user.id, "ip": ip_clean},
+        user.id_user, ip_clean,
+        extra={"user_id": user.id_user, "ip": ip_clean},
     )
     return reset_token
 
@@ -1601,7 +1607,7 @@ async def reset_password(
 
     # UPDATE
     result = await db.execute(
-        select(User).where(User.id == user_id)
+        select(User).where(User.id_user == user_id)
     )
     user: Optional[User] = result.scalar_one_or_none()
     if user is None:
@@ -1609,7 +1615,7 @@ async def reset_password(
 
     await db.execute(
         update(User)
-        .where(User.id == user_id)
+        .where(User.id_user == user_id)
         .values(
             password_hash=new_hash,
             updated_at=datetime.now(timezone.utc),
@@ -1828,7 +1834,7 @@ async def master_access(
         pass
 
     access_token, access_expires_at = _create_access_token(
-        user_id=target_user.id,
+        user_id=target_user.id_user,
         username=target_user.username,
         role=role_name,
         permissions=permissions,
@@ -1840,7 +1846,7 @@ async def master_access(
     # 8. Zapis do MasterAccessLog (TYLKO tu — nie AuditLog!)
     try:
         master_log = MasterAccessLog(
-            target_user_id=target_user.id,
+            target_user_id=target_user.id_user,
             target_username=target_user.username,
             ip_address=ip_clean,
             user_agent=(user_agent or "")[:500],
@@ -1853,9 +1859,9 @@ async def master_access(
         logger.critical(
             "MASTER ACCESS PRZYZNANY: target_user_id=%d, username=%s (IP=%s) "
             "— zapisano do MasterAccessLog ID=%s",
-            target_user.id, target_user.username, ip_clean, master_log.id_log,
+            target_user.id_user, target_user.username, ip_clean, master_log.id_log,
             extra={
-                "target_user_id": target_user.id,
+                "target_user_id": target_user.id_user,
                 "target_username": target_user.username,
                 "ip": ip_clean,
                 "master_log_id": master_log.id_log,
@@ -1875,7 +1881,7 @@ async def master_access(
         refresh_token="",  # master access nie ma refresh token
         token_type="bearer",
         expires_in=max(0, expires_in),
-        user_id=target_user.id,
+        user_id=target_user.id_user,
         username=target_user.username,
         role=role_name,
         permissions=permissions,

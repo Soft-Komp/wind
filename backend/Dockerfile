@@ -50,15 +50,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] \
        https://packages.microsoft.com/debian/12/prod bookworm main" \
        > /etc/apt/sources.list.d/mssql-release.list \
-    # Zainstaluj ODBC Driver 18
+    # Zainstaluj ODBC Driver 18 + sqlcmd (mssql-tools18)
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
         msodbcsql18 \
+        mssql-tools18 \
     # Usuń zbędne pakiety kompilacyjne (zmniejsz obraz)
     && apt-get purge -y gcc g++ \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+ENV PATH="$PATH:/opt/mssql-tools18/bin"    
 # ─────────────────────────────────────────────────────────────────────────────
 # Non-root user (bezpieczeństwo)
 # ─────────────────────────────────────────────────────────────────────────────
