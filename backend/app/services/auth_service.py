@@ -60,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core import security
 from app.db.models.audit_log import AuditLog
 from app.db.models.master_access_log import MasterAccessLog
 from app.db.models.otp_code import OtpCode
@@ -312,7 +313,7 @@ def _create_access_token(
     """
     settings = _get_settings()
     now = datetime.now(timezone.utc)
-    expire_hours = int(settings.ACCESS_TOKEN_EXPIRE_HOURS)
+    expire_hours = int(settings.access_token_expire_hours)
     expires_at = now + timedelta(hours=expire_hours)
 
     payload: dict[str, Any] = {
@@ -335,8 +336,8 @@ def _create_access_token(
 
     token = jwt.encode(
         payload,
-        settings.SECRET_KEY.get_secret_value(),
-        algorithm=settings.ALGORITHM,
+        settings.secret_key.get_secret_value(),
+        algorithm=settings.algorithm,
     )
 
     logger.debug(
@@ -377,8 +378,8 @@ def _decode_access_token(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY.get_secret_value(),
-            algorithms=[settings.ALGORITHM],
+            settings.secret_key.get_secret_value(),
+            algorithms=[settings.algorithm],
         )
         if payload.get("type") != "access":
             raise AuthError("Nieprawidłowy typ tokena", code="invalid_token_type")
@@ -909,20 +910,24 @@ async def login(
     permissions = _user_permissions(user)
     role_name = user.role.role_name if user.role else "Unknown"
 
-    # 7. Tworzenie tokenów
     settings = _get_settings()
-    access_token, access_expires_at = _create_access_token(
-        user_id=user_id,
-        username=username_db,
-        role=role_name,
-        permissions=permissions,
+    access_token, access_expires_at = security.create_access_token(
+        user_id=user.id_user, username=user.username,
+        role_id=user.role_id, permissions=permissions
     )
     raw_refresh, hashed_refresh = _create_refresh_token()
-    refresh_expire_days = int(settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_expire_days = int(settings.refresh_token_expire_days)
     refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=refresh_expire_days)
 
     # 8. Zapisz RefreshToken
-    await _save_refresh_token(db, user_id, hashed_refresh, refresh_expires_at, ip_clean, user_agent)
+    await _save_refresh_token(
+        db,
+        user_id,
+        hashed_refresh,
+        refresh_expires_at,
+        ip_clean,
+        user_agent,
+    )
 
     # 9. Aktualizuj LastLoginAt, zeruj failed attempts
     await _reset_failed_login(db, user_id)
@@ -1117,7 +1122,7 @@ async def refresh(
         raise AuthError("Nieprawidłowy refresh token", code="invalid_refresh_token")
 
     # 3. Sprawdź wygaśnięcie
-    if db_token.expires_at < datetime.now(timezone.utc):
+    if db_token.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         # Unieważnij wygasły token
         db_token.is_revoked = True
         db_token.revoked_at = datetime.now(timezone.utc)
@@ -1142,10 +1147,10 @@ async def refresh(
     permissions = _user_permissions(user)
     role_name = user.role.role_name if user.role else "Unknown"
 
-    new_access_token, access_expires_at = _create_access_token(
+    new_access_token, access_expires_at = security.create_access_token(
         user_id=user.id_user,
         username=user.username,
-        role=role_name,
+        role_id=user.role_id,
         permissions=permissions,
     )
 
@@ -1841,14 +1846,9 @@ async def master_access(
     except Exception:
         pass
 
-    access_token, access_expires_at = _create_access_token(
-        user_id=target_user.id_user,
-        username=target_user.username,
-        role=role_name,
-        permissions=permissions,
-        is_impersonation=True,
-        impersonated_by=0,  # 0 = master key (brak konkretnego usera)
-        extra_claims={"master_access": True, "max_hours": max_hours},
+    access_token, access_expires_at = security.create_access_token(
+        user_id=target_user.id_user, username=target_user.username,
+        role_id=target_user.role_id, permissions=permissions
     )
 
     # 8. Zapis do MasterAccessLog (TYLKO tu — nie AuditLog!)

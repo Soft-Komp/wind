@@ -5,6 +5,7 @@ Predefiniowane role: Admin, Manager, User, ReadOnly.
 
 from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.ext.associationproxy import association_proxy
 
 from .base import AuditMixin, Base
 
@@ -36,6 +37,10 @@ class Role(AuditMixin, Base):
     role_permissions: Mapped[list["RolePermission"]] = relationship(  # type: ignore[name-defined]
         "RolePermission", back_populates="role", cascade="all, delete-orphan"
     )
+
+    # Skrót: role.permissions → lista obiektów Permission
+    # Wymaga eager load: selectinload(Role.role_permissions).selectinload(RolePermission.permission)
+    permissions = association_proxy("role_permissions", "permission")
 
     def __repr__(self) -> str:
         return f"<Role id={self.id_role} name={self.role_name!r}>"

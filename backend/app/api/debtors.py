@@ -105,7 +105,7 @@ async def list_debtors(
             "sort_by": sort_by,
             "sort_dir": sort_dir,
         },
-        requested_by_id=current_user.ID_USER,
+        requested_by_id=current_user.id_user,
     )
 
     return BaseResponse.ok(
@@ -269,7 +269,7 @@ async def send_bulk_monits(
             debtor_ids=debtor_ids,
             channel=channel,
             template_id=template_id,
-            sent_by_id=current_user.ID_USER,
+            sent_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -281,7 +281,7 @@ async def send_bulk_monits(
             "debtor_count": len(debtor_ids),
             "channel": channel,
             "template_id": template_id,
-            "sent_by": current_user.ID_USER,
+            "sent_by": current_user.id_user,
             "job_count": result.get("job_count", 0),
             "request_id": request_id,
             "ip": client_ip,
@@ -574,7 +574,7 @@ async def send_monit(
             template_id=template_id,
             channel=channel,
             note=note,
-            sent_by_id=current_user.ID_USER,
+            sent_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -587,7 +587,7 @@ async def send_monit(
             "channel": channel,
             "template_id": template_id,
             "job_id": result.get("job_id"),
-            "sent_by": current_user.ID_USER,
+            "sent_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),

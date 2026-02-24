@@ -478,7 +478,9 @@ async def _get_role_with_permissions(db: AsyncSession, role_id: int) -> Optional
     """
     result = await db.execute(
         select(Role)
-        .options(selectinload(Role.permissions))
+        .options(
+            selectinload(Role.role_permissions).selectinload(RolePermission.permission)
+        )
         .where(Role.id_role == role_id)
     )
     return result.scalar_one_or_none()
@@ -535,7 +537,9 @@ async def get_list(db: AsyncSession, redis: Redis) -> list[dict]:
 
     result = await db.execute(
         select(Role)
-        .options(selectinload(Role.permissions))
+        .options(
+            selectinload(Role.role_permissions).selectinload(RolePermission.permission)
+        )
         .where(Role.is_active == True)  # noqa: E712
         .order_by(Role.role_name.asc())
     )
@@ -621,8 +625,10 @@ async def get_permissions_matrix(
         return cached  # type: ignore[return-value]
 
     result = await db.execute(
-        select(Role)
-        .options(selectinload(Role.permissions))
+    select(Role)
+        .options(
+            selectinload(Role.role_permissions).selectinload(RolePermission.permission)
+        )
         .where(Role.is_active == True)  # noqa: E712
         .order_by(Role.role_name.asc())
     )
@@ -632,7 +638,7 @@ async def get_permissions_matrix(
     for role in roles:
         matrix[role.role_name] = sorted([
             p.permission_name
-            for p in role.permissions
+            for p in role.permissions    # ← association_proxy → obiekty Permission
             if p.is_active
         ])
 

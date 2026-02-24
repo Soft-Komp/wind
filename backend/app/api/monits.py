@@ -305,7 +305,7 @@ async def retry_monit(
             db=db,
             redis=redis,
             monit_id=monit_id,
-            retried_by_id=current_user.ID_USER,
+            retried_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -316,7 +316,7 @@ async def retry_monit(
             "event": "api_monit_retry_queued",
             "monit_id": monit_id,
             "job_id": result.get("job_id"),
-            "retried_by": current_user.ID_USER,
+            "retried_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -390,7 +390,7 @@ async def update_monit_status(
             db=db,
             monit_id=monit_id,
             new_status=new_status,
-            changed_by_id=current_user.ID_USER,
+            changed_by_id=current_user.id_user,
             note=note,
             allowed_transitions=_ALLOWED_TRANSITIONS,
         )
@@ -402,7 +402,7 @@ async def update_monit_status(
             "event": "api_monit_status_changed",
             "monit_id": monit_id,
             "new_status": new_status,
-            "changed_by": current_user.ID_USER,
+            "changed_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -450,7 +450,7 @@ async def cancel_monit(
             db=db,
             redis=redis,
             monit_id=monit_id,
-            cancelled_by_id=current_user.ID_USER,
+            cancelled_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -460,7 +460,7 @@ async def cancel_monit(
         orjson.dumps({
             "event": "api_monit_cancelled",
             "monit_id": monit_id,
-            "cancelled_by": current_user.ID_USER,
+            "cancelled_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),

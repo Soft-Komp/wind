@@ -12,12 +12,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.base import BaseResponse, PaginatedResponse, PaginationParams
 
 class RolePermissionCreate(BaseModel):
+    """
+    Tworzenie przypisania uprawnienia do roli.
+    created_at jest zarządzane przez DB (server_default GETDATE()) — nie przez klienta.
+    """
     model_config = ConfigDict(extra='forbid')
-    created_at: datetime = Field(...)
+    # Brak pól — przypisanie identyfikowane jest przez (id_role, id_permission)
+    # które są kluczem złożonym i trafiają do URL path, nie do body
 
 
 
 class RolePermissionUpdate(BaseModel):
+    """
+    RolePermission nie ma pól do aktualizacji — operacja to zawsze DELETE + INSERT.
+    Schema zachowana dla symetrii API.
+    """
     model_config = ConfigDict(extra='forbid')
     created_at: datetime | None = Field(default=None)
 

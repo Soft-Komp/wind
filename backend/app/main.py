@@ -1,4 +1,4 @@
-"""
+﻿"""
 main.py
 ═══════════════════════════════════════════════════════════════════════════════
 Punkt wejścia aplikacji FastAPI — System Windykacja Backend.
@@ -212,9 +212,9 @@ async def _load_cors_origins() -> list[str]:
         from app.db.models.system_config import SystemConfig
 
         async for db in get_async_session():
-            stmt = select(SystemConfig.ConfigValue).where(
-                SystemConfig.ConfigKey == "cors.allowed_origins",
-                SystemConfig.IsActive == 1,
+            stmt = select(SystemConfig.config_value).where(
+                SystemConfig.config_key == "cors.allowed_origins",
+                SystemConfig.is_active == 1,
             )
             result = await db.execute(stmt)
             value = result.scalar_one_or_none()
@@ -613,9 +613,9 @@ async def lifespan(app: FastAPI):
                 from sqlalchemy import select
                 from app.db.models.system_config import SystemConfig
 
-                stmt = select(SystemConfig.ConfigValue).where(
-                    SystemConfig.ConfigKey == "schema_integrity.reaction",
-                    SystemConfig.IsActive == 1,
+                stmt = select(SystemConfig.config_value).where(
+                    SystemConfig.config_key == "schema_integrity.reaction",
+                    SystemConfig.is_active == 1,
                 )
                 result = await db.execute(stmt)
                 reaction = (result.scalar_one_or_none() or "BLOCK").upper()

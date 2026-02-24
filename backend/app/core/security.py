@@ -544,9 +544,9 @@ async def blacklist_token(jti: str, ttl_seconds: int) -> None:
         jti:         JWT ID (pole 'jti' z payloadu).
         ttl_seconds: Czas po którym Redis automatycznie usuwa wpis.
     """
-    from app.core.redis import get_redis
+    from app.db.session import get_redis_client
 
-    redis = await get_redis()
+    redis = get_redis_client()
     key = f"{_REDIS_BLACKLIST_PREFIX}{jti}"
 
     await redis.set(key, "1", ex=ttl_seconds)
@@ -558,25 +558,41 @@ async def blacklist_token(jti: str, ttl_seconds: int) -> None:
     )
 
 
-async def is_token_blacklisted(jti: str) -> bool:
+async def is_token_blacklisted(
+    jti: str,
+    redis: Optional["Redis"] = None,
+) -> bool:
     """
     Sprawdza czy token jest na blackliście Redis.
 
-    Wywoływana przy każdym żądaniu w get_current_user().
-
     Args:
-        jti: JWT ID z payloadu access tokenu.
+        jti:   JWT ID z payloadu access tokenu.
+        redis: Opcjonalny klient Redis z zewnątrz (reużycie połączenia).
+               Jeśli None — pobierany z singletonu get_redis_client().
 
     Returns:
-        bool: True jeśli token jest unieważniony.
+        bool: True = token unieważniony.
+              False = aktywny LUB Redis niedostępny (fail-open).
     """
-    from app.core.redis import get_redis
+    from app.db.session import get_redis_client as _get_redis_client  # ← POPRAWNY import
 
-    redis = await get_redis()
-    key = f"{_REDIS_BLACKLIST_PREFIX}{jti}"
-    result = await redis.exists(key)
-    return bool(result)
-
+    try:
+        # get_redis_client() jest SYNCHRONICZNA — bez await!
+        r = redis if redis is not None else _get_redis_client()
+        if r is None:
+            logger.warning(
+                "Redis niedostępny — blacklista pominięta (fail-open) | jti=%s", jti
+            )
+            return False
+        key = f"{_REDIS_BLACKLIST_PREFIX}{jti}"
+        result = await r.exists(key)
+        return bool(result)
+    except Exception as exc:
+        logger.error(
+            "Błąd sprawdzania blacklisty Redis | jti=%s | error=%s",
+            jti, str(exc),
+        )
+        return False  # fail-open — lepsze UX niż blokowanie wszystkich żądań
 
 # ---------------------------------------------------------------------------
 # 5. MASTER KEY — HMAC weryfikacja

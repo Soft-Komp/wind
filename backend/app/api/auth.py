@@ -1,4 +1,4 @@
-"""
+﻿"""
 api/auth.py
 ═══════════════════════════════════════════════════════════════════════════════
 Router uwierzytelniania — System Windykacja.
@@ -203,14 +203,17 @@ async def logout(
     except Exception:
         pass  # Body opcjonalne przy logout
 
+    user_id = current_user.id_user
+    username = current_user.username
+
     try:
         await auth_service.logout(
             db=db,
             redis=redis,
             access_token=access_token,
-            refresh_token=refresh_token,
-            user_id=current_user.ID_USER,
-            username=current_user.Username,
+            refresh_token_raw=refresh_token,
+            user_id=current_user.id_user,
+            username=current_user.username,
             ip=client_ip,
         )
     except Exception as exc:
@@ -220,7 +223,7 @@ async def logout(
         orjson.dumps(
             {
                 "event": "api_logout_success",
-                "user_id": current_user.ID_USER,
+                "user_id": user_id,
                 "request_id": request_id,
                 "ip": client_ip,
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -230,7 +233,8 @@ async def logout(
 
     return BaseResponse.ok(
         data={"message": "Wylogowano pomyślnie"},
-        code="auth.logout_success",
+        code=200,
+        app_code="auth.logout_success",
     )
 
 
@@ -302,7 +306,8 @@ async def refresh_token(
             "token_type": token_pair.token_type,
             "expires_in": token_pair.expires_in,
         },
-        code="auth.token_refreshed",
+        code=200, 
+        app_code="auth.token_refreshed",
     )
 
 
@@ -554,27 +559,27 @@ async def get_me(
     from app.core.dependencies import _get_role_permissions
 
     # Pobierz nazwę roli
-    stmt = select(Role.RoleName).where(Role.ID_ROLE == current_user.RoleID)
+    stmt = select(Role.role_name).where(Role.id_role == current_user.role_id)
     result = await db.execute(stmt)
     role_name = result.scalar_one_or_none() or "unknown"
 
     # Pobierz uprawnienia z cache
-    permissions = await _get_role_permissions(current_user.RoleID, db, redis)
+    permissions = await _get_role_permissions(current_user.role_id, db, redis)
 
     is_impersonating = getattr(request.state, "is_impersonating", False)
-    real_user_id = getattr(request.state, "real_user_id", current_user.ID_USER)
+    real_user_id = getattr(request.state, "real_user_id", current_user.id_user)
 
     data = {
-        "id": current_user.ID_USER,
-        "username": current_user.Username,
-        "email": current_user.Email,
-        "full_name": current_user.FullName,
-        "role_id": current_user.RoleID,
+        "id": current_user.id_user,
+        "username": current_user.username,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "role_id": current_user.role_id,
         "role_name": role_name,
-        "is_active": bool(current_user.IsActive),
+        "is_active": bool(current_user.is_active),
         "last_login_at": (
-            current_user.LastLoginAt.isoformat()
-            if current_user.LastLoginAt
+            current_user.last_login_at.isoformat()
+            if current_user.last_login_at
             else None
         ),
         "permissions": sorted(permissions),
@@ -582,7 +587,7 @@ async def get_me(
         "impersonated_by_id": real_user_id if is_impersonating else None,
     }
 
-    return BaseResponse.ok(data=data, code="auth.me")
+    return BaseResponse.ok(data=data, app_code="auth.me")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -616,6 +621,9 @@ async def change_my_password(
 ):
     from app.services import auth_service
 
+    user_id = current_user.id_user
+    username = current_user.username
+
     try:
         body = await request.json()
         old_password = body.get("old_password") or ""
@@ -638,7 +646,7 @@ async def change_my_password(
         await auth_service.change_password(
             db=db,
             redis=redis,
-            user_id=current_user.ID_USER,
+            user_id=user_id,
             old_password=old_password,
             new_password=new_password,
             ip=client_ip,
@@ -650,7 +658,7 @@ async def change_my_password(
         orjson.dumps(
             {
                 "event": "api_password_changed",
-                "user_id": current_user.ID_USER,
+                "user_id": user_id,
                 "request_id": request_id,
                 "ip": client_ip,
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -660,7 +668,8 @@ async def change_my_password(
 
     return BaseResponse.ok(
         data={"message": "Hasło zostało zmienione. Pozostałe sesje zostały unieważnione."},
-        code="auth.password_changed",
+        code=200, 
+        app_code="auth.password_changed",
     )
 
 
@@ -701,7 +710,7 @@ async def start_impersonation(
     from app.services import impersonation_service
 
     # Blokada impersonacji siebie samego
-    if user_id == current_user.ID_USER:
+    if user_id == current_user.id_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -717,7 +726,7 @@ async def start_impersonation(
         token_pair = await impersonation_service.start(
             db=db,
             redis=redis,
-            admin_id=current_user.ID_USER,
+            admin_id=current_user.id_user,
             target_user_id=user_id,
             ip=client_ip,
             user_agent=user_agent,
@@ -729,8 +738,8 @@ async def start_impersonation(
         orjson.dumps(
             {
                 "event": "api_impersonation_started",
-                "admin_id": current_user.ID_USER,
-                "admin_username": current_user.Username,
+                "admin_id": current_user.id_user,
+                "admin_username": current_user.username,
                 "target_user_id": user_id,
                 "request_id": request_id,
                 "ip": client_ip,
@@ -800,7 +809,7 @@ async def stop_impersonation(
             db=db,
             redis=redis,
             admin_id=real_user_id,
-            impersonated_user_id=current_user.ID_USER,
+            impersonated_user_id=current_user.id_user,
             access_token=access_token,
             ip=client_ip,
         )
@@ -812,7 +821,7 @@ async def stop_impersonation(
             {
                 "event": "api_impersonation_stopped",
                 "admin_id": real_user_id,
-                "impersonated_user_id": current_user.ID_USER,
+                "impersonated_user_id": current_user.id_user,
                 "request_id": request_id,
                 "ip": client_ip,
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -943,18 +952,18 @@ async def list_sessions(
 
     stmt = (
         select(
-            RefreshToken.ID_TOKEN,
-            RefreshToken.CreatedAt,
-            RefreshToken.ExpiresAt,
-            RefreshToken.IPAddress,
-            RefreshToken.UserAgent,
+            RefreshToken.id_token,
+            RefreshToken.created_at,
+            RefreshToken.expires_at,
+            RefreshToken.ip_address,
+            RefreshToken.user_agent,
         )
         .where(
-            RefreshToken.ID_USER == current_user.ID_USER,
-            RefreshToken.IsRevoked == 0,
-            RefreshToken.ExpiresAt > datetime.now(timezone.utc),
+            RefreshToken.id_user == current_user.id_user,
+            RefreshToken.is_revoked == 0,
+            RefreshToken.expires_at > datetime.now(timezone.utc),
         )
-        .order_by(RefreshToken.CreatedAt.desc())
+        .order_by(RefreshToken.created_at.desc())
         .limit(20)  # max 20 sesji (MAX_ACTIVE_SESSIONS z auth_service)
     )
     result = await db.execute(stmt)
@@ -962,11 +971,11 @@ async def list_sessions(
 
     sessions = [
         {
-            "session_id": row.ID_TOKEN,
-            "created_at": row.CreatedAt.isoformat() if row.CreatedAt else None,
-            "expires_at": row.ExpiresAt.isoformat() if row.ExpiresAt else None,
-            "ip_address": row.IPAddress,
-            "user_agent": (row.UserAgent or "")[:100],  # truncate dla frontend
+            "session_id": row.id_token,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "ip_address": row.ip_address,
+            "user_agent": (row.user_agent or "")[:100],  # truncate dla frontend
         }
         for row in rows
     ]
