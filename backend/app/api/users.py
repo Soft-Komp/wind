@@ -1,4 +1,4 @@
-"""
+﻿"""
 api/users.py
 ═══════════════════════════════════════════════════════════════════════════════
 Router zarządzania użytkownikami — System Windykacja.
@@ -72,11 +72,11 @@ router = APIRouter()
         "Zwraca paginowaną listę użytkowników systemu. "
         "Sortowanie: najnowsi pierwsi (CreatedAt DESC). "
         "Filtry: is_active (true/false), role_id, search (Username/Email/FullName). "
-        "**Wymaga uprawnienia:** `users.list`"
+        "**Wymaga uprawnienia:** `users.view_list`"
     ),
     response_description="Paginowana lista użytkowników",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("users.list")],
+    dependencies=[require_permission("users.view_list")],
 )
 async def list_users(
     current_user: CurrentUser,
@@ -90,14 +90,19 @@ async def list_users(
 ):
     from app.services import user_service
 
+    params = UserListParams(
+        page=pagination.page,
+        page_size=pagination.per_page,
+        search=search,
+        role_id=role_id,
+        is_active=is_active,
+        # is_locked, sort_by, sort_desc itd.
+    )
+
     result = await user_service.get_list(
         db=db,
         redis=redis,
-        offset=pagination.offset,
-        limit=pagination.per_page,
-        is_active=is_active,
-        role_id=role_id,
-        search=search,
+        params=params,
     )
 
     return BaseResponse.ok(
@@ -158,7 +163,7 @@ async def create_user(
             db=db,
             redis=redis,
             data=data,
-            created_by_id=current_user.ID_USER,
+            created_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -168,7 +173,7 @@ async def create_user(
         orjson.dumps({
             "event": "api_user_created",
             "new_user_id": user["id"],
-            "created_by": current_user.ID_USER,
+            "created_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -260,7 +265,7 @@ async def update_user(
     # Zmiana roli wymaga dodatkowego uprawnienia
     if data.role_id is not None:
         # Sprawdź czy ma uprawnienie users.change_role
-        perms = await _get_role_permissions(current_user.RoleID, db, redis)
+        perms = await _get_role_permissions(current_user.role_id, db, redis)
         if "users.change_role" not in perms:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -271,7 +276,7 @@ async def update_user(
                 },
             )
         # Blokada zmiany własnej roli
-        if user_id == current_user.ID_USER:
+        if user_id == current_user.id_user:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
@@ -287,7 +292,7 @@ async def update_user(
             redis=redis,
             user_id=user_id,
             data=data,
-            updated_by_id=current_user.ID_USER,
+            updated_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -297,7 +302,7 @@ async def update_user(
         orjson.dumps({
             "event": "api_user_updated",
             "user_id": user_id,
-            "updated_by": current_user.ID_USER,
+            "updated_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -342,7 +347,7 @@ async def lock_user(
     from app.services import user_service
 
     # Blokada własnego konta
-    if user_id == current_user.ID_USER:
+    if user_id == current_user.id_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -367,7 +372,7 @@ async def lock_user(
             db=db,
             redis=redis,
             user_id=user_id,
-            locked_by_id=current_user.ID_USER,
+            locked_by_id=current_user.id_user,
             lock_minutes=lock_minutes,
             reason=reason,
             ip=client_ip,
@@ -379,7 +384,7 @@ async def lock_user(
         orjson.dumps({
             "event": "api_user_locked",
             "user_id": user_id,
-            "locked_by": current_user.ID_USER,
+            "locked_by": current_user.id_user,
             "lock_minutes": lock_minutes,
             "request_id": request_id,
             "ip": client_ip,
@@ -425,7 +430,7 @@ async def unlock_user(
             db=db,
             redis=redis,
             user_id=user_id,
-            unlocked_by_id=current_user.ID_USER,
+            unlocked_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -435,7 +440,7 @@ async def unlock_user(
         orjson.dumps({
             "event": "api_user_unlocked",
             "user_id": user_id,
-            "unlocked_by": current_user.ID_USER,
+            "unlocked_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -481,7 +486,7 @@ async def admin_reset_password(
             db=db,
             redis=redis,
             user_id=user_id,
-            admin_id=current_user.ID_USER,
+            admin_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -491,7 +496,7 @@ async def admin_reset_password(
         orjson.dumps({
             "event": "api_admin_reset_password",
             "user_id": user_id,
-            "admin_id": current_user.ID_USER,
+            "admin_id": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -544,7 +549,7 @@ async def initiate_delete_user(
     from app.services import user_service
 
     # Blokada usunięcia własnego konta
-    if user_id == current_user.ID_USER:
+    if user_id == current_user.id_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -559,7 +564,7 @@ async def initiate_delete_user(
             db=db,
             redis=redis,
             user_id=user_id,
-            by_id=current_user.ID_USER,
+            by_id=current_user.id_user,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -568,7 +573,7 @@ async def initiate_delete_user(
         orjson.dumps({
             "event": "api_user_delete_initiated",
             "user_id": user_id,
-            "initiated_by": current_user.ID_USER,
+            "initiated_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -651,7 +656,7 @@ async def confirm_delete_user(
             redis=redis,
             user_id=user_id,
             delete_token=delete_token,
-            by_id=current_user.ID_USER,
+            by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -661,7 +666,7 @@ async def confirm_delete_user(
         orjson.dumps({
             "event": "api_user_deleted",
             "user_id": user_id,
-            "deleted_by": current_user.ID_USER,
+            "deleted_by": current_user.id_user,
             "archive_path": result.get("archive_path", ""),
             "sessions_revoked": result.get("sessions_revoked", 0),
             "request_id": request_id,

@@ -237,7 +237,7 @@ async def update_config(
             redis=redis,
             key=config_key,
             value=str(value),
-            updated_by_id=current_user.ID_USER,
+            updated_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -247,7 +247,7 @@ async def update_config(
         orjson.dumps({
             "event": "api_config_updated",
             "key": config_key,
-            "updated_by": current_user.ID_USER,
+            "updated_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -343,7 +343,7 @@ async def update_cors(
             db=db,
             redis=redis,
             origins=origins,
-            updated_by_id=current_user.ID_USER,
+            updated_by_id=current_user.id_user,
             ip=client_ip,
         )
     except Exception as exc:
@@ -353,7 +353,7 @@ async def update_cors(
         orjson.dumps({
             "event": "api_cors_updated",
             "origins_count": len(origins),
-            "updated_by": current_user.ID_USER,
+            "updated_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -443,7 +443,7 @@ async def force_schema_integrity_check(
     logger.warning(
         orjson.dumps({
             "event": "api_schema_integrity_forced",
-            "requested_by": current_user.ID_USER,
+            "requested_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),

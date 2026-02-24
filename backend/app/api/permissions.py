@@ -1,4 +1,4 @@
-"""
+﻿"""
 api/permissions.py
 ═══════════════════════════════════════════════════════════════════════════════
 Router uprawnień — System Windykacja.
@@ -109,7 +109,7 @@ async def my_permissions(
     request_id: RequestID,
 ):
     # Używa tej samej funkcji co dependencies.py — spójne z check w JWT
-    permissions = await _get_role_permissions(current_user.RoleID, db, redis)
+    permissions = await _get_role_permissions(current_user.role_id, db, redis)
 
     return BaseResponse.ok(
         data={
@@ -167,8 +167,8 @@ async def check_permission(
     has_perm = await permission_service.check(
         redis=redis,
         db=db,
-        user_id=current_user.ID_USER,
-        role_id=current_user.RoleID,
+        user_id=current_user.id_user,
+        role_id=current_user.role_id,
         permission_name=permission,
     )
 
@@ -176,7 +176,7 @@ async def check_permission(
         data={
             "permission": permission,
             "granted": has_perm,
-            "user_id": current_user.ID_USER,
+            "user_id": current_user.id_user,
         },
         code="permissions.check",
     )
@@ -254,15 +254,15 @@ async def check_many_permissions(
     result_map = await permission_service.check_many(
         redis=redis,
         db=db,
-        user_id=current_user.ID_USER,
-        role_id=current_user.RoleID,
+        user_id=current_user.id_user,
+        role_id=current_user.role_id,
         permission_names=unique_perms,
     )
 
     return BaseResponse.ok(
         data={
             "permissions": result_map,
-            "user_id": current_user.ID_USER,
+            "user_id": current_user.id_user,
             "checked": len(unique_perms),
             "granted_count": sum(1 for v in result_map.values() if v),
         },

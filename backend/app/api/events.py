@@ -92,13 +92,13 @@ async def sse_user_stream(
     redis: RedisClient,
     request_id: RequestID,
 ):
-    channel = f"channel:user:{current_user.ID_USER}"
+    channel = f"channel:user:{current_user.id_user}"
 
     logger.info(
         orjson.dumps({
             "event": "sse_connected",
             "channel": channel,
-            "user_id": current_user.ID_USER,
+            "user_id": current_user.id_user,
             "request_id": request_id,
             "ts": datetime.now(timezone.utc).isoformat(),
         }).decode()
@@ -109,7 +109,7 @@ async def sse_user_stream(
             request=request,
             redis=redis,
             channel=channel,
-            user_id=current_user.ID_USER,
+            user_id=current_user.id_user,
             request_id=request_id,
         ),
         media_type="text/event-stream",
@@ -161,7 +161,7 @@ async def sse_admins_stream(
         orjson.dumps({
             "event": "sse_admin_connected",
             "channel": channel,
-            "user_id": current_user.ID_USER,
+            "user_id": current_user.id_user,
             "request_id": request_id,
             "ts": datetime.now(timezone.utc).isoformat(),
         }).decode()
@@ -172,7 +172,7 @@ async def sse_admins_stream(
             request=request,
             redis=redis,
             channel=channel,
-            user_id=current_user.ID_USER,
+            user_id=current_user.id_user,
             request_id=request_id,
         ),
         media_type="text/event-stream",

@@ -1,0 +1,1 @@
+"from app.services.auth_service import _ph`nnew_hash = _ph.hash('Admin123!')`nprint(new_hash)" | Out-File -FilePath "gen_hash.py" -Encoding utf8

@@ -336,8 +336,8 @@ def _create_access_token(
 
     token = jwt.encode(
         payload,
-        settings.SECRET_KEY.get_secret_value(),
-        algorithm=settings.ALGORITHM,
+        settings.secret_key.get_secret_value(),
+        algorithm=settings.algorithm,
     )
 
     logger.debug(
@@ -378,8 +378,8 @@ def _decode_access_token(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY.get_secret_value(),
-            algorithms=[settings.ALGORITHM],
+            settings.secret_key.get_secret_value(),
+            algorithms=[settings.algorithm],
         )
         if payload.get("type") != "access":
             raise AuthError("Nieprawidłowy typ tokena", code="invalid_token_type")
@@ -916,7 +916,7 @@ async def login(
         role_id=user.role_id, permissions=permissions
     )
     raw_refresh, hashed_refresh = _create_refresh_token()
-    refresh_expire_days = int(settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_expire_days = int(settings.refresh_token_expire_days)
     refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=refresh_expire_days)
 
     # 8. Zapisz RefreshToken
@@ -1122,7 +1122,7 @@ async def refresh(
         raise AuthError("Nieprawidłowy refresh token", code="invalid_refresh_token")
 
     # 3. Sprawdź wygaśnięcie
-    if db_token.expires_at < datetime.now(timezone.utc):
+    if db_token.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         # Unieważnij wygasły token
         db_token.is_revoked = True
         db_token.revoked_at = datetime.now(timezone.utc)

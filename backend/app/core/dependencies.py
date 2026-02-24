@@ -414,7 +414,7 @@ async def _fetch_and_validate_user(
 
     stmt = (
         select(User)
-        .where(User.ID_USER == user_id)
+        .where(User.id_user == user_id)
         .limit(1)
     )
     result = await db.execute(stmt)
@@ -442,13 +442,13 @@ async def _fetch_and_validate_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.IsActive:
+    if not user.is_active:
         logger.warning(
             orjson.dumps(
                 {
                     "event": f"{context_label}_user_inactive",
                     "user_id": user_id,
-                    "username": user.Username,
+                    "username": user.username,
                     "request_id": request_id,
                     "ip": client_ip,
                     "ts": now_utc.isoformat(),
@@ -466,9 +466,9 @@ async def _fetch_and_validate_user(
         )
 
     # Sprawdź blokadę czasową
-    if user.LockedUntil is not None:
+    if user.locked_until is not None:
         # LockedUntil może być timezone-naive (MSSQL DATETIME) — normalizujemy
-        locked_until = user.LockedUntil
+        locked_until = user.locked_until
         if locked_until.tzinfo is None:
             locked_until = locked_until.replace(tzinfo=timezone.utc)
 
@@ -479,7 +479,7 @@ async def _fetch_and_validate_user(
                     {
                         "event": f"{context_label}_user_locked",
                         "user_id": user_id,
-                        "username": user.Username,
+                        "username": user.username,
                         "locked_until": locked_until.isoformat(),
                         "remaining_seconds": remaining_seconds,
                         "request_id": request_id,
@@ -612,9 +612,9 @@ async def get_current_user(
                 {
                     "event": "auth_impersonation_active",
                     "real_user_id": real_user_id,
-                    "real_username": real_user.Username,
+                    "real_username": real_user.username,
                     "impersonated_user_id": imp_id,
-                    "impersonated_username": impersonated_user.Username,
+                    "impersonated_username": impersonated_user.username,
                     "request_id": request_id,
                     "ip": client_ip,
                     "ts": datetime.now(timezone.utc).isoformat(),
@@ -634,7 +634,7 @@ async def get_current_user(
             {
                 "event": "auth_success",
                 "user_id": real_user_id,
-                "username": real_user.Username,
+                "username": real_user.username,
                 "jti": payload.get("jti"),
                 "request_id": request_id,
                 "ip": client_ip,
@@ -806,7 +806,7 @@ def require_permission(permission: str):
         client_ip: Annotated[str, Depends(get_client_ip)],
     ) -> User:
         user_id = current_user.id_user
-        role_id = current_user.RoleID
+        role_id = current_user.role_id
 
         # L1 cache: per-user per-permission
         l1_key = f"perm:{user_id}:{permission}"
@@ -851,7 +851,7 @@ def require_permission(permission: str):
 
         if not has_perm:
             _log_permission_denied(
-                user_id, current_user.Username,
+                user_id, current_user.username,
                 permission, "permission_missing",
                 request_id, client_ip,
             )
