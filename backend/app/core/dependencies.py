@@ -350,31 +350,6 @@ async def _extract_token_payload(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Weryfikuj typ tokena
-    token_type = payload.get("type")
-    if token_type != TOKEN_TYPE_ACCESS:
-        logger.warning(
-            orjson.dumps(
-                {
-                    "event": "auth_wrong_token_type",
-                    "expected": TOKEN_TYPE_ACCESS,
-                    "got": token_type,
-                    "request_id": request_id,
-                    "ip": client_ip,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
-            ).decode()
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "auth.token_type_invalid",
-                "message": "Nieprawidłowy typ tokena",
-                "errors": [],
-            },
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
     # Sprawdź blacklistę JTI
     jti = payload.get("jti")
     if not jti:

@@ -313,7 +313,7 @@ def _create_access_token(
     """
     settings = _get_settings()
     now = datetime.now(timezone.utc)
-    expire_hours = int(settings.ACCESS_TOKEN_EXPIRE_HOURS)
+    expire_hours = int(settings.access_token_expire_hours)
     expires_at = now + timedelta(hours=expire_hours)
 
     payload: dict[str, Any] = {
@@ -911,11 +911,9 @@ async def login(
     role_name = user.role.role_name if user.role else "Unknown"
 
     settings = _get_settings()
-    access_token, access_expires_at = _create_access_token(
-        user_id=user_id,
-        username=username_db,
-        role=role_name,
-        permissions=permissions,
+    access_token, access_expires_at = security.create_access_token(
+        user_id=user.id_user, username=user.username,
+        role_id=user.role_id, permissions=permissions
     )
     raw_refresh, hashed_refresh = _create_refresh_token()
     refresh_expire_days = int(settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -1848,14 +1846,9 @@ async def master_access(
     except Exception:
         pass
 
-    access_token, access_expires_at = _create_access_token(
-        user_id=target_user.id_user,
-        username=target_user.username,
-        role=role_name,
-        permissions=permissions,
-        is_impersonation=True,
-        impersonated_by=0,  # 0 = master key (brak konkretnego usera)
-        extra_claims={"master_access": True, "max_hours": max_hours},
+    access_token, access_expires_at = security.create_access_token(
+        user_id=target_user.id_user, username=target_user.username,
+        role_id=target_user.role_id, permissions=permissions
     )
 
     # 8. Zapis do MasterAccessLog (TYLKO tu — nie AuditLog!)
