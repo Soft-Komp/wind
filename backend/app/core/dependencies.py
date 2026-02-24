@@ -806,7 +806,7 @@ def require_permission(permission: str):
         client_ip: Annotated[str, Depends(get_client_ip)],
     ) -> User:
         user_id = current_user.id_user
-        role_id = current_user.RoleID
+        role_id = current_user.role_id
 
         # L1 cache: per-user per-permission
         l1_key = f"perm:{user_id}:{permission}"
