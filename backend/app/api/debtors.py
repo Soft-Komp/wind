@@ -116,7 +116,7 @@ async def list_debtors(
             "per_page": pagination.per_page,
             "pages": _pages(result["total"], pagination.per_page),
         },
-        code="debtors.list",
+        app_code="debtors.list",
     )
 
 
@@ -148,7 +148,7 @@ async def get_debtors_stats(
 
     stats = await debtor_service.get_stats(wapro=wapro, redis=redis)
 
-    return BaseResponse.ok(data=stats, code="debtors.stats")
+    return BaseResponse.ok(data=stats, app_code="debtors.stats")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,7 +211,7 @@ async def validate_bulk_debtors(
             "invalid_count": len(result["invalid"]),
             "channel": channel,
         },
-        code="debtors.validate_bulk",
+        app_code="debtors.validate_bulk",
     )
 
 
@@ -297,7 +297,7 @@ async def send_bulk_monits(
             "debtor_count": len(debtor_ids),
             "channel": channel,
         },
-        code="debtors.send_bulk_queued",
+        app_code="debtors.send_bulk_queued",
     )
 
 
@@ -339,7 +339,7 @@ async def get_debtor(
     except Exception as exc:
         _raise_from_debtor_error(exc)
 
-    return BaseResponse.ok(data=debtor, code="debtors.detail")
+    return BaseResponse.ok(data=debtor, app_code="debtors.detail")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -379,7 +379,7 @@ async def get_debtor_invoices(
 
     return BaseResponse.ok(
         data={"items": invoices, "total": len(invoices), "debtor_id": debtor_id},
-        code="debtors.invoices",
+        app_code="debtors.invoices",
     )
 
 
@@ -412,7 +412,7 @@ async def get_debtor_monit_history(
 
     return BaseResponse.ok(
         data={"items": history, "total": len(history), "debtor_id": debtor_id},
-        code="debtors.monit_history",
+        app_code="debtors.monit_history",
     )
 
 
@@ -444,7 +444,7 @@ async def get_debtor_comments(
 
     return BaseResponse.ok(
         data={"items": comments, "total": len(comments), "debtor_id": debtor_id},
-        code="debtors.comments",
+        app_code="debtors.comments",
     )
 
 
@@ -602,7 +602,7 @@ async def send_monit(
             "channel": channel,
             "monit_id": result.get("monit_id"),
         },
-        code="debtors.monit_queued",
+        app_code="debtors.monit_queued",
     )
 
 

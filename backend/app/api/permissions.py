@@ -61,7 +61,7 @@ router = APIRouter()
     ),
     response_description="Lista uprawnień pogrupowanych po kategorii",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("permissions.list")],
+    dependencies=[require_permission("permissions.view_list")],
 )
 async def list_permissions(
     current_user: CurrentUser,
@@ -72,7 +72,13 @@ async def list_permissions(
 ):
     from app.services import permission_service
 
-    permissions = await permission_service.get_list(db=db, redis=redis, category=category)
+    all_permissions = await permission_service.get_list(db=db, redis=redis)
+
+    # Filtruj po kategorii jeśli podana
+    if category:
+        permissions = {k: v for k, v in all_permissions.items() if k == category}
+    else:
+        permissions = all_permissions
 
     return BaseResponse.ok(
         data={
@@ -81,7 +87,7 @@ async def list_permissions(
                         (permissions.values() if isinstance(permissions, dict) else [permissions])),
             "grouped_by_category": isinstance(permissions, dict),
         },
-        code="permissions.list",
+        app_code="permissions.list",
     )
 
 
@@ -118,7 +124,7 @@ async def my_permissions(
             "permissions": sorted(permissions),
             "total": len(permissions),
         },
-        code="permissions.my",
+        app_code="permissions.my",
     )
 
 
@@ -178,7 +184,7 @@ async def check_permission(
             "granted": has_perm,
             "user_id": current_user.id_user,
         },
-        code="permissions.check",
+        app_code="permissions.check",
     )
 
 
@@ -266,12 +272,49 @@ async def check_many_permissions(
             "checked": len(unique_perms),
             "granted_count": sum(1 for v in result_map.values() if v),
         },
-        code="permissions.check_many",
+        app_code="permissions.check_many",
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 5: GET /permissions/categories
+# (PRZED /{id} — literal musi być dopasowany przed parametrem)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/categories",
+    summary="Lista kategorii uprawnień",
+    description=(
+        "Zwraca listę unikalnych kategorii uprawnień istniejących w systemie. "
+        "Używane przez frontend do budowania filtrów i UI. "
+        "Wyniki z cache Redis (ten sam co permissions:list TTL 600s). "
+        "**Wymaga uprawnienia:** `permissions.view_list`"
+    ),
+    response_description="Lista kategorii uprawnień",
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_permission("permissions.view_list")],
+)
+async def list_categories(
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    request_id: RequestID,
+):
+    from app.services import permission_service
+
+    all_permissions = await permission_service.get_list(db=db, redis=redis)
+    categories = sorted(all_permissions.keys())
+
+    return BaseResponse.ok(
+        data={
+            "categories": categories,
+            "total": len(categories),
+        },
+        app_code="permissions.categories",
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ENDPOINT 5: GET /permissions/{id}
+# ENDPOINT 6: GET /permissions/{id}
 # (NA KOŃCU — literal routes muszą być wyżej)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -285,7 +328,7 @@ async def check_many_permissions(
     ),
     response_description="Szczegóły uprawnienia",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("permissions.view")],
+    dependencies=[require_permission("permissions.view_list")],
     responses={
         404: {"description": "Uprawnienie nie istnieje"},
     },
@@ -304,7 +347,7 @@ async def get_permission(
     except Exception as exc:
         _raise_from_perm_error(exc)
 
-    return BaseResponse.ok(data=perm, code="permissions.detail")
+    return BaseResponse.ok(data=perm, app_code="permissions.detail")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

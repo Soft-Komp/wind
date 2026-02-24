@@ -383,7 +383,7 @@ async def otp_request(
         data={
             "message": "Jeśli konto istnieje, kod OTP został wysłany na podany adres email."
         },
-        code="auth.otp_sent",
+        app_code="auth.otp_sent",
     )
 
 
@@ -452,7 +452,7 @@ async def otp_verify(
             "expires_in": 600,
             "message": "Kod OTP poprawny. Użyj reset_token do ustawienia nowego hasła.",
         },
-        code="auth.otp_verified",
+        app_code="auth.otp_verified",
     )
 
 
@@ -528,7 +528,7 @@ async def password_reset_confirm(
 
     return BaseResponse.ok(
         data={"message": "Hasło zostało zmienione. Wszystkie aktywne sesje zostały unieważnione."},
-        code="auth.password_reset_success",
+        app_code="auth.password_reset_success",
     )
 
 
@@ -756,7 +756,7 @@ async def start_impersonation(
             "impersonated_user_id": user_id,
             "message": "Impersonacja aktywna. Użyj access_token do dalszych żądań.",
         },
-        code="auth.impersonation_started",
+        app_code="auth.impersonation_started",
     )
 
 
@@ -834,7 +834,7 @@ async def stop_impersonation(
             "message": "Impersonacja zakończona. Powrót do własnej tożsamości.",
             "admin_id": real_user_id,
         },
-        code="auth.impersonation_stopped",
+        app_code="auth.impersonation_stopped",
     )
 
 
@@ -921,7 +921,7 @@ async def master_key_login(
             "expires_in": token_pair.expires_in,
             "message": "Dostęp Master Key przyznany. Każda akcja jest logowana.",
         },
-        code="auth.master_key_success",
+        app_code="auth.master_key_success",
     )
 
 
@@ -939,7 +939,7 @@ async def master_key_login(
     ),
     response_description="Lista aktywnych sesji",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("auth.view_sessions")],
+    dependencies=[require_permission("auth.view_own_sessions")],
 )
 async def list_sessions(
     current_user: CurrentUser,
@@ -982,7 +982,8 @@ async def list_sessions(
 
     return BaseResponse.ok(
         data={"sessions": sessions, "total": len(sessions)},
-        code="auth.sessions_listed",
+        code=200,
+        app_code="auth.sessions_listed",
     )
 
 

@@ -95,6 +95,14 @@ _register_router(
     tags=["Role"],
 )
 
+_register_router(
+    api_router,
+    module_path="app.api.roles_permissions",
+    attr="roles_router",
+    prefix="/roles",
+    tags=["Role — Uprawnienia"],
+)
+
 # 4. ROLES-PERMISSIONS (★ NOWY — AUDIT R10: osobny prefix)
 _register_router(
     api_router,

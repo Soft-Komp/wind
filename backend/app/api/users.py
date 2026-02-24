@@ -29,14 +29,11 @@ Wersja: 1.0.0
 Data: 2026-02-20
 """
 from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-
 import orjson
 from fastapi import APIRouter, HTTPException, Query, Request, status
-
 from app.core.dependencies import (
     DB,
     ClientIP,
@@ -47,6 +44,7 @@ from app.core.dependencies import (
     require_permission,
 )
 from app.schemas.common import BaseResponse
+from app.services.user_service import UserListParams
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logger
@@ -96,7 +94,8 @@ async def list_users(
         search=search,
         role_id=role_id,
         is_active=is_active,
-        # is_locked, sort_by, sort_desc itd.
+        sort_by="created_at",
+        sort_desc=True,          # ← domyślnie DESC, bo dataclass tego oczekuje
     )
 
     result = await user_service.get_list(
@@ -107,13 +106,13 @@ async def list_users(
 
     return BaseResponse.ok(
         data={
-            "items": result["items"],
-            "total": result["total"],
-            "page": pagination.page,
-            "per_page": pagination.per_page,
-            "pages": _pages(result["total"], pagination.per_page),
+            "items": result.items,
+            "total": result.total,
+            "page": result.page,
+            "per_page": result.page_size,
+            "pages": result.total_pages,
         },
-        code="users.list",
+        app_code="users.list",
     )
 
 
@@ -163,8 +162,8 @@ async def create_user(
             db=db,
             redis=redis,
             data=data,
-            created_by_id=current_user.id_user,
-            ip=client_ip,
+            created_by_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -172,15 +171,15 @@ async def create_user(
     logger.info(
         orjson.dumps({
             "event": "api_user_created",
-            "new_user_id": user["id"],
+            "new_user_id": user["id_user"],
             "created_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.utcnow().isoformat(),
         }).decode()
     )
 
-    return BaseResponse.ok(data=user, code="users.created")
+    return BaseResponse.ok(data=user, app_code="users.created")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +196,7 @@ async def create_user(
     ),
     response_description="Szczegóły użytkownika",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("users.view")],
+    dependencies=[require_permission("users.view_details")],
     responses={
         404: {"description": "Użytkownik nie istnieje"},
     },
@@ -216,7 +215,7 @@ async def get_user(
     except Exception as exc:
         _raise_from_user_error(exc)
 
-    return BaseResponse.ok(data=user, code="users.detail")
+    return BaseResponse.ok(data=user, app_code="users.detail")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,6 +253,7 @@ async def update_user(
     from app.schemas.users import UserUpdateRequest
     from app.services import user_service
     from app.core.dependencies import _get_role_permissions
+    from app.services.user_service import UserUpdateData
 
     body = await _parse_body(request)
 
@@ -287,13 +287,20 @@ async def update_user(
             )
 
     try:
+        update_data = UserUpdateData(
+            email=data.email,
+            full_name=data.full_name,
+            role_id=data.role_id,
+            # is_active nie ma w UserUpdateData — obsłużyć osobno jeśli potrzeba
+        )
+
         user = await user_service.update(
             db=db,
             redis=redis,
             user_id=user_id,
-            data=data,
-            updated_by_id=current_user.id_user,
-            ip=client_ip,
+            data=update_data,
+            updated_by_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -309,7 +316,7 @@ async def update_user(
         }).decode()
     )
 
-    return BaseResponse.ok(data=user, code="users.updated")
+    return BaseResponse.ok(data=user, app_code="users.updated")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -392,7 +399,7 @@ async def lock_user(
         }).decode()
     )
 
-    return BaseResponse.ok(data=result, code="users.locked")
+    return BaseResponse.ok(data=result, app_code="users.locked")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -447,7 +454,7 @@ async def unlock_user(
         }).decode()
     )
 
-    return BaseResponse.ok(data=result, code="users.unlocked")
+    return BaseResponse.ok(data=result, app_code="users.unlocked")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -508,7 +515,7 @@ async def admin_reset_password(
             "message": "Kod OTP wysłany na email użytkownika. Użytkownik musi samodzielnie ustawić nowe hasło.",
             "sessions_revoked": result.get("sessions_revoked", 0),
         },
-        code="users.password_reset_initiated",
+        app_code="users.password_reset_initiated",
     )
 
 
@@ -590,7 +597,7 @@ async def initiate_delete_user(
                 "Użyj go w DELETE /users/{user_id}/confirm."
             ),
         },
-        code="users.delete_initiated",
+        app_code="users.delete_initiated",
     )
 
 
@@ -682,7 +689,7 @@ async def confirm_delete_user(
             "archive_path": result.get("archive_path"),
             "sessions_revoked": result.get("sessions_revoked", 0),
         },
-        code="users.deleted",
+        app_code="users.deleted",
     )
 
 

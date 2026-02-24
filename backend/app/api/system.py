@@ -137,7 +137,7 @@ async def system_health(
         else status.HTTP_503_SERVICE_UNAVAILABLE
     )
 
-    return BaseResponse.ok(data=results, code="system.health")
+    return BaseResponse.ok(data=results, app_code="system.health")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ async def get_config(
 
     configs = await config_service.get_all(db=db, redis=redis)
 
-    return BaseResponse.ok(data={"items": configs, "total": len(configs)}, code="system.config")
+    return BaseResponse.ok(data={"items": configs, "total": len(configs)}, app_code="system.config")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,7 +254,7 @@ async def update_config(
         }).decode()
     )
 
-    return BaseResponse.ok(data=result, code="system.config_updated")
+    return BaseResponse.ok(data=result, app_code="system.config_updated")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ async def get_cors(
 
     return BaseResponse.ok(
         data={"origins": origins, "total": len(origins)},
-        code="system.cors",
+        app_code="system.cors",
     )
 
 
@@ -367,7 +367,7 @@ async def update_cors(
             "cache_invalidated": True,
             "message": "Lista CORS zaktualizowana. Zmiany aktywne natychmiast.",
         },
-        code="system.cors_updated",
+        app_code="system.cors_updated",
     )
 
 
@@ -409,7 +409,7 @@ async def get_schema_integrity(
             },
         )
 
-    return BaseResponse.ok(data=result, code="system.schema_integrity")
+    return BaseResponse.ok(data=result, app_code="system.schema_integrity")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,7 +462,7 @@ async def force_schema_integrity_check(
             },
         )
 
-    return BaseResponse.ok(data=result, code="system.schema_integrity_checked")
+    return BaseResponse.ok(data=result, app_code="system.schema_integrity_checked")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,7 +527,7 @@ async def get_audit_log(
             "per_page": pagination.per_page,
             "pages": _pages(result["total"], pagination.per_page),
         },
-        code="system.audit_log",
+        app_code="system.audit_log",
     )
 
 

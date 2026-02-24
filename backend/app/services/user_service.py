@@ -847,7 +847,8 @@ async def create(
         )
 
     # Hashowanie hasła
-    password_hash = _ph.hash(data.password)
+    raw_password = data.password.get_secret_value() if hasattr(data.password, 'get_secret_value') else data.password
+    password_hash = _ph.hash(raw_password)
 
     # Tworzenie użytkownika
     new_user = User(
@@ -861,7 +862,10 @@ async def create(
     )
     db.add(new_user)
     await db.flush()  # Potrzebujemy ID
+    await db.commit()      
 
+    # Pobierz nowy stan roli z uprawnieniami
+    await db.refresh(new_user)
     user_id = new_user.id_user
 
     # Inwalidacja cache list (klucze prefixowane users:list:*)
