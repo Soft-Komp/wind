@@ -1247,11 +1247,10 @@ async def assign_permissions(
         db.add(new_rp)
 
     await db.flush()
+    await db.commit()        # ← BRAKUJĄCE — zatwierdź transakcję
 
     # Pobierz nowy stan roli z uprawnieniami
-    # (flush() wykonał INSERT, ale relacja wymaga odświeżenia)
     await db.refresh(role)
-    # Przeładuj z uprawnieniami
     role = await _get_role_with_permissions(db, role_id)
 
     new_permissions = sorted([

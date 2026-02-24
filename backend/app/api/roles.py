@@ -16,27 +16,28 @@ from app.schemas.roles import (
 )
 from app.schemas.base import BaseResponse, PaginatedData, PaginationMeta
 
-router = APIRouter(prefix="/roles", tags=["roles"])
+router = APIRouter()
 
 
 @router.get("", response_model=RoleListResponse)
 async def list_roles(q: RoleListQuery = Depends(), db: AsyncSession = Depends(get_db)):
-    stmt = select(Role).offset(q.offset).limit(q.limit)
+    stmt = select(Role).order_by(Role.id_role).offset(q.offset).limit(q.limit)
     result = await db.execute(stmt)
     items = result.scalars().all()
 
     total_stmt = select(func.count()).select_from(Role)
     total = (await db.execute(total_stmt)).scalar_one()
 
-    data = PaginatedData[
-        RoleListItem
-    ](
+    total_pages = (total + q.limit - 1) // q.limit if q.limit else 0
+    data = PaginatedData[RoleListItem](
         items=[RoleListItem.model_validate(x) for x in items],
         pagination=PaginationMeta(
             page=q.page,
             limit=q.limit,
             total=total,
-            pages=(total + q.limit - 1) // q.limit if q.limit else 0,
+            pages=total_pages,
+            has_next=q.page < total_pages,
+            has_prev=q.page > 1,
         ),
     )
     return BaseResponse(code=200, data=data)

@@ -119,7 +119,7 @@ async def list_monits(
             "per_page": pagination.per_page,
             "pages": _pages(result["total"], pagination.per_page),
         },
-        code="monits.list",
+        app_code="monits.list",
     )
 
 
@@ -151,7 +151,7 @@ async def get_monits_stats(
 
     stats = await monit_service.get_stats(db=db, period=period)
 
-    return BaseResponse.ok(data=stats, code="monits.stats")
+    return BaseResponse.ok(data=stats, app_code="monits.stats")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ async def get_queue_status(
 
     queue_status = await monit_service.get_queue_status(redis=redis, db=db)
 
-    return BaseResponse.ok(data=queue_status, code="monits.queue_status")
+    return BaseResponse.ok(data=queue_status, app_code="monits.queue_status")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ async def get_monit(
     except Exception as exc:
         _raise_from_monit_error(exc)
 
-    return BaseResponse.ok(data=monit, code="monits.detail")
+    return BaseResponse.ok(data=monit, app_code="monits.detail")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,7 +329,7 @@ async def retry_monit(
             "monit_id": monit_id,
             "job_id": result.get("job_id"),
         },
-        code="monits.retry_queued",
+        app_code="monits.retry_queued",
     )
 
 
@@ -409,7 +409,7 @@ async def update_monit_status(
         }).decode()
     )
 
-    return BaseResponse.ok(data=result, code="monits.status_updated")
+    return BaseResponse.ok(data=result, app_code="monits.status_updated")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,7 +473,7 @@ async def cancel_monit(
             "monit_id": monit_id,
             "new_status": "CANCELLED",
         },
-        code="monits.cancelled",
+        app_code="monits.cancelled",
     )
 
 
