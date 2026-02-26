@@ -55,6 +55,7 @@ from typing import Any, Literal, Optional
 
 import orjson
 from sqlalchemy import text
+from app.db.session import async_session_factory
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---------------------------------------------------------------------------
