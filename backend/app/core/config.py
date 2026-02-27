@@ -241,6 +241,79 @@ class Settings(BaseSettings):
             if origin.strip()
         ]
 
+# -----------------------------------------------------------------------
+    # Sekcja: COOKIE — HttpOnly refresh token
+    # -----------------------------------------------------------------------
+    # Dokumentacja bezpieczeństwa:
+    #   HttpOnly  → JS nie czyta cookie (ochrona XSS)
+    #   Secure    → tylko HTTPS (True na prod, False na dev/localhost)
+    #   SameSite  → "lax" chroni przed CSRF bez blokowania UX
+    #               "strict" blokuje cookie przy nawigacji z zewnętrznych linków
+    #               "none" wymaga Secure=True i otwiera wektory CSRF
+    #   Path      → ogranicza cookie do /api/v1/auth/* (minimalizacja ekspozycji)
+    #   Domain    → jawnie ustaw na prod (np. "api.app.pl")
+    #               None = browser default (host API)
+    #
+    # Dla architektury: app.pl (frontend) + api.app.pl (backend)
+    #   → SameSite=Lax działa (same-site = ta sama domena nadrzędna)
+    #   → Frontend robi fetch z credentials: 'include' do api.app.pl
+    #   → Backend ustawia cookie na api.app.pl
+    #   → Przeglądarka automatycznie dołącza cookie do requestów do api.app.pl
+    # -----------------------------------------------------------------------
+
+    cookie_name: str = Field(
+        default="refresh_token",
+        description=(
+            "Nazwa HttpOnly cookie przechowującego refresh token. "
+            "Zmiana nazwy invaliduje wszystkie istniejące sesje!"
+        ),
+        pattern=r"^[a-zA-Z0-9_\\-]+$",
+        min_length=1,
+        max_length=64,
+    )
+
+    cookie_secure: bool = Field(
+        default=True,
+        description=(
+            "Czy cookie wymaga HTTPS (Secure flag). "
+            "ZAWSZE True na produkcji. "
+            "Ustaw False TYLKO na localhost (dev) — .env.docker: COOKIE_SECURE=false."
+        ),
+    )
+
+    cookie_samesite: str = Field(
+        default="strict",
+        description=(
+            "Polityka SameSite cookie. "
+            "Dozwolone: 'strict' (rekomendowane — max ochrona CSRF dla SPA), "
+            "'lax' (cross-site navigation), "
+            "'none' (wymaga Secure=True, ryzyko CSRF). "
+            "REKOMENDACJA frontendu: 'strict' dla architektury app.pl + api.app.pl."
+        ),
+        pattern=r"^(lax|strict|none)$",
+    )
+
+    cookie_path: str = Field(
+        default="/api/v1/auth",
+        description=(
+            "Ścieżka do której ograniczony jest scope cookie. "
+            "'/api/v1/auth' = cookie wysyłane TYLKO do endpointów auth. "
+            "Minimalizuje ekspozycję — cookie nie idzie do /api/v1/users/ itp."
+        ),
+        min_length=1,
+        max_length=256,
+    )
+
+    cookie_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Domena cookie. None = host który ustawił cookie (rekomendowane). "
+            "Ustaw jawnie tylko gdy potrzebujesz współdzielenia między subdomenami. "
+            "Przykład: 'api.app.pl' lub '.app.pl' (z kropką = subdomeny)."
+        ),
+        max_length=253,
+    )
+
     # -----------------------------------------------------------------------
     # Sekcja: EMAIL (SMTP)
     # -----------------------------------------------------------------------

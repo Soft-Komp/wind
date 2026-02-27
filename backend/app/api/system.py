@@ -238,7 +238,7 @@ async def update_config(
             key=config_key,
             value=str(value),
             updated_by_id=current_user.id_user,
-            ip=client_ip,
+            updated_by_username=current_user.username,
         )
     except Exception as exc:
         _raise_from_config_error(exc)
@@ -339,12 +339,12 @@ async def update_cors(
         )
 
     try:
-        result = await config_service.set_cors_origins(
+        result = await config_service.update_cors(
             db=db,
             redis=redis,
             origins=origins,
             updated_by_id=current_user.id_user,
-            ip=client_ip,
+            updated_by_username=current_user.username,
         )
     except Exception as exc:
         _raise_from_config_error(exc)
@@ -487,7 +487,7 @@ async def force_schema_integrity_check(
     ),
     response_description="Paginowany audit log",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("system.audit_log_view")],
+    dependencies=[require_permission("audit.view_all")],
 )
 async def get_audit_log(
     current_user: CurrentUser,
@@ -505,18 +505,49 @@ async def get_audit_log(
 ):
     from app.services import audit_service
 
+    # Konwersja date_from / date_to string → datetime
+    date_from_dt: Optional[datetime] = None
+    date_to_dt: Optional[datetime] = None
+
+    if date_from:
+        try:
+            from datetime import datetime as _dt
+            date_from_dt = _dt.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "validation.error",
+                    "message": "Nieprawidłowy format date_from — wymagany: YYYY-MM-DD",
+                    "errors": [{"field": "date_from", "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+
+    if date_to:
+        try:
+            from datetime import datetime as _dt
+            date_to_dt = _dt.fromisoformat(date_to).replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "validation.error",
+                    "message": "Nieprawidłowy format date_to — wymagany: YYYY-MM-DD",
+                    "errors": [{"field": "date_to", "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+
     result = await audit_service.get_logs(
         db=db,
-        offset=pagination.offset,
-        limit=pagination.per_page,
         user_id=user_id,
         action=action,
-        action_category=action_category,
+        category=action_category,
         entity_type=entity_type,
         success=success,
-        date_from=date_from,
-        date_to=date_to,
-        ip_address=ip_address,
+        date_from=date_from_dt,
+        date_to=date_to_dt,
+        limit=pagination.per_page,
+        offset=pagination.offset,
     )
 
     return BaseResponse.ok(

@@ -67,8 +67,16 @@ SELECT
     o.object_id                     AS object_id
 FROM sys.sql_modules m
 JOIN sys.objects      o ON m.object_id = o.object_id
-WHERE SCHEMA_NAME(o.schema_id) IN ('dbo_ext', 'dbo')
-  AND o.type_desc IN ('VIEW', 'SQL_STORED_PROCEDURE')
+WHERE (
+    /* dbo_ext: wszystkie obiekty projektu */
+    SCHEMA_NAME(o.schema_id) = 'dbo_ext'
+)
+OR (
+    /* dbo: tylko nasze widoki VIEW_* — wyklucza setki procedur WAPRO */
+    SCHEMA_NAME(o.schema_id) = 'dbo'
+    AND o.type_desc = 'VIEW'
+    AND o.name LIKE 'VIEW[_]%'
+)
 ORDER BY schema_name, object_name
 """
 
@@ -85,6 +93,7 @@ SELECT
     sc.CreatedAt
 FROM dbo_ext.SchemaChecksums sc
 WHERE sc.SchemaName IN ('dbo_ext', 'dbo')
+  AND sc.ObjectType NOT IN ('INDEX', 'STATISTICS', 'TRIGGER')
 ORDER BY sc.SchemaName, sc.ObjectName
 """
 
@@ -1058,3 +1067,452 @@ __all__ = [
     "StoredChecksum",
     "ReactionLevel",
 ]
+
+"""
+PATCH — dodaj ten kod na KOŃCU pliku:
+    backend/app/core/schema_integrity.py
+
+Klasa SchemaIntegrityChecker wrappuje istniejące wolne funkcje modułu
+i dostarcza interfejs wymagany przez:
+  - main.py startup     → SchemaIntegrityChecker(db=db).verify_all()
+  - system.py GET       → SchemaIntegrityChecker.get_last_result(db=db)
+  - system.py POST      → SchemaIntegrityChecker.verify(db=db, runtime_check=True)
+
+NIE duplikuje logiki — deleguje do istniejących _funkcji prywatnych.
+"""
+
+
+# ---------------------------------------------------------------------------
+# SchemaIntegrityChecker
+# ---------------------------------------------------------------------------
+
+class SchemaIntegrityChecker:
+    """
+    Fasada OOP nad modułowymi funkcjami weryfikacji integralności schematu.
+
+    Tryby użycia:
+    ┌─────────────────────────────────────────────────────────┐
+    │ STARTUP (main.py lifespan):                             │
+    │   checker = SchemaIntegrityChecker(db=db)               │
+    │   ok, issues = await checker.verify_all()               │
+    │   # zwraca (True, []) lub (False, ["dbo.VIEW_x: ..."])  │
+    ├─────────────────────────────────────────────────────────┤
+    │ API GET /system/schema-integrity:                       │
+    │   result = await SchemaIntegrityChecker.get_last_result(│
+    │       db=db)                                            │
+    │   # odczytuje ostatni wpis z jsonl — zero DB queries   │
+    ├─────────────────────────────────────────────────────────┤
+    │ API POST /system/schema-integrity/check:                │
+    │   result = await SchemaIntegrityChecker.verify(         │
+    │       db=db, runtime_check=True)                        │
+    │   # pełna weryfikacja, NIE blokuje aplikacji (runtime) │
+    └─────────────────────────────────────────────────────────┘
+    """
+
+    def __init__(self, db: "AsyncSession") -> None:  # noqa: F821
+        self._db = db
+
+    # ------------------------------------------------------------------
+    # Instancja — używana przez main.py startup
+    # ------------------------------------------------------------------
+
+    async def verify_all(self) -> tuple[bool, list[str]]:
+        """
+        Uruchamia pełną weryfikację i zwraca (ok: bool, issues: list[str]).
+
+        Używana przy starcie aplikacji — reakcja BLOCK zatrzymuje proces.
+        Jeśli brak obiektów w SchemaChecksums → traktujemy jako OK
+        (pierwsze uruchomienie przed migracją seedów).
+
+        Returns:
+            (True, [])                — wszystkie checksums OK
+            (False, ["opis..."])      — lista rozbieżności
+        """
+        result = await _run_full_verification(self._db, runtime_check=False)
+
+        if result.error:
+            logger.error(
+                "verify_all: błąd weryfikacji — %s", result.error,
+                extra={"verification_id": result.verification_id},
+            )
+            # Przy błędzie infrastruktury (np. brak tabeli SchemaChecksums)
+            # zwracamy OK żeby nie blokować startu gdy tabela nie istnieje jeszcze
+            if "SchemaChecksums" in (result.error or ""):
+                logger.warning(
+                    "verify_all: tabela SchemaChecksums niedostępna — "
+                    "pominięcie weryfikacji (pierwsze uruchomienie?)",
+                    extra={"verification_id": result.verification_id},
+                )
+                return True, []
+            return False, [f"Błąd infrastruktury: {result.error}"]
+
+        if result.total_stored_objects == 0:
+            logger.warning(
+                "verify_all: brak zapisanych checksums w SchemaChecksums — "
+                "pomijam weryfikację (uruchom seedy alembic)",
+                extra={"verification_id": result.verification_id},
+            )
+            return True, []
+
+        if result.has_mismatches:
+            issues = [
+                f"{m.qualified_name} [{m.mismatch_type}]: "
+                f"stored={m.stored_checksum} live={m.live_checksum}"
+                for m in result.mismatches
+            ]
+            return False, issues
+
+        return True, []
+
+    # ------------------------------------------------------------------
+    # Classmethods — używane przez API endpointy system.py
+    # ------------------------------------------------------------------
+
+    @classmethod
+    async def verify(
+        cls,
+        db: "AsyncSession",  # noqa: F821
+        runtime_check: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Uruchamia weryfikację i zwraca wynik jako słownik (dla API response).
+
+        runtime_check=True → NIE zatrzymuje aplikacji nawet przy BLOCK.
+        Wynik zapisywany do jsonl (append-only).
+
+        Args:
+            db:            Sesja SQLAlchemy async.
+            runtime_check: True = wywołane z API (nie przy starcie).
+
+        Returns:
+            Słownik z wynikiem weryfikacji — serializowalny do JSON.
+        """
+        result = await _run_full_verification(db, runtime_check=runtime_check)
+        return _verification_result_to_api_dict(result)
+
+    @classmethod
+    async def get_last_result(
+        cls,
+        db: "AsyncSession",  # noqa: F821  # db zarezerwowane na przyszłe rozszerzenia
+    ) -> dict[str, Any]:
+        """
+        Zwraca ostatni zapisany wynik weryfikacji z pliku jsonl.
+
+        NIE wykonuje zapytań do DB — czyta ostatni wpis z pliku logów.
+        Szybka operacja, bezpieczna do użycia w każdym request.
+
+        Jeśli plik nie istnieje lub jest pusty → zwraca informację
+        że weryfikacja jeszcze nie była przeprowadzona.
+
+        Args:
+            db: Sesja SQLAlchemy (nieużywana — zachowana dla spójności API).
+
+        Returns:
+            Słownik z ostatnim wynikiem weryfikacji lub info o braku danych.
+        """
+        log_path = _get_integrity_log_path()
+
+        # Spróbuj plik z dzisiejszą datą, jeśli pusty — wczorajszy
+        last_entry = _read_last_jsonl_entry(log_path)
+
+        if last_entry is None:
+            # Szukamy w poprzednich dniach (max 7)
+            from datetime import timedelta
+            log_dir = _get_log_dir()
+            for days_back in range(1, 8):
+                date_str = (
+                    datetime.now(timezone.utc) - timedelta(days=days_back)
+                ).strftime("%Y-%m-%d")
+                old_path = log_dir / f"schema_integrity_{date_str}.jsonl"
+                last_entry = _read_last_jsonl_entry(old_path)
+                if last_entry is not None:
+                    break
+
+        if last_entry is None:
+            return {
+                "status": "no_data",
+                "message": (
+                    "Brak wyników weryfikacji. "
+                    "Weryfikacja uruchamia się przy starcie aplikacji. "
+                    "Użyj POST /system/schema-integrity/check aby uruchomić ręcznie."
+                ),
+                "last_verification_at": None,
+                "verified_ok": 0,
+                "mismatch_count": 0,
+                "mismatches": [],
+            }
+
+        # Mapuj wpis jsonl na format API response
+        return _jsonl_entry_to_api_dict(last_entry)
+
+
+# ---------------------------------------------------------------------------
+# Główna funkcja weryfikacji — wywoływana przez oba tryby klasy
+# ---------------------------------------------------------------------------
+async def _run_full_verification(
+    db: "AsyncSession",
+    runtime_check: bool,
+) -> "VerificationResult":
+    """
+    Wykonuje pełny cykl weryfikacji integralności schematu:
+      1. Pobierz live checksums z sys.sql_modules
+      2. Pobierz stored checksums z dbo_ext.SchemaChecksums
+      3. Porównaj
+      4. Zaktualizuj LastVerifiedAt dla OK obiektów
+      5. Zaloguj wynik do jsonl
+
+    runtime_check=True  → wywołanie z API — nigdy nie blokuje serwera.
+    runtime_check=False → wywołanie ze startu — może wywołać SystemExit przy BLOCK.
+    Jeśli tabela SchemaChecksums jest pusta → traktuj jako OK (pierwsze uruchomienie).
+    """
+    import traceback as _traceback
+
+    result = VerificationResult()
+    log_path = _get_integrity_log_path()
+
+    logger.info(
+        "=== Weryfikacja integralności schematu START "
+        "(verification_id=%s, runtime=%s) ===",
+        result.verification_id,
+        runtime_check,
+        extra={
+            "verification_id": result.verification_id,
+            "runtime_check": runtime_check,
+        },
+    )
+
+    try:
+        # ── Krok 1: Live checksums ────────────────────────────────────────────
+        live_checksums = await _fetch_live_checksums(db, result.verification_id)
+        result.total_live_objects = len(live_checksums)
+
+        # ── Krok 2: Stored checksums ──────────────────────────────────────────
+        stored_checksums = await _fetch_stored_checksums(db, result.verification_id)
+        result.total_stored_objects = len(stored_checksums)
+
+        logger.info(
+            "Obiekty do porównania: live=%d stored=%d",
+            result.total_live_objects,
+            result.total_stored_objects,
+            extra={
+                "verification_id": result.verification_id,
+                "live_objects":   sorted(live_checksums.keys()),
+                "stored_objects": sorted(stored_checksums.keys()),
+            },
+        )
+
+        # ── Krok 2b: Brak baseline → pierwsze uruchomienie, pomijamy ─────────
+        if result.total_stored_objects == 0:
+            result.success = True
+            result.reaction_applied = "SKIPPED_NO_BASELINE"
+            result.finish()
+            logger.warning(
+                "Brak zapisanych checksums w SchemaChecksums (total_stored=0) — "
+                "pomijam weryfikację. Uruchom seedy Alembic aby zarejestrować obiekty.",
+                extra={
+                    "verification_id": result.verification_id,
+                    "total_live_objects": result.total_live_objects,
+                    "runtime_check": runtime_check,
+                },
+            )
+            _write_jsonl(log_path, result.to_log_dict())
+            return result
+
+        # ── Krok 3: Porównaj checksums ────────────────────────────────────────
+        mismatches, ok_count = _compare_checksums(
+            live_checksums,
+            stored_checksums,
+            result.verification_id,
+        )
+        result.mismatches = mismatches
+        result.verified_ok = ok_count
+
+        # ── Krok 4: Zaktualizuj LastVerifiedAt dla OK obiektów ────────────────
+        all_live_keys  = set(live_checksums.keys())
+        mismatch_keys  = {m.qualified_name.lower() for m in mismatches}
+        ok_keys        = sorted(all_live_keys - mismatch_keys)
+        await _update_last_verified(db, ok_keys, result.verification_id)
+        await db.commit()
+
+        # ── Krok 5: Finalizuj wynik ───────────────────────────────────────────
+        result.finish()
+
+        if not result.has_mismatches:
+            result.success = True
+            result.reaction_applied = "NONE"
+            logger.info(
+                "=== Weryfikacja ZAKOŃCZONA POMYŚLNIE: %d/%d obiektów OK (%.1f ms) ===",
+                ok_count,
+                result.total_live_objects,
+                result.duration_ms or 0.0,
+                extra={
+                    "verification_id": result.verification_id,
+                    "duration_ms":     result.duration_ms,
+                },
+            )
+            _write_jsonl(log_path, result.to_log_dict())
+            return result
+
+        # ── Krok 6: Obsługa niezgodności ─────────────────────────────────────
+        result.success = False
+        reaction_level: ReactionLevel = await _get_reaction_level(db)
+        result.reaction_level = reaction_level
+
+        logger.critical(
+            "!!! SCHEMA TAMPER DETECTED !!! "
+            "verification_id=%s | niezgodności=%d | reaction=%s",
+            result.verification_id,
+            len(mismatches),
+            reaction_level,
+            extra={
+                "verification_id": result.verification_id,
+                "mismatches":      [m.to_dict() for m in mismatches],
+                "reaction_level":  reaction_level,
+                "runtime_check":   runtime_check,
+            },
+        )
+
+        # Zapis raportu incydentu
+        incident_path = _get_incident_log_path(result.verification_id)
+        _write_incident_file(incident_path, result.to_log_dict())
+
+        if runtime_check:
+            # API call — nigdy nie blokuj serwera, tylko raportuj
+            result.reaction_applied = (
+                f"REPORTED_ONLY (runtime_check=True, configured={reaction_level})"
+            )
+        else:
+            result.reaction_applied = reaction_level
+
+        _write_jsonl(log_path, result.to_log_dict())
+
+        # BLOCK tylko przy starcie i tylko jeśli skonfigurowany
+        if not runtime_check and reaction_level == "BLOCK":
+            logger.critical(
+                "Reakcja BLOCK — aplikacja zatrzymana. "
+                "Zmień schema_integrity.reaction na WARN aby pominąć.",
+                extra={"verification_id": result.verification_id},
+            )
+            raise SystemExit(
+                f"[SchemaIntegrity] BLOCK: {len(mismatches)} niezgodności. "
+                f"Verification ID: {result.verification_id}"
+            )
+
+        return result
+
+    except SystemExit:
+        raise
+    except Exception as exc:
+        result.error = str(exc)[:500]
+        result.finish()
+        logger.error(
+            "Błąd weryfikacji integralności: %s",
+            exc,
+            extra={
+                "verification_id": result.verification_id,
+                "traceback":       _traceback.format_exc(),
+            },
+        )
+        try:
+            _write_jsonl(log_path, result.to_log_dict())
+        except Exception:
+            pass
+        return result
+
+        
+# ---------------------------------------------------------------------------
+# Pomocnicze — serializacja do formatu API
+# ---------------------------------------------------------------------------
+
+def _verification_result_to_api_dict(result: "VerificationResult") -> dict[str, Any]:  # noqa: F821
+    """Konwertuje VerificationResult → słownik API response."""
+    return {
+        "verification_id":      result.verification_id,
+        "status":               "ok" if result.success else ("error" if result.error else "mismatch"),
+        "success":              result.success,
+        "started_at":           result.started_at.isoformat(),
+        "finished_at":          result.finished_at.isoformat() if result.finished_at else None,
+        "duration_ms":          round(result.duration_ms, 2) if result.duration_ms else None,
+        "total_live_objects":   result.total_live_objects,
+        "total_stored_objects": result.total_stored_objects,
+        "verified_ok":          result.verified_ok,
+        "mismatch_count":       len(result.mismatches),
+        "mismatches":           [m.to_dict() for m in result.mismatches],
+        "reaction_level":       result.reaction_level,
+        "reaction_applied":     result.reaction_applied,
+        "error":                result.error,
+        "monitored_schemas":    list(MONITORED_SCHEMAS),
+        "host": {
+            "hostname": result.hostname,
+            "pid":      result.pid,
+        },
+    }
+
+
+def _jsonl_entry_to_api_dict(entry: dict[str, Any]) -> dict[str, Any]:
+    """Konwertuje wpis z jsonl → słownik API response (GET endpoint)."""
+    result_block = entry.get("result", {})
+    reaction_block = entry.get("reaction", {})
+    host_block = entry.get("host", {})
+
+    return {
+        "verification_id":      entry.get("verification_id"),
+        "status":               "ok" if result_block.get("success") else (
+                                    "error" if entry.get("error") else "mismatch"
+                                ),
+        "success":              result_block.get("success", False),
+        "started_at":           entry.get("timestamp"),
+        "finished_at":          entry.get("finished_at"),
+        "duration_ms":          entry.get("duration_ms"),
+        "total_live_objects":   result_block.get("total_live_objects", 0),
+        "total_stored_objects": result_block.get("total_stored_objects", 0),
+        "verified_ok":          result_block.get("verified_ok", 0),
+        "mismatch_count":       result_block.get("mismatch_count", 0),
+        "mismatches":           result_block.get("mismatches", []),
+        "reaction_level":       reaction_block.get("level", "UNKNOWN"),
+        "reaction_applied":     reaction_block.get("applied", "UNKNOWN"),
+        "error":                entry.get("error"),
+        "monitored_schemas":    entry.get("monitored_schemas", []),
+        "host": {
+            "hostname": host_block.get("hostname"),
+            "pid":      host_block.get("pid"),
+        },
+        "source": "log_file",   # informacja że dane z pliku, nie z live query
+    }
+
+
+def _read_last_jsonl_entry(path: Path) -> Optional[dict[str, Any]]:
+    """
+    Czyta ostatnią linię z pliku JSON Lines.
+    Zwraca None jeśli plik nie istnieje, jest pusty lub nie parseable.
+
+    Efektywna implementacja: czyta plik od końca (seek) bez ładowania całości.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+
+    try:
+        # Wczytaj od końca — dla typowych plików (<10MB) to w pełni akceptowalne
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Iteruj od końca szukając niepustej linii z poprawnym JSON
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+        return None
+
+    except OSError as exc:
+        logger.warning(
+            "Nie można odczytać pliku jsonl: %s — %s",
+            path,
+            exc,
+            extra={"path": str(path)},
+        )
+        return None

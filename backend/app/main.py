@@ -518,7 +518,8 @@ async def lifespan(app: FastAPI):
       4. Weryfikacja integralności schematu DB (schema_integrity.py)
          → Jeśli reaction=BLOCK i checksums niezgodne → odmowa startu
       5. Wczytanie allowed_origins CORS (SystemConfig → Redis cache)
-      6. Logowanie finalnego potwierdzenia startu
+      6. Inicjalizacja konfiguracji HttpOnly cookie (CookieConfig)  ← NOWE v2.0
+      7. Logowanie finalnego potwierdzenia startu
 
     SHUTDOWN:
       1. Zamknięcie engine SQLAlchemy (flush connections pool)
@@ -609,7 +610,6 @@ async def lifespan(app: FastAPI):
             integrity_ok, issues = await checker.verify_all()
 
             if not integrity_ok:
-                # Pobierz poziom reakcji z SystemConfig
                 from sqlalchemy import select
                 from app.db.models.system_config import SystemConfig
 
@@ -624,7 +624,7 @@ async def lifespan(app: FastAPI):
                     "event": "startup_schema_integrity_failed",
                     "reaction": reaction,
                     "issues_count": len(issues),
-                    "issues": issues[:10],  # max 10 w logu
+                    "issues": issues[:10],
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -637,8 +637,6 @@ async def lifespan(app: FastAPI):
                         f"Reakcja: BLOCK — aplikacja nie startuje. "
                         f"Zmień schema_integrity.reaction na WARN aby pominąć."
                     )
-                elif reaction == "ALERT":
-                    logger.error(orjson.dumps({**log_entry, "severity": "ERROR"}).decode())
                 else:
                     logger.warning(orjson.dumps(log_entry).decode())
             else:
@@ -654,7 +652,6 @@ async def lifespan(app: FastAPI):
     except RuntimeError:
         raise
     except Exception as exc:
-        # Błąd podczas weryfikacji — loguj ale nie blokuj (może być pierwsza migracja)
         logger.warning(
             orjson.dumps(
                 {
@@ -666,36 +663,123 @@ async def lifespan(app: FastAPI):
             ).decode()
         )
 
-    # ── KROK 5: Wczytaj CORS ─────────────────────────────────────────────────
-    cors_origins = await _load_cors_origins()
-    logger.info(
-        orjson.dumps(
-            {
-                "event": "startup_cors_loaded",
-                "allowed_origins": cors_origins,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-        ).decode()
-    )
+    # ── KROK 5: CORS — wczytanie origins do app.state ─────────────────────────
+    try:
+        async for db in get_async_session():
+            from app.services import config_service
 
-    # ── Potwierdzenie startu ──────────────────────────────────────────────────
-    startup_ms = round(
-        (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000, 2
-    )
+            origins = await config_service.get_cors_origins(
+                db=db,
+                redis=redis,
+                fallback_origins=settings.cors_origins_fallback_list,
+            )
+            app.state.redis = redis
+            logger.info(
+                orjson.dumps(
+                    {
+                        "event": "startup_cors_ok",
+                        "origins_count": len(origins),
+                        "origins": origins,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                ).decode()
+            )
+            break
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps(
+                {
+                    "event": "startup_cors_warning",
+                    "error": str(exc),
+                    "note": "CORS załadowane z fallback .env",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+            ).decode()
+        )
+        app.state.redis = redis
+
+    # ── KROK 6: Cookie config (HttpOnly refresh token) ────────────────────────
+    try:
+        import app.core.cookie_manager as _cm
+        from app.core.cookie_manager import (
+            CookieConfig,
+            validate_cookie_config_for_environment,
+        )
+
+        _cm.COOKIE_CFG = CookieConfig.from_settings(settings)
+
+        cookie_warnings = validate_cookie_config_for_environment(
+            _cm.COOKIE_CFG,
+            environment=getattr(settings, "environment", "production"),
+        )
+
+        if cookie_warnings:
+            for warning in cookie_warnings:
+                logger.warning(
+                    orjson.dumps(
+                        {
+                            "event": "startup_cookie_config_warning",
+                            "warning": warning,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+                    ).decode()
+                )
+        else:
+            logger.info(
+                orjson.dumps(
+                    {
+                        "event": "startup_cookie_config_ok",
+                        "cookie_name": _cm.COOKIE_CFG.name,
+                        "samesite": _cm.COOKIE_CFG.samesite,
+                        "secure": _cm.COOKIE_CFG.secure,
+                        "path": _cm.COOKIE_CFG.path,
+                        "domain": _cm.COOKIE_CFG.domain,
+                        "max_age_seconds": _cm.COOKIE_CFG.max_age_seconds,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                ).decode()
+            )
+
+    except Exception as exc:
+        # Cookie config jest krytyczna — bez niej endpointy auth nie działają
+        logger.critical(
+            orjson.dumps(
+                {
+                    "event": "startup_cookie_config_failed",
+                    "error": str(exc),
+                    "severity": "CRITICAL",
+                    "hint": (
+                        "Sprawdź pola COOKIE_* w .env.docker: "
+                        "COOKIE_NAME, COOKIE_SECURE, COOKIE_SAMESITE, "
+                        "COOKIE_PATH, COOKIE_DOMAIN"
+                    ),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+            ).decode()
+        )
+        raise RuntimeError(f"Inicjalizacja cookie config nieudana: {exc}") from exc
+
+    # ── KROK 7: Startup zakończony ────────────────────────────────────────────
+    elapsed_ms = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
+
     logger.info(
         orjson.dumps(
             {
-                "event": "app_started",
+                "event": "app_startup_complete",
                 "version": _APP_VERSION,
-                "startup_ms": startup_ms,
+                "elapsed_ms": round(elapsed_ms, 1),
+                "environment": getattr(settings, "ENVIRONMENT", "production"),
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         ).decode()
     )
 
-    # ─── Aplikacja działa ────────────────────────────────────────────────────
+    # ── Aplikacja działa ──────────────────────────────────────────────────────
     yield
-    # ─── Shutdown ────────────────────────────────────────────────────────────
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SHUTDOWN
+    # ══════════════════════════════════════════════════════════════════════════
 
     logger.info(
         orjson.dumps(
@@ -735,7 +819,6 @@ async def lifespan(app: FastAPI):
             }
         ).decode()
     )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # APLIKACJA FastAPI
@@ -1049,3 +1132,4 @@ if __name__ == "__main__":
         workers=1,                # Więcej workerów = osobny Gunicorn (nie uvicorn.run)
         loop="uvloop",            # Szybszy event loop (uvicorn[standard] go instaluje)
     )
+
