@@ -1518,7 +1518,7 @@ async def verify_otp_and_get_reset_token(
     # Szukaj aktywnego, nie-wygasłego kodu
     result = await db.execute(
         select(OtpCode).where(
-            OtpCode.user_id == user.id_user,
+            OtpCode.id_user == user.id_user,        # ← poprawione
             OtpCode.code == otp_hash,
             OtpCode.purpose == "password_reset",
             OtpCode.is_used == False,

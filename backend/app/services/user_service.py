@@ -58,6 +58,7 @@ from app.db.models.role import Role
 from app.db.models.user import User
 from app.services import audit_service
 from app.services import config_service
+from jose import JWTError, jwt
 
 # ---------------------------------------------------------------------------
 # Logger własny dla tego modułu
@@ -1142,9 +1143,10 @@ async def initiate_delete(
         "exp": int(expires_at.timestamp()),
     }
 
+    secret = settings.secret_key.get_secret_value() if hasattr(settings.secret_key, 'get_secret_value') else settings.secret_key
     delete_token = jwt.encode(
         token_payload,
-        settings.secret_key,
+        secret,
         algorithm=settings.algorithm,
     )
 
@@ -1243,9 +1245,10 @@ async def confirm_delete(
     """
     # --- 1. Dekodowanie i weryfikacja tokenu JWT ---
     try:
+        secret = settings.secret_key.get_secret_value() if hasattr(settings.secret_key, 'get_secret_value') else settings.secret_key
         payload = jwt.decode(
             confirm_token,
-            settings.secret_key,
+            secret,
             algorithms=[settings.algorithm],
         )
     except JWTError as exc:

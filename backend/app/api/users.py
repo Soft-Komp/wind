@@ -379,10 +379,10 @@ async def lock_user(
             db=db,
             redis=redis,
             user_id=user_id,
-            locked_by_id=current_user.id_user,
-            lock_minutes=lock_minutes,
+            locked_by_user_id=current_user.id_user,
+            duration_minutes=lock_minutes,
             reason=reason,
-            ip=client_ip,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -424,6 +424,7 @@ async def lock_user(
 )
 async def unlock_user(
     user_id: int,
+    request: Request,
     current_user: CurrentUser,
     db: DB,
     redis: RedisClient,
@@ -432,13 +433,22 @@ async def unlock_user(
 ):
     from app.services import user_service
 
+    # Parsowanie opcjonalnego body
+    reason: str = ""
+    try:
+        body = await request.json()
+        reason = str(body.get("reason", ""))[:200]
+    except Exception:
+        pass
+
     try:
         result = await user_service.unlock(
             db=db,
             redis=redis,
             user_id=user_id,
-            unlocked_by_id=current_user.id_user,
-            ip=client_ip,
+            unlocked_by_user_id=current_user.id_user,
+            reason=reason,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -455,7 +465,6 @@ async def unlock_user(
     )
 
     return BaseResponse.ok(data=result, app_code="users.unlocked")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 7: POST /users/{id}/reset-password
@@ -567,11 +576,12 @@ async def initiate_delete_user(
         )
 
     try:
-        result = await user_service.delete_initiate(
+        result = await user_service.initiate_delete(
             db=db,
             redis=redis,
             user_id=user_id,
-            by_id=current_user.id_user,
+            initiating_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
@@ -589,12 +599,13 @@ async def initiate_delete_user(
 
     return BaseResponse.ok(
         data={
-            "delete_token": result["delete_token"],
-            "expires_in_seconds": result["expires_in_seconds"],
-            "user_id": user_id,
+            "delete_token": result.token,
+            "expires_in_seconds": result.expires_in,
+            "user_id": result.user_id,
+            "username": result.username,
             "message": (
-                f"Token wygaśnie za {result['expires_in_seconds']} sekund. "
-                "Użyj go w DELETE /users/{user_id}/confirm."
+                f"Token wygaśnie za {result.expires_in} sekund. "
+                f"Użyj go w DELETE /users/{user_id}/confirm."
             ),
         },
         app_code="users.delete_initiated",
@@ -658,13 +669,13 @@ async def confirm_delete_user(
         )
 
     try:
-        result = await user_service.delete_confirm(
+        result = await user_service.confirm_delete(
             db=db,
             redis=redis,
             user_id=user_id,
-            delete_token=delete_token,
-            by_id=current_user.id_user,
-            ip=client_ip,
+            confirm_token=delete_token,
+            initiating_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_user_error(exc)
