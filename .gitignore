@@ -31,10 +31,13 @@ worker/.env
 # â”€â”€ Logi aplikacji - zawartosc ignorowana, katalog sledzony â”€
 logs/*.log
 logs/*.jsonl
+logs/*.json
 backend/logs/*.log
 backend/logs/*.jsonl
+backend/logs/*.json
 worker/logs/*.log
 worker/logs/*.jsonl
+worker/logs/*.json
 # Zachowaj katalogi w repo
 !logs/.gitkeep
 !backend/logs/.gitkeep

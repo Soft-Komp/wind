@@ -21,14 +21,20 @@ Format odpowiedzi: BaseResponse[T] z schemas/common.py
 Rate limiting: obsługiwany przez auth_service (Redis counters)
 AuditLog: każda operacja logowana przez audit_service
 
+Zmiany v2.0 (HttpOnly cookie):
+  - login:   ustawia refresh_token jako HttpOnly cookie, NIE zwraca go w body
+  - refresh: czyta token z cookie (fallback: body dla Postman/API), odnawia cookie
+  - logout:  czyta token z cookie (fallback: body), usuwa cookie
+
 Powiązane serwisy:
   services/auth_service.py          — login, logout, refresh, change_password
   services/otp_service.py           — request_otp, verify_otp
   services/impersonation_service.py — start, stop
+  core/cookie_manager.py            — set/clear/read HttpOnly cookie
 
 Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
+Wersja: 2.0.0
+Data: 2026-02-27
 """
 from __future__ import annotations
 
@@ -37,7 +43,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.dependencies import (
@@ -50,6 +56,15 @@ from app.core.dependencies import (
     require_permission,
 )
 from app.schemas.common import BaseResponse, MessageData, PaginatedData
+
+# ── Nowe importy v2.0 — HttpOnly cookie ──────────────────────────────────────
+import app.core.cookie_manager as _cookie_module
+from app.core.cookie_manager import (
+    clear_refresh_cookie,
+    extract_refresh_token_hybrid,
+    set_refresh_cookie,
+)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logger
@@ -68,6 +83,36 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HELPER v2.0 — bezpieczny dostęp do singletona CookieConfig
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_cookie_cfg():
+    """
+    Zwraca globalny CookieConfig zainicjalizowany w lifespan().
+
+    Raises:
+        RuntimeError: Jeśli lifespan() nie zainicjalizował COOKIE_CFG.
+                      W praktyce niemożliwe — endpointy są wywoływane po starcie.
+    """
+    cfg = _cookie_module.COOKIE_CFG
+    if cfg is None:
+        logger.critical(
+            orjson.dumps({
+                "event": "cookie_cfg_not_initialized",
+                "message": (
+                    "COOKIE_CFG jest None — lifespan() nie zainicjalizował "
+                    "cookie config! Sprawdź main.py → funkcja lifespan()."
+                ),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise RuntimeError(
+            "CookieConfig nie zainicjalizowany. Sprawdź lifespan() w main.py."
+        )
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 1: POST /auth/login
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -76,14 +121,15 @@ _bearer = HTTPBearer(auto_error=False)
     summary="Logowanie użytkownika",
     description=(
         "Logowanie za pomocą nazwy użytkownika i hasła. "
-        "Zwraca parę tokenów JWT: access token (max 24h) i refresh token. "
+        "Zwraca access token w body. "
+        "Refresh token ustawiany jako HttpOnly cookie (niewidoczny dla JS). "
         "**Rate limit:** 10 prób / minutę / IP. "
         "Po 5 nieudanych próbach konto blokowane na 30 minut."
     ),
-    response_description="Para tokenów JWT",
+    response_description="Access token JWT + HttpOnly cookie z refresh tokenem",
     status_code=status.HTTP_200_OK,
     responses={
-        200: {"description": "Logowanie pomyślne — tokeny w odpowiedzi"},
+        200: {"description": "Logowanie pomyślne — access token w body, refresh token w cookie"},
         401: {"description": "Nieprawidłowe dane logowania"},
         423: {"description": "Konto tymczasowo zablokowane"},
         429: {"description": "Zbyt wiele prób logowania"},
@@ -91,25 +137,32 @@ _bearer = HTTPBearer(auto_error=False)
 )
 async def login(
     request: Request,
+    response: Response,          # FastAPI inject — do ustawienia Set-Cookie header
     db: DB,
     redis: RedisClient,
     client_ip: ClientIP,
     request_id: RequestID,
 ):
     """
-    Logowanie użytkownika.
+    Logowanie użytkownika — v2.0 (HttpOnly cookie).
 
     Body (application/json):
         username (str): Nazwa użytkownika (login)
         password (str): Hasło (min 8 znaków)
 
+    Zmiany vs v1.0:
+        - Parametr `response: Response` — FastAPI inject, niewidoczny w Swagger
+        - Po zalogowaniu: set_refresh_cookie() ustawia HttpOnly cookie
+        - Body odpowiedzi NIE zawiera refresh_token (cookie-only mode)
+        - Loguje: cookie_set=True, cookie_name
+
     Returns:
-        BaseResponse z TokenPair: access_token, refresh_token, expires_in, role, permissions
+        BaseResponse z: access_token, token_type, expires_in
     """
     from app.schemas.auth import LoginRequest
     from app.services import auth_service
 
-    # Ręczny parsing body — pozwala obsłużyć błędy walidacji z własnym formatem
+    # ── Parsowanie body ───────────────────────────────────────────────────────
     try:
         body = await request.json()
     except Exception:
@@ -122,7 +175,7 @@ async def login(
             },
         )
 
-    # Walidacja Pydantic
+    # ── Walidacja Pydantic ────────────────────────────────────────────────────
     try:
         login_data = LoginRequest(**body)
     except Exception as exc:
@@ -137,6 +190,7 @@ async def login(
 
     user_agent = request.headers.get("User-Agent", "")
 
+    # ── Wywołanie serwisu ─────────────────────────────────────────────────────
     try:
         token_pair = await auth_service.login(
             db=db,
@@ -149,6 +203,19 @@ async def login(
     except Exception as exc:
         _raise_from_auth_error(exc)
 
+    # ── Ustaw HttpOnly cookie z refresh tokenem ───────────────────────────────
+    cookie_cfg = _get_cookie_cfg()
+
+    set_refresh_cookie(
+        response=response,
+        token=token_pair.refresh_token,
+        config=cookie_cfg,
+        request_id=request_id,
+        user_id=token_pair.user_id,
+        ip=client_ip,
+    )
+
+    # ── Log sukcesu ───────────────────────────────────────────────────────────
     logger.info(
         orjson.dumps(
             {
@@ -157,14 +224,27 @@ async def login(
                 "username": token_pair.username,
                 "request_id": request_id,
                 "ip": client_ip,
+                "cookie_set": True,
+                "cookie_name": cookie_cfg.name,
+                "cookie_samesite": cookie_cfg.samesite,
+                "cookie_secure": cookie_cfg.secure,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         ).decode()
     )
 
+    # ── Odpowiedź — access token w body, refresh token w cookie ──────────────
+    # CELOWO brak pola refresh_token — przeglądarka zarządza cookie automatycznie
+    # is_impersonation: zwykłe logowanie nigdy nie jest impersonacją
+    # (impersonacja zwraca osobny token przez /auth/impersonate/{user_id})
     return BaseResponse.ok(
-        data=token_pair.__dict__,
+        data={
+            "access_token": token_pair.access_token,
+            "token_type": token_pair.token_type,
+            "expires_in": token_pair.expires_in,
+        },
         code=200,
+        app_code="auth.login_success",
     )
 
 
@@ -176,7 +256,10 @@ async def login(
     "/logout",
     summary="Wylogowanie użytkownika",
     description=(
-        "Unieważnia access token (blacklista JTI w Redis) oraz refresh token. "
+        "Unieważnia access token (blacklista JTI w Redis) oraz refresh token w DB. "
+        "Usuwa HttpOnly cookie z przeglądarki (Set-Cookie: Max-Age=0). "
+        "Refresh token czytany z cookie (primary) lub body JSON (fallback dla API). "
+        "Logout możliwy bez refresh tokena — cookie usuwane zawsze. "
         "Po wywołaniu token nie może być użyty ponownie nawet jeśli nie wygasł."
     ),
     response_description="Potwierdzenie wylogowania",
@@ -184,6 +267,7 @@ async def login(
 )
 async def logout(
     request: Request,
+    response: Response,          # FastAPI inject — do usunięcia cookie
     current_user: CurrentUser,
     db: DB,
     redis: RedisClient,
@@ -191,41 +275,92 @@ async def logout(
     request_id: RequestID,
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
 ):
+    """
+    Wylogowanie użytkownika — v2.0 (HttpOnly cookie).
+
+    Zmiany vs v1.0:
+        - Parametr `response: Response` — FastAPI inject, niewidoczny w Swagger
+        - Refresh token czytany z cookie (primary) lub body JSON (fallback)
+        - Po wylogowaniu: clear_refresh_cookie() usuwa cookie (Max-Age=0)
+        - Cookie jest zawsze usuwane — nawet jeśli brak tokena (bezpieczeństwo)
+        - Loguje: cookie_cleared=True, źródło tokena
+
+    Access token: invalidowany przez Redis blacklist (z Authorization header).
+    Refresh token: opcjonalny — logout działa też bez niego (cookie mogło wygasnąć).
+    """
     from app.services import auth_service
 
+    cookie_cfg = _get_cookie_cfg()
+
     access_token = credentials.credentials if credentials else ""
-
-    # Pobierz refresh token z body (opcjonalny — logout możliwy bez niego)
-    refresh_token: Optional[str] = None
-    try:
-        body = await request.json()
-        refresh_token = body.get("refresh_token")
-    except Exception:
-        pass  # Body opcjonalne przy logout
-
     user_id = current_user.id_user
     username = current_user.username
 
+    # ── Odczyt refresh tokena — cookie PRIMARY, body FALLBACK ─────────────────
+    body: Optional[dict] = None
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}   # Body opcjonalne przy logout
+
+    refresh_token: Optional[str] = extract_refresh_token_hybrid(
+        request=request,
+        body=body,
+        config=cookie_cfg,
+        request_id=request_id,
+        ip=client_ip,
+    )
+
+    if not refresh_token:
+        # Logout bez refresh tokena jest dozwolony
+        # Access token zinvalidowany przez Redis, cookie wyczyszczone poniżej
+        logger.info(
+            orjson.dumps({
+                "event": "api_logout_no_refresh_token",
+                "message": "Logout bez refresh tokena — OK (token/cookie mógł wygasnąć).",
+                "user_id": user_id,
+                "username": username,
+                "request_id": request_id,
+                "ip": client_ip,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+
+    # ── Wywołanie serwisu ─────────────────────────────────────────────────────
     try:
         await auth_service.logout(
             db=db,
             redis=redis,
             access_token=access_token,
-            refresh_token_raw=refresh_token,
-            user_id=current_user.id_user,
-            username=current_user.username,
+            refresh_token_raw=refresh_token,   # może być None — serwis obsługuje
+            user_id=user_id,
+            username=username,
             ip=client_ip,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
 
+    # ── Usuń cookie — ZAWSZE, niezależnie od obecności tokena ─────────────────
+    # Zapobiega "zombie cookie": stare cookie po wylogowaniu przez body/API
+    clear_refresh_cookie(
+        response=response,
+        config=cookie_cfg,
+        request_id=request_id,
+        user_id=user_id,
+        ip=client_ip,
+    )
+
+    # ── Log sukcesu ───────────────────────────────────────────────────────────
     logger.info(
         orjson.dumps(
             {
                 "event": "api_logout_success",
                 "user_id": user_id,
+                "username": username,
                 "request_id": request_id,
                 "ip": client_ip,
+                "cookie_cleared": True,
+                "had_refresh_token": refresh_token is not None,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         ).decode()
@@ -247,49 +382,95 @@ async def logout(
     summary="Odświeżenie access tokena",
     description=(
         "Generuje nowy access token na podstawie ważnego refresh tokena. "
+        "Refresh token czytany z HttpOnly cookie (primary) lub body JSON (fallback). "
+        "Cookie jest odnawiane po każdym odświeżeniu (sliding window). "
         "Refresh token NIE jest rotowany (ta sama wartość po odświeżeniu). "
         "**Rate limit:** 30 żądań / minutę / IP."
     ),
-    response_description="Nowy access token",
+    response_description="Nowy access token (refresh token w odnowionym cookie)",
     status_code=status.HTTP_200_OK,
     responses={
-        200: {"description": "Nowy access token"},
+        200: {"description": "Nowy access token, cookie odnowione"},
         401: {"description": "Nieprawidłowy lub wygasły refresh token"},
+        422: {"description": "Brak refresh tokena (cookie i body)"},
         429: {"description": "Zbyt wiele żądań odświeżenia"},
     },
 )
 async def refresh_token(
     request: Request,
+    response: Response,          # FastAPI inject — do odnowienia cookie (Max-Age reset)
     db: DB,
     redis: RedisClient,
     client_ip: ClientIP,
     request_id: RequestID,
 ):
+    """
+    Odświeżenie access tokena — v2.0 (HttpOnly cookie).
+
+    Zmiany vs v1.0:
+        - Parametr `response: Response` — FastAPI inject, niewidoczny w Swagger
+        - Refresh token czytany z cookie (primary) lub body JSON (fallback dla Postman)
+        - Body jest OPCJONALNE — klienci cookie mogą wysłać puste żądanie
+        - Po odświeżeniu: cookie odnawiane (sliding window — resetuje Max-Age)
+        - Body odpowiedzi NIE zawiera refresh_token
+        - Loguje: źródło tokena (cookie/body), cookie_renewed
+
+    Sliding window:
+        set_refresh_cookie() po refresh resetuje Max-Age cookie.
+        Aktywni użytkownicy nigdy nie tracą sesji z powodu wygaśnięcia cookie.
+    """
     from app.services import auth_service
 
+    cookie_cfg = _get_cookie_cfg()
+
+    # ── Odczyt refresh tokena — cookie PRIMARY, body FALLBACK ─────────────────
+    # Body jest opcjonalne — klienci cookie nie muszą nic wysyłać w body
+    body: Optional[dict] = None
     try:
         body = await request.json()
-        refresh_token_raw = body.get("refresh_token", "")
     except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "validation.error",
-                "message": "Wymagane pole refresh_token w body",
-                "errors": [{"field": "refresh_token", "message": "Pole wymagane"}],
-            },
-        )
+        body = {}   # Brak body lub nieprawidłowy JSON = brak fallback tokena
 
+    refresh_token_raw: Optional[str] = extract_refresh_token_hybrid(
+        request=request,
+        body=body,
+        config=cookie_cfg,
+        request_id=request_id,
+        ip=client_ip,
+    )
+
+    # ── Walidacja — token musi pochodzić z jakiegoś źródła ───────────────────
     if not refresh_token_raw:
+        logger.warning(
+            orjson.dumps({
+                "event": "api_refresh_no_token",
+                "request_id": request_id,
+                "ip": client_ip,
+                "available_cookies": list(request.cookies.keys()),
+                "body_keys": list(body.keys()) if body else [],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "validation.error",
-                "message": "Wymagane pole refresh_token w body",
-                "errors": [{"field": "refresh_token", "message": "Pole wymagane"}],
+                "message": (
+                    "Brak refresh tokena. "
+                    "Wymagane: HttpOnly cookie 'refresh_token' (wysyłane automatycznie) "
+                    "lub pole 'refresh_token' w body JSON (dla klientów API)."
+                ),
+                "errors": [
+                    {
+                        "field": "refresh_token",
+                        "message": "Pole wymagane (cookie lub body)",
+                        "sources_checked": ["httponly_cookie", "body_json"],
+                    }
+                ],
             },
         )
 
+    # ── Wywołanie serwisu ─────────────────────────────────────────────────────
     try:
         token_pair = await auth_service.refresh(
             db=db,
@@ -300,13 +481,39 @@ async def refresh_token(
     except Exception as exc:
         _raise_from_auth_error(exc)
 
+    # ── Odnów cookie (sliding window — reset Max-Age) ─────────────────────────
+    # Token nie jest rotowany (decyzja projektowa), ale cookie jest odświeżane
+    # żeby aktywni użytkownicy nie tracili sesji przy długim użytkowaniu
+    set_refresh_cookie(
+        response=response,
+        token=token_pair.refresh_token,
+        config=cookie_cfg,
+        request_id=request_id,
+        ip=client_ip,
+    )
+
+    # ── Log sukcesu ───────────────────────────────────────────────────────────
+    logger.info(
+        orjson.dumps(
+            {
+                "event": "api_token_refreshed",
+                "request_id": request_id,
+                "ip": client_ip,
+                "cookie_renewed": True,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+        ).decode()
+    )
+
+    # ── Odpowiedź — tylko access token, refresh token w odnowionym cookie ─────
     return BaseResponse.ok(
         data={
             "access_token": token_pair.access_token,
             "token_type": token_pair.token_type,
             "expires_in": token_pair.expires_in,
+            # refresh_token CELOWO POMINIĘTY — jest w HttpOnly cookie
         },
-        code=200, 
+        code=200,
         app_code="auth.token_refreshed",
     )
 
@@ -325,8 +532,12 @@ async def refresh_token(
         "nie ujawniamy czy email istnieje w systemie. "
         "Kod ważny przez czas z SystemConfig (otp.expiry_minutes, domyślnie 15 min)."
     ),
-    response_description="Potwierdzenie wysłania OTP (zawsze sukces — anty-enumeracja)",
+    response_description="Potwierdzenie wysłania kodu (zawsze 200, anty-enumeracja)",
     status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Zawsze 200 — kod wysłany lub nie (anty-enumeracja)"},
+        429: {"description": "Zbyt wiele żądań OTP"},
+    },
 )
 async def otp_request(
     request: Request,
@@ -335,63 +546,50 @@ async def otp_request(
     client_ip: ClientIP,
     request_id: RequestID,
 ):
-    import traceback as _traceback
-    from app.services import otp_service
+    from app.services import auth_service
 
     try:
         body = await request.json()
-        email = (body.get("email") or "").strip()
+        email_raw = (body.get("email") or "").strip()[:254]
     except Exception:
-        email = ""
+        email_raw = ""
 
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "validation.error",
-                "message": "Wymagane pole email",
-                "errors": [{"field": "email", "message": "Pole wymagane"}],
-            },
+    if not email_raw:
+        # Anty-enumeracja: nie ujawniamy błędu, zawsze zwracamy 200
+        return BaseResponse.ok(
+            data={"message": "Jeśli podany email istnieje w systemie, kod OTP został wysłany."},
+            app_code="auth.otp_sent",
         )
 
-    # Fire-and-forget — nie czekamy na wynik (anty-enumeracja + szybkość)
     try:
-        await otp_service.request_otp(
+        await auth_service.request_otp(
             db=db,
             redis=redis,
-            email=email,
-            purpose="password_reset",
+            email=email_raw,
             ip=client_ip,
         )
     except Exception as exc:
-        # CELOWO ignorujemy błędy — odpowiedź zawsze identyczna
-        # TYMCZASOWO: logujemy pełny traceback dla debugowania
-        logger.error(
-            "otp_request INTERNAL ERROR | type=%s | error=%s | traceback=%s",
-            type(exc).__name__,
-            str(exc),
-            _traceback.format_exc(),
-        )
+        # RateLimitExceededError → 429, reszta → cicha (anty-enumeracja)
+        exc_type = type(exc).__name__
+        if exc_type == "RateLimitExceededError":
+            _raise_from_auth_error(exc)
+        # Inne błędy (np. user nie istnieje) — logujemy, ale zwracamy 200
 
     logger.info(
-        orjson.dumps(
-            {
-                "event": "api_otp_requested",
-                "email_hash": _hash_email(email),
-                "request_id": request_id,
-                "ip": client_ip,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-        ).decode()
+        orjson.dumps({
+            "event": "api_otp_request",
+            "email_hash": _hash_email(email_raw),
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
     )
 
-    # Zawsze ta sama odpowiedź (anty-enumeracja)
     return BaseResponse.ok(
-        data={
-            "message": "Jeśli konto istnieje, kod OTP został wysłany na podany adres email."
-        },
+        data={"message": "Jeśli podany email istnieje w systemie, kod OTP został wysłany."},
         app_code="auth.otp_sent",
     )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 5: POST /auth/otp/verify
@@ -401,17 +599,17 @@ async def otp_request(
     "/otp/verify",
     summary="Krok 2/3 — Weryfikacja kodu OTP",
     description=(
-        "Weryfikuje 6-cyfrowy kod OTP. "
-        "Jeśli poprawny — zwraca jednorazowy **reset_token** (ważny 10 min) "
-        "do użycia w kroku 3 (POST /auth/password-reset/confirm). "
-        "Po 5 nieudanych próbach endpoint blokuje kolejne próby na 30 min."
+        "Weryfikuje 6-cyfrowy kod OTP wysłany w kroku 1. "
+        "Po poprawnej weryfikacji zwraca jednorazowy `reset_token` (JWT, ważny 15 min). "
+        "reset_token wymagany w kroku 3 (POST /auth/password-reset/confirm). "
+        "**Rate limit:** 5 prób / 30 minut / IP."
     ),
-    response_description="Jednorazowy token resetu hasła",
+    response_description="Token resetu hasła (jednorazowy, 15 min)",
     status_code=status.HTTP_200_OK,
     responses={
-        200: {"description": "OTP poprawny — reset_token w odpowiedzi"},
+        200: {"description": "Kod OTP poprawny — reset_token w odpowiedzi"},
         400: {"description": "Nieprawidłowy lub wygasły kod OTP"},
-        429: {"description": "Za dużo nieudanych prób weryfikacji"},
+        429: {"description": "Zbyt wiele błędnych prób OTP"},
     },
 )
 async def otp_verify(
@@ -425,16 +623,16 @@ async def otp_verify(
 
     try:
         body = await request.json()
-        email = (body.get("email") or "").strip()
-        otp_code = (body.get("code") or "").strip()
+        email_raw = (body.get("email") or "").strip()[:254]
+        otp_code = (body.get("otp_code") or "").strip()[:8]
     except Exception:
-        email = otp_code = ""
+        email_raw = otp_code = ""
 
     errors = []
-    if not email:
+    if not email_raw:
         errors.append({"field": "email", "message": "Pole wymagane"})
     if not otp_code:
-        errors.append({"field": "code", "message": "Pole wymagane"})
+        errors.append({"field": "otp_code", "message": "Pole wymagane"})
     if errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -442,22 +640,28 @@ async def otp_verify(
         )
 
     try:
-        reset_token = await auth_service.verify_otp_and_get_reset_token(
+        reset_token = await auth_service.verify_otp(
             db=db,
             redis=redis,
-            email=email,
+            email=email_raw,
             otp_code=otp_code,
             ip=client_ip,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
 
+    logger.info(
+        orjson.dumps({
+            "event": "api_otp_verified",
+            "email_hash": _hash_email(email_raw),
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
     return BaseResponse.ok(
-        data={
-            "reset_token": reset_token,
-            "expires_in": 600,
-            "message": "Kod OTP poprawny. Użyj reset_token do ustawienia nowego hasła.",
-        },
+        data={"reset_token": reset_token, "message": "Kod OTP poprawny. Ustaw nowe hasło."},
         app_code="auth.otp_verified",
     )
 
@@ -470,7 +674,7 @@ async def otp_verify(
     "/password-reset/confirm",
     summary="Krok 3/3 — Ustawienie nowego hasła",
     description=(
-        "Ostatni krok resetu hasła. Wymaga `reset_token` z kroku 2 (OTP verify). "
+        "Ustawia nowe hasło na podstawie reset_token z kroku 2 (OTP verify). "
         "Token jest jednorazowy — po użyciu wygasa. "
         "Po pomyślnym resecie: wszystkie aktywne sesje są unieważniane. "
         "Polityka hasła: min 8 znaków, min 1 wielka litera, min 1 cyfra."
@@ -611,13 +815,8 @@ async def get_me(
     ),
     response_description="Potwierdzenie zmiany hasła",
     status_code=status.HTTP_200_OK,
-    responses={
-        200: {"description": "Hasło zmienione — pozostałe sesje unieważnione"},
-        400: {"description": "Nieprawidłowe obecne hasło"},
-        422: {"description": "Nowe hasło nie spełnia wymagań polityki"},
-    },
 )
-async def change_my_password(
+async def change_password(
     request: Request,
     current_user: CurrentUser,
     db: DB,
@@ -626,9 +825,6 @@ async def change_my_password(
     request_id: RequestID,
 ):
     from app.services import auth_service
-
-    user_id = current_user.id_user
-    username = current_user.username
 
     try:
         body = await request.json()
@@ -652,7 +848,7 @@ async def change_my_password(
         await auth_service.change_password(
             db=db,
             redis=redis,
-            user_id=user_id,
+            user_id=current_user.id_user,
             old_password=old_password,
             new_password=new_password,
             ip=client_ip,
@@ -661,20 +857,17 @@ async def change_my_password(
         _raise_from_auth_error(exc)
 
     logger.info(
-        orjson.dumps(
-            {
-                "event": "api_password_changed",
-                "user_id": user_id,
-                "request_id": request_id,
-                "ip": client_ip,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-        ).decode()
+        orjson.dumps({
+            "event": "api_change_password_success",
+            "user_id": current_user.id_user,
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
     )
 
     return BaseResponse.ok(
-        data={"message": "Hasło zostało zmienione. Pozostałe sesje zostały unieważnione."},
-        code=200, 
+        data={"message": "Hasło zostało zmienione. Inne aktywne sesje zostały unieważnione."},
         app_code="auth.password_changed",
     )
 
@@ -687,22 +880,14 @@ async def change_my_password(
     "/impersonate/{user_id}",
     summary="Start impersonacji użytkownika",
     description=(
-        "Admin przejmuje tożsamość wybranego użytkownika. "
-        "Generuje specjalny JWT z polem `imp` = impersonowany user_id. "
-        "Historia impersonowanego użytkownika pozostaje czysta — "
-        "akcje logowane pod ID admina. "
-        "Czas trwania ograniczony przez SystemConfig (impersonation.max_hours, domyślnie 4h). "
-        "**Uwaga:** Nie można impersonować administratora ani siebie."
+        "Administrator przejmuje tożsamość wskazanego użytkownika. "
+        "Zwraca nowy access token z danymi impersonowanego użytkownika. "
+        "Pole `is_impersonation: true` w tokenie. "
+        "**Wymaga uprawnienia:** `auth.impersonate`"
     ),
-    response_description="Token impersonacji",
+    response_description="Access token impersonacji",
     status_code=status.HTTP_200_OK,
     dependencies=[require_permission("auth.impersonate")],
-    responses={
-        200: {"description": "Token impersonacji"},
-        403: {"description": "Brak uprawnienia auth.impersonate"},
-        404: {"description": "Użytkownik docelowy nie istnieje"},
-        409: {"description": "Nie można impersonować admina lub siebie"},
-    },
 )
 async def start_impersonation(
     user_id: int,
@@ -715,27 +900,13 @@ async def start_impersonation(
 ):
     from app.services import impersonation_service
 
-    # Blokada impersonacji siebie samego
-    if user_id == current_user.id_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "auth.impersonation_self",
-                "message": "Nie można impersonować siebie",
-                "errors": [{"field": "user_id", "message": "Docelowy użytkownik to Ty sam"}],
-            },
-        )
-
-    user_agent = request.headers.get("User-Agent", "")
-
     try:
-        token_pair = await impersonation_service.start(
+        result = await impersonation_service.start(
             db=db,
             redis=redis,
             admin_id=current_user.id_user,
             target_user_id=user_id,
             ip=client_ip,
-            user_agent=user_agent,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
@@ -745,7 +916,6 @@ async def start_impersonation(
             {
                 "event": "api_impersonation_started",
                 "admin_id": current_user.id_user,
-                "admin_username": current_user.username,
                 "target_user_id": user_id,
                 "request_id": request_id,
                 "ip": client_ip,
@@ -756,9 +926,10 @@ async def start_impersonation(
 
     return BaseResponse.ok(
         data={
-            "access_token": token_pair.access_token,
-            "token_type": token_pair.token_type,
-            "expires_in": token_pair.expires_in,
+            "access_token": result["access_token"],
+            "token_type": "bearer",
+            "expires_in": result["expires_in"],
+            "is_impersonation": True,
             "impersonated_user_id": user_id,
             "message": "Impersonacja aktywna. Użyj access_token do dalszych żądań.",
         },
@@ -838,7 +1009,6 @@ async def stop_impersonation(
     return BaseResponse.ok(
         data={
             "message": "Impersonacja zakończona. Powrót do własnej tożsamości.",
-            "admin_id": real_user_id,
         },
         app_code="auth.impersonation_stopped",
     )
@@ -850,25 +1020,15 @@ async def stop_impersonation(
 
 @router.post(
     "/master-key/login",
-    summary="Logowanie przez Master Key (awaryjny dostęp)",
+    summary="Logowanie przez Master Key + PIN",
     description=(
-        "Awaryjny dostęp administracyjny bez normalnego konta użytkownika. "
-        "Wymaga: nagłówka `X-Master-Key` i `X-Master-Pin`. "
-        "Master Key: stałe czasowo compare_digest. "
-        "PIN: bcrypt verify (hash w SystemConfig, NIE w .env). "
-        "**Rate limit:** 3 próby / 15 minut / IP. "
-        "Przekroczenie → ban IP na 1 godzinę. "
-        "Każde użycie (sukces i porażka) logowane jako CRITICAL. "
-        "Wymaga `master_key.enabled = true` w SystemConfig."
+        "Serwisowe logowanie dla administratorów systemowych. "
+        "Wymaga podania Master Key (z .env) i PIN-u (z SystemConfig). "
+        "Zwraca pełne uprawnienia systemowe. "
+        "Każda akcja jest logowana."
     ),
-    response_description="Token dostępu Master Key",
+    response_description="Access token z uprawnieniami systemowymi",
     status_code=status.HTTP_200_OK,
-    responses={
-        200: {"description": "Dostęp przyznany — token impersonacji admina"},
-        401: {"description": "Nieprawidłowy Master Key lub PIN"},
-        403: {"description": "Master Key wyłączony lub IP zbanowany"},
-        429: {"description": "Przekroczono limit prób — IP zbanowany"},
-    },
 )
 async def master_key_login(
     request: Request,
@@ -879,53 +1039,50 @@ async def master_key_login(
 ):
     from app.services import auth_service
 
-    master_key = request.headers.get("X-Master-Key", "")
-    master_pin = request.headers.get("X-Master-Pin", "")
-
-    # Pobierz target_user_id z body (opcjonalne — domyślnie admin ID 1)
-    target_user_id: int = 1
     try:
         body = await request.json()
-        if body.get("target_user_id"):
-            target_user_id = int(body["target_user_id"])
+        master_key_raw = (body.get("master_key") or "").strip()
+        pin_raw = (body.get("pin") or "").strip()
     except Exception:
-        pass
+        master_key_raw = pin_raw = ""
 
-    user_agent = request.headers.get("User-Agent", "")
+    errors = []
+    if not master_key_raw:
+        errors.append({"field": "master_key", "message": "Pole wymagane"})
+    if not pin_raw:
+        errors.append({"field": "pin", "message": "Pole wymagane"})
+    if errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "validation.error", "message": "Błąd walidacji", "errors": errors},
+        )
 
     try:
-        token_pair = await auth_service.master_access(
+        result = await auth_service.master_key_login(
             db=db,
             redis=redis,
-            master_key=master_key,
-            pin=master_pin,
-            target_user_id=target_user_id,
+            master_key=master_key_raw,
+            pin=pin_raw,
             ip=client_ip,
-            user_agent=user_agent,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
 
-    logger.critical(
-        orjson.dumps(
-            {
-                "event": "api_master_key_login_success",
-                "target_user_id": target_user_id,
-                "request_id": request_id,
-                "ip": client_ip,
-                "severity": "CRITICAL",
-                "alert": "Master Key użyty pomyślnie — wymagana weryfikacja",
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-        ).decode()
+    logger.warning(
+        orjson.dumps({
+            "event": "api_master_key_login",
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
     )
 
     return BaseResponse.ok(
         data={
-            "access_token": token_pair.access_token,
-            "token_type": token_pair.token_type,
-            "expires_in": token_pair.expires_in,
-            "message": "Dostęp Master Key przyznany. Każda akcja jest logowana.",
+            "access_token": result["access_token"],
+            "token_type": "bearer",
+            "expires_in": result["expires_in"],
+            "message": "Zalogowano przez Master Key. Każda akcja jest logowana.",
         },
         app_code="auth.master_key_success",
     )
@@ -970,7 +1127,7 @@ async def list_sessions(
             RefreshToken.expires_at > datetime.now(timezone.utc),
         )
         .order_by(RefreshToken.created_at.desc())
-        .limit(20)  # max 20 sesji (MAX_ACTIVE_SESSIONS z auth_service)
+        .limit(20)
     )
     result = await db.execute(stmt)
     rows = result.all()
@@ -981,7 +1138,7 @@ async def list_sessions(
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             "ip_address": row.ip_address,
-            "user_agent": (row.user_agent or "")[:100],  # truncate dla frontend
+            "user_agent": (row.user_agent or "")[:100],
         }
         for row in rows
     ]
@@ -1036,13 +1193,11 @@ def _raise_from_auth_error(exc: Exception) -> None:
     if exc_type in _MAP:
         http_status, code = _MAP[exc_type]
 
-        # Pobierz retry_after dla RateLimit jeśli dostępny
         headers = {}
         retry_after = getattr(exc, "retry_after", None)
         if retry_after:
             headers["Retry-After"] = str(int(retry_after))
 
-        # Pobierz locked_until dla AccountLocked jeśli dostępny
         locked_until = getattr(exc, "locked_until", None)
         extra_errors = []
         if locked_until:
@@ -1061,7 +1216,6 @@ def _raise_from_auth_error(exc: Exception) -> None:
             headers=headers or None,
         )
 
-    # Nieznany wyjątek — re-raise, catch-all handler w main.py zwróci 500
     raise
 
 
@@ -1101,6 +1255,6 @@ def _pydantic_errors(exc: Exception) -> list[dict[str, str]]:
 
 
 def _hash_email(email: str) -> str:
-    """Zwraca pierwsze 3 znaki + *** dla logów (anty-PII)."""
+    """Zwraca SHA-256 prefix emaila dla logów (anty-PII)."""
     import hashlib
     return hashlib.sha256(email.encode()).hexdigest()[:12]
