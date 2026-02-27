@@ -537,7 +537,7 @@ async def get_audit_log(
                 },
             )
 
-    result = await audit_service.get_logs(
+    rows, total = await audit_service.get_logs(
         db=db,
         user_id=user_id,
         action=action,
@@ -552,11 +552,11 @@ async def get_audit_log(
 
     return BaseResponse.ok(
         data={
-            "items": result["items"],
-            "total": result["total"],
+            "items": rows,              # ← element [0] tuple
+            "total": total,             # ← element [1] tuple
             "page": pagination.page,
             "per_page": pagination.per_page,
-            "pages": _pages(result["total"], pagination.per_page),
+            "pages": _pages(total, pagination.per_page),
         },
         app_code="system.audit_log",
     )

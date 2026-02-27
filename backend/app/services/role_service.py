@@ -945,7 +945,7 @@ async def initiate_delete(
 
     delete_token = jwt.encode(
         token_payload,
-        settings.secret_key,
+        settings.secret_key.get_secret_value() if hasattr(settings.secret_key, "get_secret_value") else str(settings.secret_key),
         algorithm=settings.algorithm,
     )
 
@@ -1055,7 +1055,7 @@ async def confirm_delete(
     try:
         payload = jwt.decode(
             confirm_token,
-            settings.secret_key,
+            settings.secret_key.get_secret_value() if hasattr(settings.secret_key, "get_secret_value") else str(settings.secret_key),
             algorithms=[settings.algorithm],
         )
     except JWTError as exc:
