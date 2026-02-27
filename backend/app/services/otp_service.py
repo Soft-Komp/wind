@@ -1036,3 +1036,42 @@ async def check_lockout_status(
             "max_attempts": _MAX_FAILED_ATTEMPTS,
             "redis_error": str(exc),
         }
+    
+async def request_otp(
+    db: AsyncSession,
+    redis: Redis,
+    email: str,
+    purpose: str,
+    ip: Optional[str] = None,
+) -> None:
+    """
+    Wrapper dla endpointu — szuka usera po emailu i generuje OTP.
+    Nie rzuca wyjątku gdy email nie istnieje (anty-enumeracja).
+    """
+    from sqlalchemy import select
+    from app.db.models.user import User
+
+    email_clean = email.lower().strip()[:100]
+
+    result = await db.execute(
+        select(User).where(
+            User.email == email_clean,
+            User.is_active == True,
+        )
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        logger.debug(
+            "request_otp: email nie istnieje lub nieaktywny — bez akcji (anty-enumeracja)",
+            extra={"email_hash": hashlib.sha256(email_clean.encode()).hexdigest()},
+        )
+        return  # Celowo nic nie robimy
+
+    await generate(
+        db=db,
+        redis=redis,
+        user_id=user.id_user,
+        purpose=purpose,
+        ip_address=ip,
+    )

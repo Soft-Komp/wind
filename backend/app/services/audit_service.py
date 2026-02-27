@@ -57,6 +57,7 @@ import orjson
 from sqlalchemy import text
 from app.db.session import async_session_factory
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.session import async_session_factory
 
 # ---------------------------------------------------------------------------
 # Logger modułu — osobny logger dla serwisu audytu
@@ -439,73 +440,66 @@ _INSERT_AUDIT_SQL = text("""
 async def _write_to_db(db: AsyncSession, entry: AuditEntry) -> None:
     """
     Zapisuje wpis audytu do dbo_ext.AuditLog.
-    Używa osobnej sesji z własnym commit/rollback — nie ingeruje w session callera.
-
-    WAŻNE: Ta funkcja jest wywoływana przez asyncio.create_task() —
-    błędy są przechwytywane i logowane, NIE propagowane.
+    WŁASNA sesja — niezależna od sesji callera.
+    Rollback tutaj NIE wpływa na główną transakcję.
     """
-    try:
-        await db.execute(
-            _INSERT_AUDIT_SQL,
-            {
-                "user_id":       entry.user_id,
-                "username":      (entry.username or "")[:50] if entry.username else None,
-                "action":        entry.action[:100],
-                "category":      (entry.category or "System")[:50],
-                "entity_type":   (entry.entity_type or "")[:50] if entry.entity_type else None,
-                "entity_id":     entry.entity_id,
-                "old_value":     _serialize_value(entry.old_value),
-                "new_value":     _serialize_value(entry.new_value),
-                "details":       _serialize_value(entry.details),
-                "ip_address":    (entry.ip_address or "")[:45] if entry.ip_address else None,
-                "user_agent":    (entry.user_agent or "")[:500] if entry.user_agent else None,
-                "request_url":   (entry.request_url or "")[:500] if entry.request_url else None,
-                "request_method": (entry.request_method or "")[:10] if entry.request_method else None,
-                "request_id":    (entry.request_id or "")[:36] if entry.request_id else None,
-                "timestamp":     entry.timestamp,
-                "success":       1 if entry.success else 0,
-                "error_message": (entry.error_message or "")[:500] if entry.error_message else None,
-            },
-        )
-        await db.commit()
-
-        logger.debug(
-            "AuditLog zapisany do DB: action=%s, user=%s, entity=%s/%s, success=%s",
-            entry.action,
-            entry.username or entry.user_id,
-            entry.entity_type,
-            entry.entity_id,
-            entry.success,
-            extra={
-                "audit_action": entry.action,
-                "audit_user_id": entry.user_id,
-                "audit_entity_type": entry.entity_type,
-                "audit_entity_id": entry.entity_id,
-                "audit_request_id": entry.request_id,
-            },
-        )
-
-    except Exception as exc:
-        # Rollback i logowanie błędu — ale NIE propagujemy
+    async with async_session_factory() as session:
         try:
-            await db.rollback()
-        except Exception:
-            pass
-
-        logger.error(
-            "BŁĄD zapisu AuditLog do DB (action=%s, user=%s): %s",
-            entry.action,
-            entry.user_id,
-            exc,
-            extra={
-                "audit_action": entry.action,
-                "audit_user_id": entry.user_id,
-                "audit_request_id": entry.request_id,
-                "traceback": traceback.format_exc(),
-            },
-        )
-        # FALLBACK: przynajmniej mamy plik JSONL — nie zgubimy danych
-
+            await session.execute(
+                _INSERT_AUDIT_SQL,
+                {
+                    "user_id":        entry.user_id,
+                    "username":       (entry.username or "")[:50] if entry.username else None,
+                    "action":         entry.action[:100],
+                    "category":       (entry.category or "System")[:50],
+                    "entity_type":    (entry.entity_type or "")[:50] if entry.entity_type else None,
+                    "entity_id":      entry.entity_id,
+                    "old_value":      _serialize_value(entry.old_value),
+                    "new_value":      _serialize_value(entry.new_value),
+                    "details":        _serialize_value(entry.details),
+                    "ip_address":     (entry.ip_address or "")[:45] if entry.ip_address else None,
+                    "user_agent":     (entry.user_agent or "")[:500] if entry.user_agent else None,
+                    "request_url":    (entry.request_url or "")[:500] if entry.request_url else None,
+                    "request_method": (entry.request_method or "")[:10] if entry.request_method else None,
+                    "request_id":     (entry.request_id or "")[:36] if entry.request_id else None,
+                    "timestamp":      entry.timestamp.replace(tzinfo=None),  # MSSQL DATETIME bez strefy
+                    "success":        1 if entry.success else 0,
+                    "error_message":  (entry.error_message or "")[:500] if entry.error_message else None,
+                },
+            )
+            await session.commit()
+            logger.debug(
+                "AuditLog zapisany do DB: action=%s, user=%s, entity=%s/%s",
+                entry.action,
+                entry.username or entry.user_id,
+                entry.entity_type,
+                entry.entity_id,
+                extra={
+                    "audit_action":      entry.action,
+                    "audit_user_id":     entry.user_id,
+                    "audit_entity_type": entry.entity_type,
+                    "audit_entity_id":   entry.entity_id,
+                    "audit_request_id":  entry.request_id,
+                },
+            )
+        except Exception as exc:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "BŁĄD zapisu AuditLog do DB (action=%s, user=%s): %s",
+                entry.action,
+                entry.user_id,
+                exc,
+                extra={
+                    "audit_action":     entry.action,
+                    "audit_user_id":    entry.user_id,
+                    "audit_request_id": entry.request_id,
+                    "traceback":        traceback.format_exc(),
+                },
+            )
+            # FALLBACK: dane są już w pliku JSONL — nie zgubimy niczego
 
 # ---------------------------------------------------------------------------
 # Główna funkcja zapisu — FIRE AND FORGET

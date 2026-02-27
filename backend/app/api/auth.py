@@ -335,6 +335,7 @@ async def otp_request(
     client_ip: ClientIP,
     request_id: RequestID,
 ):
+    import traceback as _traceback
     from app.services import otp_service
 
     try:
@@ -362,9 +363,15 @@ async def otp_request(
             purpose="password_reset",
             ip=client_ip,
         )
-    except Exception:
+    except Exception as exc:
         # CELOWO ignorujemy błędy — odpowiedź zawsze identyczna
-        pass
+        # TYMCZASOWO: logujemy pełny traceback dla debugowania
+        logger.error(
+            "otp_request INTERNAL ERROR | type=%s | error=%s | traceback=%s",
+            type(exc).__name__,
+            str(exc),
+            _traceback.format_exc(),
+        )
 
     logger.info(
         orjson.dumps(
@@ -385,7 +392,6 @@ async def otp_request(
         },
         app_code="auth.otp_sent",
     )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 5: POST /auth/otp/verify
@@ -415,7 +421,7 @@ async def otp_verify(
     client_ip: ClientIP,
     request_id: RequestID,
 ):
-    from app.services import otp_service
+    from app.services import auth_service
 
     try:
         body = await request.json()
@@ -436,7 +442,7 @@ async def otp_verify(
         )
 
     try:
-        reset_token = await otp_service.verify_otp_and_get_reset_token(
+        reset_token = await auth_service.verify_otp_and_get_reset_token(
             db=db,
             redis=redis,
             email=email,
