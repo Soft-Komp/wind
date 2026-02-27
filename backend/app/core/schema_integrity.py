@@ -611,11 +611,20 @@ async def _update_last_verified(
 
 async def _write_audit_log(
     db: AsyncSession,
-    result: VerificationResult,
+    result: "VerificationResult",  # type: ignore[name-defined]  # forward ref
 ) -> None:
     """
-    Wstawia wpis do dbo_ext.AuditLog.
-    Używa raw SQL by uniknąć zależności circular od modeli ORM w tym wczesnym etapie.
+    Wstawia wpis do dbo_ext.AuditLog przy wykryciu schema tamper.
+
+    Używa raw SQL (nie ORM) — ta funkcja może być wywoływana bardzo wcześnie
+    w cyklu życia aplikacji, zanim modele ORM zostaną w pełni zainicjalizowane.
+
+    Poprawione nazwy kolumn względem wersji v1.0:
+        UserID    → ID_USER      (zgodne z DDL)
+        CreatedAt → Timestamp    (zgodne z DDL)
+
+    MSSQL DATETIME nie obsługuje timezone-aware datetime →
+        .replace(tzinfo=None) przed zapisem.
     """
     try:
         mismatch_json = json.dumps(
@@ -623,39 +632,90 @@ async def _write_audit_log(
             ensure_ascii=False,
             default=str,
         )
+
+        # Timestamp bez strefy — MSSQL DATETIME nie obsługuje timezone-aware
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
         await db.execute(
             text(
                 """
-                INSERT INTO dbo_ext.AuditLog
-                    (UserID, Action, EntityType, EntityID,
-                     OldValue, NewValue, IPAddress, UserAgent,
-                     RequestID, Success, CreatedAt)
-                VALUES
-                    (NULL, 'schema_tamper_detected', 'SYSTEM', NULL,
-                     NULL, :new_value, '127.0.0.1', 'schema_integrity_checker',
-                     :request_id, 0, :created_at)
+                INSERT INTO dbo_ext.AuditLog (
+                    ID_USER,
+                    Username,
+                    Action,
+                    ActionCategory,
+                    EntityType,
+                    EntityID,
+                    OldValue,
+                    NewValue,
+                    Details,
+                    IPAddress,
+                    UserAgent,
+                    RequestURL,
+                    RequestMethod,
+                    RequestID,
+                    Timestamp,
+                    Success,
+                    ErrorMessage
+                ) VALUES (
+                    NULL,
+                    N'system',
+                    N'schema_tamper_detected',
+                    N'System',
+                    N'SYSTEM',
+                    NULL,
+                    NULL,
+                    :new_value,
+                    NULL,
+                    N'127.0.0.1',
+                    N'schema_integrity_checker',
+                    N'/system/schema-integrity',
+                    N'INTERNAL',
+                    :request_id,
+                    :timestamp,
+                    0,
+                    :error_message
+                )
                 """
             ),
             {
-                "new_value": mismatch_json,
-                "request_id": result.verification_id,
-                "created_at": datetime.now(timezone.utc),
+                "new_value":     mismatch_json,
+                "request_id":    result.verification_id[:36],
+                "timestamp":     now_naive,
+                "error_message": (
+                    f"{len(result.mismatches)} niezgodności schematu"
+                    f" | verification_id={result.verification_id}"
+                )[:500],
             },
         )
         await db.commit()
+
         logger.info(
-            "Wpis AuditLog 'schema_tamper_detected' zapisany",
-            extra={"verification_id": result.verification_id},
+            "Wpis AuditLog 'schema_tamper_detected' zapisany | "
+            "verification_id=%s | mismatches=%d",
+            result.verification_id,
+            len(result.mismatches),
         )
+
     except Exception as exc:
+        # Krytyczny błąd — logujemy maksymalnie dużo danych, ale NIE rzucamy
+        # (schema_integrity nie może crashować aplikacji przy rollback)
         logger.error(
-            "Nie udało się zapisać AuditLog dla schema tamper: %s",
+            "Nie udało się zapisać AuditLog dla schema_tamper_detected | "
+            "verification_id=%s | error=%s",
+            result.verification_id,
             exc,
             extra={
                 "verification_id": result.verification_id,
-                "traceback": traceback.format_exc(),
+                "traceback":       traceback.format_exc(),
+                "mismatches_count": len(result.mismatches),
             },
         )
+        # Próba rollback — może być zbędna, ale bezpieczna
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def _broadcast_sse_alert(result: VerificationResult) -> None:
