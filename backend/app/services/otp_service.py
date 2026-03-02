@@ -438,6 +438,8 @@ async def generate(
         ip_address=ip_address,
     )
 
+    await db.commit()
+
     # --- 8. Zapis do pliku audytu OTP ---
     _append_to_file(
         _get_otp_audit_file(),
@@ -459,7 +461,6 @@ async def generate(
     audit_service.log(
         db=db,
         action="user_otp_generated",
-        action_category="Auth",
         entity_type="OtpCode",
         entity_id=otp_id,
         details={

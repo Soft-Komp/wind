@@ -63,6 +63,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
+from backend.app import db
 import orjson
 from redis.asyncio import Redis
 from sqlalchemy import and_, case, desc, func, select, update
@@ -504,6 +505,8 @@ async def send_bulk(
         db.add(new_monit)
         await db.flush()  # Pobieramy ID przez flush
         monit_ids.append(new_monit.id_monit)
+
+    await db.commit()
 
     logger.info(
         "Pending rekordy MonitHistory utworzone",
@@ -1018,6 +1021,7 @@ async def retry(
     monit.error_message = None
     monit.updated_at  = now
     await db.flush()
+    await db.commit()
 
     # Enqueue
     task_name = f"send_{monit.monit_type}_task"

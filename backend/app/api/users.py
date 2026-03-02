@@ -482,7 +482,7 @@ async def unlock_user(
     ),
     response_description="Potwierdzenie inicjacji resetu hasła",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("users.reset_password")],
+    dependencies=[require_permission("auth.reset_password_any")],
     responses={
         404: {"description": "Użytkownik nie istnieje"},
     },
@@ -742,31 +742,33 @@ def _validation_error(exc: Exception) -> HTTPException:
 def _raise_from_user_error(exc: Exception) -> None:
     """
     Konwertuje wyjątki z user_service na ujednolicone HTTPException.
-
-    Obsługiwane typy (z services/user_service.py):
-      UserNotFoundError        → 404
-      UserAlreadyExistsError   → 409 (duplicate username/email)
-      UserAlreadyLockedError   → 400
-      UserNotLockedError       → 400
-      DeleteTokenInvalidError  → 400
-      DeleteTokenExpiredError  → 400
-      LastAdminError           → 409 (nie można usunąć ostatniego admina)
-      UserServiceError         → 400 (ogólny błąd serwisu)
     """
-    exc_type = type(exc).__name__
+    from app.services.user_service import UserValidationError
+
+    # Najpierw sprawdź UserValidationError (nie ma go w _MAP)
+    if isinstance(exc, UserValidationError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "users.validation_error",
+                "message": str(exc),
+                "errors": [{"field": "_", "message": str(exc)}],
+            },
+        )
 
     _MAP: dict[str, tuple[int, str, str]] = {
-        "UserNotFoundError":      (404, "users.not_found",       "Użytkownik nie istnieje"),
-        "UserAlreadyExistsError": (409, "users.already_exists",  "Nazwa użytkownika lub email już zajęte"),
-        "UserAlreadyLockedError": (400, "users.already_locked",  "Konto jest już zablokowane"),
-        "UserNotLockedError":     (400, "users.not_locked",      "Konto nie jest zablokowane"),
-        "DeleteTokenInvalidError":(400, "users.delete_token_invalid", "Nieprawidłowy token potwierdzający"),
-        "DeleteTokenExpiredError":(400, "users.delete_token_expired", "Token potwierdzający wygasł — zainicjuj usunięcie ponownie"),
-        "LastAdminError":         (409, "users.last_admin",      "Nie można usunąć jedynego administratora systemu"),
-        "UserServiceError":       (400, "users.service_error",   "Błąd operacji na użytkowniku"),
-        "PermissionDeniedError":  (403, "auth.permission_denied","Brak wymaganego uprawnienia"),
+        "UserNotFoundError":       (404, "users.not_found",            "Użytkownik nie istnieje"),
+        "UserAlreadyExistsError":  (409, "users.already_exists",       "Nazwa użytkownika lub email już zajęte"),
+        "UserAlreadyLockedError":  (400, "users.already_locked",       "Konto jest już zablokowane"),
+        "UserNotLockedError":      (400, "users.not_locked",           "Konto nie jest zablokowane"),
+        "DeleteTokenInvalidError": (400, "users.delete_token_invalid", "Nieprawidłowy token potwierdzający"),
+        "DeleteTokenExpiredError": (400, "users.delete_token_expired", "Token potwierdzający wygasł — zainicjuj usunięcie ponownie"),
+        "LastAdminError":          (409, "users.last_admin",           "Nie można usunąć jedynego administratora systemu"),
+        "UserServiceError":        (400, "users.service_error",        "Błąd operacji na użytkowniku"),
+        "PermissionDeniedError":   (403, "auth.permission_denied",     "Brak wymaganego uprawnienia"),
     }
 
+    exc_type = type(exc).__name__
     if exc_type in _MAP:
         http_status, code, default_msg = _MAP[exc_type]
         msg = str(exc) if str(exc) else default_msg
@@ -779,9 +781,8 @@ def _raise_from_user_error(exc: Exception) -> None:
             },
         )
 
-    # Nieznany wyjątek → catch-all w main.py zwróci 500
-    raise
-
+    # Nieznany wyjątek — propaguj dalej, main.py złapie jako 500
+    raise exc
 
 def _pages(total: int, per_page: int) -> int:
     """Oblicza liczbę stron."""

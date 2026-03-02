@@ -901,7 +901,7 @@ async def force_end_all_sessions(
                 session.notes[:300] +
                 f" | FORCE_ENDED by admin_id={admin_id}: {reason[:100]}"
             )
-
+    await db.commit()
     count = len(open_sessions)
 
     if count > 0:
