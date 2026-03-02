@@ -35,7 +35,7 @@ class OtpCode(Base):
         comment="FK → Users",
     )
     code: Mapped[str] = mapped_column(
-        "Code", String(10), nullable=False,
+        "Code", String(64), nullable=False,
         comment="Hash kodu OTP (argon2 lub sha256) — NIE plain 6-cyfrowy kod",
     )
     purpose: Mapped[str] = mapped_column(

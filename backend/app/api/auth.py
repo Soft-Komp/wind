@@ -562,10 +562,12 @@ async def otp_request(
         )
 
     try:
-        await auth_service.request_otp(
+        from app.services import otp_service
+        await otp_service.request_otp(
             db=db,
             redis=redis,
             email=email_raw,
+            purpose="password_reset",
             ip=client_ip,
         )
     except Exception as exc:
@@ -639,8 +641,10 @@ async def otp_verify(
             detail={"code": "validation.error", "message": "Błąd walidacji", "errors": errors},
         )
 
+    # PO (poprawne):
     try:
-        reset_token = await auth_service.verify_otp(
+        from app.services import otp_service
+        reset_token = await auth_service.verify_otp_and_get_reset_token(
             db=db,
             redis=redis,
             email=email_raw,

@@ -683,6 +683,7 @@ async def restore(
                 rows_upserted += 1
 
         await db.flush()
+        await db.commit()
         duration = (datetime.now(timezone.utc) - op_start).total_seconds() * 1000
 
         logger.info(

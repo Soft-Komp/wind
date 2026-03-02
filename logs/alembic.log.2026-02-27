@@ -1,0 +1,44 @@
+2026-02-27T07:17:12+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T07:17:13+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T07:17:13+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T08:45:55+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T08:45:56+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T08:45:56+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T09:00:48+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T09:00:49+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T09:00:49+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T09:55:56+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T09:55:57+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T09:55:57+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T10:00:08+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T10:00:09+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T10:00:09+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T10:03:49+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T10:03:50+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T10:03:50+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T12:26:35+0000 | INFO     | 2011 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T12:26:36+0000 | INFO     | 2011 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T12:26:36+0000 | INFO     | 2011 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T12:26:36+0000 | ERROR    | 2011 | alembic.util.messaging | /usr/local/lib/python3.12/site-packages/alembic/util/messaging.py:73 | Could not determine revision id from filename 005_add_audit_log_request_id.py. Be sure the 'revision' variable is declared inside the script (please see 'Upgrading from Alembic 0.1 to 0.2' in the documentation).
+2026-02-27T12:36:41+0000 | INFO     | 2155 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T12:36:42+0000 | INFO     | 2155 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T12:36:42+0000 | INFO     | 2155 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T12:36:42+0000 | ERROR    | 2155 | alembic.util.messaging | /usr/local/lib/python3.12/site-packages/alembic/util/messaging.py:73 | Could not determine revision id from filename e5f6a7b8c9d0_add_audit_log_request_id.py. Be sure the 'revision' variable is declared inside the script (please see 'Upgrading from Alembic 0.1 to 0.2' in the documentation).
+2026-02-27T12:37:37+0000 | INFO     | 2172 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:618 | Running upgrade d4e5f6a7b8c9 -> e5f6a7b8c9d0, Dodanie kolumny RequestID do dbo_ext.AuditLog
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:56 | === MIGRACJA 005 — UPGRADE START (RequestID w AuditLog) ===
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:106 | AuditLog.RequestID: NVARCHAR(36) NULL — OK
+2026-02-27T12:37:38+0000 | INFO     | 2172 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:139 | Indeks IX_AuditLog_RequestID: OK
+2026-02-27T12:39:45+0000 | INFO     | 2213 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:618 | Running upgrade d4e5f6a7b8c9 -> e5f6a7b8c9d0, Dodanie kolumny RequestID do dbo_ext.AuditLog
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:50 | === MIGRACJA 005 — UPGRADE START (RequestID w AuditLog) ===
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:94 | AuditLog.RequestID: NVARCHAR(36) NULL — OK
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:126 | Indeks IX_AuditLog_RequestID: OK
+2026-02-27T12:39:46+0000 | INFO     | 2213 | alembic.migration.005 | /app/alembic/versions/e5f6a7b8c9d0_add_audit_log_request_id.py:53 | === MIGRACJA 005 — UPGRADE ZAKOŃCZONY ===
+2026-02-27T13:36:29+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-02-27T13:36:30+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-02-27T13:36:30+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.

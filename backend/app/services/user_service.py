@@ -1307,6 +1307,7 @@ async def confirm_delete(
     user.is_active = False
     user.updated_at = datetime.now(timezone.utc)
     await db.flush()
+    await db.commit()
 
     # --- 7. Inwalidacja cache ---
     await _invalidate_user_cache(redis, user_id)
@@ -1424,6 +1425,7 @@ async def lock(
     user.locked_until = locked_until
     user.updated_at = datetime.now(timezone.utc)
     await db.flush()
+    await db.commit()
 
     # Inwalidacja cache
     await _invalidate_user_cache(redis, user_id)
@@ -1700,3 +1702,111 @@ async def increment_failed_attempts(
     await _invalidate_user_cache(redis, user_id)
 
     return current_count
+
+async def admin_reset_password(
+    db: AsyncSession,
+    redis: Redis,
+    user_id: int,
+    admin_id: int,
+    ip: Optional[str] = None,
+) -> dict:
+    """
+    Admin inicjuje reset hasła dla wybranego użytkownika.
+
+    Przepływ:
+        1. Weryfikacja że użytkownik istnieje i jest aktywny
+        2. Unieważnienie wszystkich aktywnych sesji
+        3. Wygenerowanie OTP i zapis do kolejki (otp_service)
+        4. AuditLog + log do pliku
+
+    Args:
+        db:       Sesja SQLAlchemy.
+        redis:    Klient Redis.
+        user_id:  ID użytkownika którego hasło resetujemy.
+        admin_id: ID admina wykonującego operację.
+        ip:       IP inicjatora.
+
+    Returns:
+        Dict z liczbą unieważnionych sesji.
+
+    Raises:
+        UserNotFoundError: Użytkownik nie istnieje.
+    """
+    from app.services import otp_service
+
+    ip_clean = (ip or "unknown")[:45]
+
+    # 1. Pobierz usera
+    result = await db.execute(
+        select(User).where(User.id_user == user_id)
+    )
+    user: Optional[User] = result.scalar_one_or_none()
+
+    if user is None:
+        raise UserNotFoundError(f"Użytkownik ID={user_id} nie istnieje.")
+
+    # 2. Unieważnij wszystkie sesje
+    from app.db.models.refresh_token import RefreshToken
+    from sqlalchemy import update as sa_update
+    revoke_result = await db.execute(
+        sa_update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked == False,
+        )
+        .values(
+            is_revoked=True,
+            revoked_at=datetime.now(timezone.utc),
+        )
+    )
+    sessions_revoked = revoke_result.rowcount
+    await db.commit()
+
+    # 3. Generuj OTP
+    await otp_service.request_otp(
+        db=db,
+        redis=redis,
+        email=user.email,
+        purpose="password_reset",
+        ip=ip_clean,
+    )
+
+    # 4. Log do pliku
+    _append_to_file(
+        _get_users_log_file(),
+        _build_log_record(
+            action="admin_reset_password",
+            user_id=user_id,
+            username=user.username,
+            admin_id=admin_id,
+            sessions_revoked=sessions_revoked,
+            ip_address=ip_clean,
+        )
+    )
+
+    # 5. AuditLog
+    audit_service.log_crud(
+        db=db,
+        action="admin_reset_password",
+        entity_type="User",
+        entity_id=user_id,
+        details={
+            "admin_id": admin_id,
+            "sessions_revoked": sessions_revoked,
+            "ip": ip_clean,
+        },
+        success=True,
+    )
+
+    logger.warning(
+        "Admin reset hasła: user_id=%d, admin_id=%d, sesje_unieważnione=%d (IP=%s)",
+        user_id, admin_id, sessions_revoked, ip_clean,
+        extra={
+            "user_id": user_id,
+            "admin_id": admin_id,
+            "sessions_revoked": sessions_revoked,
+            "ip": ip_clean,
+        }
+    )
+
+    return {"sessions_revoked": sessions_revoked}

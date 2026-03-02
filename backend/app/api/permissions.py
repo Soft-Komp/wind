@@ -174,7 +174,6 @@ async def check_permission(
         redis=redis,
         db=db,
         user_id=current_user.id_user,
-        role_id=current_user.role_id,
         permission_name=permission,
     )
 
@@ -261,7 +260,6 @@ async def check_many_permissions(
         redis=redis,
         db=db,
         user_id=current_user.id_user,
-        role_id=current_user.role_id,
         permission_names=unique_perms,
     )
 
