@@ -1167,6 +1167,7 @@ async def require_master_key(
 
 # Wstrzyknięcia przez Depends — krótsze sygnatury funkcji
 DB = Annotated[AsyncSession, Depends(get_db)]
+WaproDB = DB  
 RedisClient = Annotated[Redis, Depends(get_redis)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
@@ -1206,6 +1207,7 @@ __all__ = [
     "AuthContext",
     # Skrótowe typy (Annotated)
     "DB",
+    "WaproDB",
     "RedisClient",
     "CurrentUser",
     "OptionalUser",
