@@ -94,6 +94,7 @@ services:
       # Hot reload w dev — mapuje cały backend do kontenera
       - ./backend:/app
       - ./database:/app/database  # ⬅️ NOWE: seedery
+      - ./database:/app/database:ro
       # Wolumeny trwałe — logi/snapshoty/archiwa poza kontenerem
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots

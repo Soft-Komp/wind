@@ -69,11 +69,11 @@ router = APIRouter()
         "Filtry: min_debt, max_debt, overdue_only, search (nazwa / NIP). "
         "Sortowanie: sort_by + sort_dir (domyślnie: total_debt DESC). "
         "Cache Redis TTL 60s. AuditLog fire-and-forget. "
-        "**Wymaga uprawnienia:** `debtors.list`"
+        "**Wymaga uprawnienia:** `debtors.view_list`"
     ),
     response_description="Paginowana lista dłużników",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.list")],
+    dependencies=[require_permission("debtors.view_list")],
 )
 async def list_debtors(
     current_user: CurrentUser,
@@ -90,22 +90,26 @@ async def list_debtors(
     sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="Kierunek: asc | desc"),
 ):
     from app.services import debtor_service
+    from app.services.debtor_service import DebtorListParams
 
     result = await debtor_service.get_list(
         wapro=wapro,
         redis=redis,
         db=db,
-        params={
-            "offset": pagination.offset,
-            "limit": pagination.per_page,
-            "search": search,
-            "min_debt": min_debt,
-            "max_debt": max_debt,
-            "overdue_only": overdue_only,
-            "sort_by": sort_by,
-            "sort_dir": sort_dir,
-        },
-        requested_by_id=current_user.id_user,
+        params=DebtorListParams(
+            search=search,
+            min_debt=min_debt,
+            max_debt=max_debt,
+            overdue_min_days=None,
+            overdue_max_days=None,
+            has_active_monit=None,
+            page=pagination.page,
+            page_size=pagination.per_page,
+            sort_by=sort_by,
+            sort_desc=(sort_dir == "desc"),
+        ),
+        requesting_user_id=current_user.id_user,
+        ip_address=None,
     )
 
     return BaseResponse.ok(

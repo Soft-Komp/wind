@@ -1,0 +1,20 @@
+================================================================
+ SEED LOG: 01_roles.sql
+================================================================
+ Czas:      2026-03-03T07:44:54+0000
+ Plik:      /app/database/seeds/01_roles.sql
+ Serwer:    tcp:sv2016\slq2022,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT (przed bledem) ---
+
+--- STDERR (bledy SQL) ---
+=== SEED 01: Roles — START ===
+Czas: 2026-03-03 08:44:55
+Msg 208, Level 16, State 1, Server sv2016\SLQ2022, Line 12
+Invalid object name 'dbo_ext.skw_Roles'.
+
+--- WYNIK: ERROR (exit_code=1) ---
+Czas zakonczenia: 2026-03-03T07:44:56+0000

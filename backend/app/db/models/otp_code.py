@@ -17,7 +17,7 @@ OTP_PURPOSES = frozenset({"password_reset", "2fa"})
 
 
 class OtpCode(Base):
-    __tablename__ = "OtpCodes"
+    __tablename__ = "skw_OtpCodes"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Jednorazowe kody OTP. Kod kolumna zawiera HASH — nigdy plain.",
@@ -30,7 +30,7 @@ class OtpCode(Base):
     id_user: Mapped[int] = mapped_column(
         "ID_USER",
         Integer,
-        ForeignKey("dbo_ext.Users.ID_USER", ondelete="CASCADE"),
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="CASCADE"),
         nullable=False,
         comment="FK → Users",
     )

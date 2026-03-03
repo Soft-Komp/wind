@@ -19,7 +19,7 @@ from .base import Base
 
 
 class MasterAccessLog(Base):
-    __tablename__ = "MasterAccessLog"
+    __tablename__ = "skw_MasterAccessLog"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (
@@ -36,7 +36,7 @@ class MasterAccessLog(Base):
     target_user_id: Mapped[int | None] = mapped_column(
         "TargetUserID",
         Integer,
-        ForeignKey("dbo_ext.Users.ID_USER", ondelete="SET NULL"),
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="SET NULL"),
         nullable=True,
         comment="ID konta do którego uzyskano dostęp przez MASTER_KEY",
     )

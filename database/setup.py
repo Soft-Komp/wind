@@ -95,8 +95,14 @@ logging.basicConfig(
 )
 
 # Log do pliku setup.log obok skryptu
-_log_file = Path(__file__).parent / "setup.log"
-_file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+import os
+_log_file = Path(os.environ.get("SETUP_LOG_DIR", "/tmp")) / "setup.log"
+
+try:
+    _file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+except OSError:
+    # Fallback — tylko konsola jeśli nie można zapisać logu
+    _file_handler = logging.StreamHandler(sys.stdout)
 _file_handler.setFormatter(
     logging.Formatter(
         '{"time": "%(asctime)s", "level": "%(levelname)s", "msg": %(message)s}'

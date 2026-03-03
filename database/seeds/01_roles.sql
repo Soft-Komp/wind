@@ -27,7 +27,7 @@ BEGIN TRY
     -- MERGE: wstawia rolę jeśli nie istnieje; nie modyfikuje istniejących
     -- -------------------------------------------------------------------------
 
-    MERGE [dbo_ext].[Roles] AS target
+    MERGE [dbo_ext].[skw_Roles] AS target
     USING (
         SELECT RoleName, Description FROM (VALUES
             -- Rola         | Opis
@@ -53,7 +53,7 @@ BEGIN TRY
         [Description],
         [IsActive],
         CONVERT(NVARCHAR, [CreatedAt], 120) AS CreatedAt
-    FROM [dbo_ext].[Roles]
+    FROM [dbo_ext].[skw_Roles]
     ORDER BY [ID_ROLE];
 
     COMMIT TRANSACTION;

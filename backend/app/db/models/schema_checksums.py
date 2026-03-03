@@ -77,7 +77,7 @@ class SchemaChecksums(Base):
     Wersja modelu: 1.1.0 (dodano SchemaName + INDEX w ObjectType — AUDIT R5)
     """
 
-    __tablename__ = "SchemaChecksums"
+    __tablename__ = "skw_SchemaChecksums"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

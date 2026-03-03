@@ -67,7 +67,7 @@ class User(Base):
         - Kolumna PasswordHash jest String(255) — argon2 hash mieści się w 255 znakach
     """
 
-    __tablename__ = "Users"
+    __tablename__ = "skw_Users"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Użytkownicy systemu windykacyjnego — zarządzani przez aplikację",
@@ -118,7 +118,7 @@ class User(Base):
     role_id: Mapped[int] = mapped_column(
         "RoleID",
         Integer,
-        ForeignKey("dbo_ext.Roles.ID_ROLE", ondelete="RESTRICT"),
+        ForeignKey("dbo_ext.skw_Roles.ID_ROLE", ondelete="RESTRICT"),
         nullable=False,
         comment="FK → Roles.ID_ROLE — RESTRICT: nie można usunąć roli z userami",
     )

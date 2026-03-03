@@ -22,7 +22,7 @@ from .base import AuditMixin, Base
 
 
 class Comment(AuditMixin, Base):
-    __tablename__ = "Comments"
+    __tablename__ = "skw_Comments"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (
@@ -51,7 +51,7 @@ class Comment(AuditMixin, Base):
         "UzytkownikID", # ← polska nazwa kolumny zgodna z dokumentacją v1.5
         Integer,
         ForeignKey(
-            "dbo_ext.Users.ID_USER",
+            "dbo_ext.skw_Users.ID_USER",
             ondelete="RESTRICT",  # NIE SET NULL — NOT NULL wymaga RESTRICT
         ),
         nullable=False,          # ← NOT NULL (poprawka względem v1.4)

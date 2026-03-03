@@ -11,7 +11,7 @@ from .base import AuditMixin, Base
 
 
 class Role(AuditMixin, Base):
-    __tablename__ = "Roles"
+    __tablename__ = "skw_Roles"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Role użytkowników systemu. Zarządzanie przez RBAC.",

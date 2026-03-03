@@ -20,7 +20,7 @@ ACTION_CATEGORIES = frozenset({
 
 
 class AuditLog(Base):
-    __tablename__ = "AuditLog"
+    __tablename__ = "skw_AuditLog"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (
@@ -37,7 +37,7 @@ class AuditLog(Base):
     id_user: Mapped[int | None] = mapped_column(
         "ID_USER",
         Integer,
-        ForeignKey("dbo_ext.Users.ID_USER", ondelete="SET NULL"),
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="SET NULL"),
         nullable=True,
         comment="FK → Users. NULL dla akcji systemowych (cron, startup).",
     )

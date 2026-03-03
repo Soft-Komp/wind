@@ -1,40 +1,91 @@
 -- ============================================================
--- Tabela: dbo_ext.Roles
--- Rolle użytkowników systemu RBAC.
--- Predefiniowane: Admin, Manager, User, ReadOnly
+-- database/ddl/001_roles.sql
+-- Tabela: dbo_ext.skw_Roles
+--
+-- Przechowuje role użytkowników systemu Windykacja.
+-- Seed: database/seeds/01_roles.sql
+--       → Admin, Manager, User, ReadOnly
+--
+-- Powiązania:
+--   ← skw_Users.RoleID         (FK RESTRICT)
+--   ← skw_RolePermissions.ID_ROLE (FK CASCADE DELETE)
+--
+-- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];
 GO
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.tables t
-    JOIN sys.schemas s ON t.schema_id = s.schema_id
-    WHERE s.name = 'dbo_ext' AND t.name = 'Roles'
-)
-BEGIN
-    CREATE TABLE dbo_ext.Roles (
-        ID_ROLE     INT             NOT NULL IDENTITY(1,1),
-        RoleName    NVARCHAR(50)    NOT NULL,
-        Description NVARCHAR(200)   NULL,
-        IsActive    BIT             NOT NULL DEFAULT 1,
-        CreatedAt   DATETIME        NOT NULL DEFAULT GETDATE(),
-        UpdatedAt   DATETIME        NULL,
-
-        CONSTRAINT PK_Roles PRIMARY KEY CLUSTERED (ID_ROLE),
-        CONSTRAINT UQ_Roles_RoleName UNIQUE (RoleName),
-        CONSTRAINT CK_Roles_IsActive CHECK (IsActive IN (0, 1))
-    );
-
-    PRINT 'Tabela dbo_ext.Roles utworzona.';
-END
-ELSE
-BEGIN
-    PRINT 'Tabela dbo_ext.Roles już istnieje — pominięto.';
-END
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
 GO
 
--- Indeksy
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Roles_IsActive')
-    CREATE INDEX IX_Roles_IsActive ON dbo_ext.Roles (IsActive);
+BEGIN TRANSACTION;
+BEGIN TRY
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM   sys.tables  t
+        JOIN   sys.schemas s ON t.schema_id = s.schema_id
+        WHERE  s.name = 'dbo_ext'
+          AND  t.name = 'skw_Roles'
+    )
+    BEGIN
+        PRINT '[001] Tworzenie tabeli dbo_ext.skw_Roles...';
+
+        CREATE TABLE [dbo_ext].[skw_Roles] (
+
+            -- ── Klucz główny ──────────────────────────────────────────────────
+            [ID_ROLE]     INT           IDENTITY(1,1)  NOT NULL,
+
+            -- ── Dane roli ────────────────────────────────────────────────────
+            [RoleName]    NVARCHAR(50)                 NOT NULL,
+            [Description] NVARCHAR(200)                    NULL,
+
+            -- ── Status ───────────────────────────────────────────────────────
+            [IsActive]    BIT                          NOT NULL
+                          CONSTRAINT [DF_skw_Roles_IsActive]  DEFAULT (1),
+
+            -- ── Timestampy ───────────────────────────────────────────────────
+            [CreatedAt]   DATETIME                     NOT NULL
+                          CONSTRAINT [DF_skw_Roles_CreatedAt] DEFAULT (GETDATE()),
+            [UpdatedAt]   DATETIME                         NULL,
+
+            -- ── Constraints ──────────────────────────────────────────────────
+            CONSTRAINT [PK_skw_Roles]
+                PRIMARY KEY CLUSTERED ([ID_ROLE] ASC),
+
+            CONSTRAINT [UQ_skw_Roles_RoleName]
+                UNIQUE ([RoleName])
+        );
+
+        PRINT '[001] Tabela dbo_ext.skw_Roles utworzona.';
+    END
+    ELSE
+    BEGIN
+        PRINT '[001] Tabela dbo_ext.skw_Roles już istnieje — pominięto.';
+    END
+
+    -- ── Indeksy ───────────────────────────────────────────────────────────────
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE  object_id = OBJECT_ID('dbo_ext.skw_Roles')
+          AND  name      = 'IX_skw_Roles_IsActive'
+    )
+    BEGIN
+        CREATE NONCLUSTERED INDEX [IX_skw_Roles_IsActive]
+            ON [dbo_ext].[skw_Roles] ([IsActive] ASC);
+        PRINT '[001] Indeks IX_skw_Roles_IsActive utworzony.';
+    END
+
+    COMMIT TRANSACTION;
+    PRINT '[001] === DDL 001: skw_Roles — OK ===';
+
+END TRY
+BEGIN CATCH
+    ROLLBACK TRANSACTION;
+    PRINT '[001] BŁĄD: ' + ERROR_MESSAGE();
+    THROW;
+END CATCH
 GO
