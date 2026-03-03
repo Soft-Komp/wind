@@ -33,7 +33,7 @@ BEGIN TRY
     DECLARE @admin_role_id INT;
     SET @admin_role_id = (
         SELECT [ID_ROLE]
-        FROM [dbo_ext].[Roles]
+        FROM [dbo_ext].[skw_Roles]
         WHERE [RoleName] = N'Admin'
           AND [IsActive] = 1
     );
@@ -59,7 +59,7 @@ BEGIN TRY
     --     1. python -c "from argon2 import PasswordHasher; print(PasswordHasher().hash('Admin123!'))"
     --     2. Zastąp wartość RĘCZNIE poniżej (NIE commituj do repozytorium!)
     -- =========================================================================
-    MERGE [dbo_ext].[Users] AS target
+    MERGE [dbo_ext].[skw_Users] AS target
     USING (
         SELECT
             N'admin'                               AS Username,
@@ -111,8 +111,8 @@ BEGIN TRY
             THEN N'⚠️  PLACEHOLDER — wymagana zmiana!'
             ELSE N'✅ Hash ustawiony'
         END AS PasswordStatus
-    FROM [dbo_ext].[Users] u
-    JOIN [dbo_ext].[Roles]  r ON u.[RoleID] = r.[ID_ROLE]
+    FROM [dbo_ext].[skw_Users] u
+    JOIN [dbo_ext].[skw_Roles]  r ON u.[RoleID] = r.[ID_ROLE]
     WHERE u.[Username] = N'admin';
 
     COMMIT TRANSACTION;

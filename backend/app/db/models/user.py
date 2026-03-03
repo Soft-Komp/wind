@@ -67,7 +67,7 @@ class User(Base):
         - Kolumna PasswordHash jest String(255) — argon2 hash mieści się w 255 znakach
     """
 
-    __tablename__ = "Users"
+    __tablename__ = "skw_Users"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Użytkownicy systemu windykacyjnego — zarządzani przez aplikację",

@@ -1,0 +1,216 @@
+# Alembic — Instrukcja dla zespołu Windykacja
+
+> Wersja: 2.0.0 | Data: 2026-03-02
+> Tabele systemu używają prefiksu `skw_` (System Windykacja)
+
+---
+
+## Struktura katalogów
+
+```
+backend/
+├── alembic.ini              ← konfiguracja Alembic + logging
+└── alembic/
+    ├── env.py               ← silnik migracji (async aioodbc + MSSQL)
+    ├── script.py.mako       ← szablon nowego pliku migracji
+    ├── README               ← ten plik
+    └── versions/
+        └── *.py             ← pliki migracji (generowane automatycznie)
+```
+
+---
+
+## Wymagania
+
+```bash
+# Zainstaluj zależności (jeśli jeszcze nie masz)
+pip install alembic aioodbc sqlalchemy[asyncio]
+
+# Ustaw zmienne środowiskowe (lub użyj .env + docker-compose)
+export DB_HOST=0.53
+export DB_PORT=1433
+export DB_NAME=WAPRO
+export DB_USER=windykacja_app_user
+export DB_PASSWORD=twoje_haslo
+export ODBC_DRIVER="ODBC Driver 18 for SQL Server"
+```
+
+---
+
+## Typowe scenariusze
+
+### 1. Pierwsze uruchomienie (DDL już wykonany przez sqlcmd)
+
+Tabele `skw_*` zostały już utworzone przez pliki DDL.
+Alembic musi wiedzieć, że schema jest aktualna — bez wykonywania migracji:
+
+```bash
+cd backend/
+alembic stamp head
+```
+
+### 2. Sprawdzenie aktualnego stanu
+
+```bash
+cd backend/
+alembic current          # aktualna wersja w bazie
+alembic history          # historia wszystkich migracji
+alembic check            # czy schema jest zsynchronizowana z modelami
+```
+
+### 3. Nowa migracja po zmianie modelu SQLAlchemy
+
+```bash
+cd backend/
+
+# 1. Zmodyfikuj model w app/db/models/*.py
+
+# 2. Wygeneruj migrację
+alembic revision --autogenerate -m "add_phone_to_skw_users"
+
+# 3. PRZEJRZYJ wygenerowany plik w alembic/versions/ !
+#    Alembic może wygenerować niepotrzebne operacje — zawsze sprawdź.
+
+# 4. Zastosuj migrację
+alembic upgrade head
+```
+
+### 4. Ręczna migracja (np. INSERT seed danych, zmiana złożona)
+
+```bash
+cd backend/
+alembic revision -m "seed_initial_permissions"
+# → Edytuj ręcznie wygenerowany plik w alembic/versions/
+alembic upgrade head
+```
+
+### 5. Cofnięcie migracji
+
+```bash
+cd backend/
+alembic downgrade -1          # cofnij ostatnią
+alembic downgrade -2          # cofnij ostatnie dwie
+alembic downgrade base        # cofnij WSZYSTKIE (uwaga — usuwa dane!)
+alembic downgrade abc123      # cofnij do konkretnej rewizji
+```
+
+### 6. Podgląd SQL bez wykonywania
+
+```bash
+cd backend/
+alembic upgrade head --sql         # pokaż SQL dla upgrade
+alembic downgrade -1 --sql         # pokaż SQL dla downgrade
+alembic upgrade head --sql > out.sql   # zapisz do pliku
+```
+
+---
+
+## Zasady obowiązujące w projekcie
+
+### Nazewnictwo migracji
+
+```bash
+# ✅ Dobre
+alembic revision --autogenerate -m "add_phone_column_to_skw_users"
+alembic revision --autogenerate -m "create_skw_documents_table"
+alembic revision -m "seed_permissions_v2"
+
+# ❌ Złe
+alembic revision -m "fix"
+alembic revision -m "update2"
+alembic revision -m "zmiany"
+```
+
+### Zawsze przeglądaj wygenerowane migracje
+
+Alembic czasami generuje:
+- Zbędne `drop_index` dla indeksów z DDL (zarządzamy nimi ręcznie)
+- Zmiany `server_default` których nie chcemy
+- Operacje na tabelach WAPRO (jeśli `include_object` zawiedzie)
+
+**Przed `alembic upgrade head` zawsze czytaj plik w `versions/`.**
+
+### Każda migracja musi mieć `downgrade`
+
+Wyjątek: migracje nieodwracalne (utrata danych). W takim przypadku:
+
+```python
+def downgrade() -> None:
+    raise NotImplementedError(
+        "Ta migracja jest nieodwracalna — usunięcie tabeli skw_Documents "
+        "spowoduje utratę danych. Przywróć z backup."
+    )
+```
+
+### MSSQL-specyficzne ograniczenia
+
+1. **Nie mieszaj DDL i DML** w jednej migracji
+2. **Zmiana NOT NULL kolumny z danymi** — 3 kroki:
+   ```python
+   # Krok 1: Dodaj jako NULL
+   op.add_column('skw_Users', sa.Column('NewCol', sa.String(50), nullable=True), schema='dbo_ext')
+   # Krok 2: Wypełnij dane
+   op.execute("UPDATE [dbo_ext].[skw_Users] SET NewCol = 'wartość_domyślna'")
+   # Krok 3: Zmień na NOT NULL
+   op.alter_column('skw_Users', 'NewCol', existing_type=sa.String(50), nullable=False, schema='dbo_ext')
+   ```
+3. **Indeksy** zarządzamy ręcznie w plikach DDL, nie przez Alembic
+
+---
+
+## Tabele systemu (skw_*)
+
+| Model Python      | Tabela SQL              | Plik DDL              |
+|-------------------|-------------------------|-----------------------|
+| Role              | dbo_ext.skw_Roles       | 001_roles.sql         |
+| Permission        | dbo_ext.skw_Permissions | 002_permissions.sql   |
+| User              | dbo_ext.skw_Users       | 003_users.sql         |
+| RolePermission    | dbo_ext.skw_RolePermissions | 004_role_permissions.sql |
+| RefreshToken      | dbo_ext.skw_RefreshTokens | 005_refresh_tokens.sql |
+| OtpCode           | dbo_ext.skw_OtpCodes    | 006_otp_codes.sql     |
+| AuditLog          | dbo_ext.skw_AuditLog    | 007_audit_log.sql     |
+| Template          | dbo_ext.skw_Templates   | 008_templates.sql     |
+| MonitHistory      | dbo_ext.skw_MonitHistory | 009_monit_history.sql |
+| SystemConfig      | dbo_ext.skw_SystemConfig | 010_system_config.sql |
+| SchemaChecksums   | dbo_ext.skw_SchemaChecksums | 011_schema_checksums.sql |
+| MasterAccessLog   | dbo_ext.skw_MasterAccessLog | 012_master_access_log.sql |
+| Comment           | dbo_ext.skw_Comments    | 013_comments.sql      |
+
+---
+
+## Rozwiązywanie problemów
+
+### "Cannot find revision"
+```bash
+alembic history    # sprawdź dostępne rewizje
+alembic current    # sprawdź co jest w bazie
+```
+
+### "Target database is not up to date"
+```bash
+alembic upgrade head
+```
+
+### "Table already exists" przy upgrade
+Tabela istnieje w DB ale nie ma migracji.
+```bash
+alembic stamp head    # oznacz bez wykonywania
+```
+
+### Alembic generuje zbędne operacje na indeksach
+Normalny objaw — indeksy zarządzamy przez DDL, nie Alembic.
+Usuń linię `op.create_index` / `op.drop_index` z wygenerowanego pliku.
+
+### Błąd importu modelu w env.py
+```
+[ALEMBIC ENV] KRYTYCZNY BŁĄD IMPORTU MODELI
+```
+Sprawdź:
+1. Uruchamiasz z `backend/` (nie z `backend/alembic/`)
+2. Virtualenv jest aktywny
+3. Model istnieje i nie ma błędu składni: `python -c "from app.db.models.xxx import Xxx"`
+
+---
+
+*Dokument zaktualizowany: 2026-03-02*
+*Przy zmianach w strukturze migracji — aktualizuj ten plik.*

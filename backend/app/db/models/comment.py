@@ -22,7 +22,7 @@ from .base import AuditMixin, Base
 
 
 class Comment(AuditMixin, Base):
-    __tablename__ = "Comments"
+    __tablename__ = "skw_Comments"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

@@ -17,7 +17,7 @@ OTP_PURPOSES = frozenset({"password_reset", "2fa"})
 
 
 class OtpCode(Base):
-    __tablename__ = "OtpCodes"
+    __tablename__ = "skw_OtpCodes"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Jednorazowe kody OTP. Kod kolumna zawiera HASH — nigdy plain.",

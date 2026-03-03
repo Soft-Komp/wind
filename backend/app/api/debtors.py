@@ -69,11 +69,11 @@ router = APIRouter()
         "Filtry: min_debt, max_debt, overdue_only, search (nazwa / NIP). "
         "Sortowanie: sort_by + sort_dir (domyślnie: total_debt DESC). "
         "Cache Redis TTL 60s. AuditLog fire-and-forget. "
-        "**Wymaga uprawnienia:** `debtors.list`"
+        "**Wymaga uprawnienia:** `debtors.view_list`"
     ),
     response_description="Paginowana lista dłużników",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.list")],
+    dependencies=[require_permission("debtors.view_list")],
 )
 async def list_debtors(
     current_user: CurrentUser,

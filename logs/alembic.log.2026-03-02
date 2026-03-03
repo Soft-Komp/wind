@@ -1,0 +1,27 @@
+2026-03-02T07:14:10+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-03-02T07:14:11+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-02T07:14:11+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-02T12:12:27+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:164 | Uruchamianie migracji w trybie online (async aioodbc)
+2026-03-02T12:12:28+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-02T12:12:28+0000 | INFO     | 16 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-02T14:52:46+0000 | DEBUG    | 16 | alembic.env | /app/alembic/env.py:469 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-02T14:52:46+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-02T14:52:46+0000 | INFO     | 16 | alembic.env | /app/alembic/env.py:412 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo_ext
+2026-03-02T14:52:46+0000 | DEBUG    | 16 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=sv2016\slq2022,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-02T14:52:47+0000 | CRITICAL | 16 | alembic.env | /app/alembic/env.py:369 | Schemat 'dbo_ext' NIE ISTNIEJE w bazie 'GPGKJASLO'!
+Uruchom DDL: database/ddl/000_create_schema.sql
+2026-03-02T14:52:47+0000 | DEBUG    | 16 | alembic.env | /app/alembic/env.py:453 | Engine zamknięty.
+2026-03-02T14:52:55+0000 | DEBUG    | 17 | alembic.env | /app/alembic/env.py:469 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-02T14:52:55+0000 | INFO     | 17 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-02T14:52:55+0000 | INFO     | 17 | alembic.env | /app/alembic/env.py:412 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo_ext
+2026-03-02T14:52:55+0000 | DEBUG    | 17 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=sv2016\slq2022,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-02T14:52:56+0000 | CRITICAL | 17 | alembic.env | /app/alembic/env.py:369 | Schemat 'dbo_ext' NIE ISTNIEJE w bazie 'GPGKJASLO'!
+Uruchom DDL: database/ddl/000_create_schema.sql
+2026-03-02T14:52:56+0000 | DEBUG    | 17 | alembic.env | /app/alembic/env.py:453 | Engine zamknięty.
+2026-03-02T14:59:26+0000 | DEBUG    | 73 | alembic.env | /app/alembic/env.py:469 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-02T14:59:26+0000 | INFO     | 73 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-02T14:59:26+0000 | INFO     | 73 | alembic.env | /app/alembic/env.py:412 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo_ext
+2026-03-02T14:59:26+0000 | DEBUG    | 73 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=sv2016\slq2022,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-02T14:59:28+0000 | CRITICAL | 73 | alembic.env | /app/alembic/env.py:369 | Schemat 'dbo_ext' NIE ISTNIEJE w bazie 'GPGKJASLO'!
+Uruchom DDL: database/ddl/000_create_schema.sql
+2026-03-02T14:59:28+0000 | DEBUG    | 73 | alembic.env | /app/alembic/env.py:453 | Engine zamknięty.

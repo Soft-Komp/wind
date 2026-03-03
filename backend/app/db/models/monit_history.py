@@ -26,7 +26,7 @@ MONIT_STATUSES = frozenset({
 
 
 class MonitHistory(Base):
-    __tablename__ = "MonitHistory"
+    __tablename__ = "skw_MonitHistory"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

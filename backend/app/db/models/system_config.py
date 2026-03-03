@@ -11,7 +11,7 @@ from .base import AuditMixin, Base
 
 
 class SystemConfig(AuditMixin, Base):
-    __tablename__ = "SystemConfig"
+    __tablename__ = "skw_SystemConfig"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

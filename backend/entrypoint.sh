@@ -1,220 +1,499 @@
 #!/bin/sh
 # =============================================================================
-# entrypoint.sh — System Windykacja API
+# backend/entrypoint.sh — System Windykacja API
 # =============================================================================
-# Kolejność startu:
-#   1. Czekaj na MSSQL (retry z backoff)
-#   2. Czekaj na Redis
-#   3. Uruchom alembic upgrade head (migracje)
-#   4. Uruchom uvicorn (z hot-reload w DEV)
+#
+# Sekwencja startu:
+#   1. Weryfikacja wymaganych zmiennych środowiskowych
+#   2. Tworzenie katalogów roboczych (logs, snapshots, archives)
+#   3. Czekaj na MSSQL (retry z exponential backoff)
+#   4. Czekaj na Redis (retry z exponential backoff)
+#   5. Weryfikacja schematu dbo_ext w bazie
+#   6. Alembic — migracje (upgrade head)
+#   7. Seedery — dane inicjalne (idempotentne)
+#   8. Start uvicorn (DEV: hot-reload | PROD: workers)
 #
 # Zmienne środowiskowe (z .env przez docker-compose):
-#   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
-#   DB_TRUST_SERVER_CERTIFICATE, DB_ENCRYPT
-#   REDIS_URL, APP_ENV, DEBUG
+#   WYMAGANE:  DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, SECRET_KEY
+#   OPCJONALNE:
+#     ODBC_DRIVER        (domyślnie: ODBC Driver 18 for SQL Server)
+#     REDIS_URL          (domyślnie: redis://redis:6379/0)
+#     REDIS_PASSWORD     (domyślnie: puste)
+#     APP_ENV            (domyślnie: development)
+#     DEBUG              (domyślnie: false)
+#     API_PORT           (domyślnie: 8000)
+#     ALEMBIC_MODE       (domyślnie: upgrade)
+#                         upgrade → alembic upgrade head (normalny flow)
+#                         stamp   → alembic stamp head   (po ręcznym DDL sqlcmd)
+#                         skip    → pomiń migracje (debug/emergency)
+#     RUN_SEEDS          (domyślnie: auto)
+#                         auto    → uruchom seed tylko gdy tabela skw_Roles jest pusta
+#                         always  → zawsze (seedery muszą być idempotentne z IF NOT EXISTS)
+#                         skip    → pomiń seedery
+#     DB_WAIT_RETRIES    (domyślnie: 30)
+#     DB_WAIT_SLEEP      (domyślnie: 3)   sekundy między próbami
+#     REDIS_WAIT_RETRIES (domyślnie: 15)
+#     REDIS_WAIT_SLEEP   (domyślnie: 2)
+#
+# UWAGA dotycząca seederów:
+#   Katalog database/seeds/ jest w ROOT projektu (nie w backend/).
+#   Aby seedery działały, docker-compose musi montować go do kontenera.
+#   Przykład w docker-compose.yml:
+#     volumes:
+#       - ./database:/app/database:ro
+#   Jeśli montowanie nie jest skonfigurowane → seedery są pomijane (warning).
+#   Aplikacja startuje normalnie — seedery NIE są wymagane do startu.
+#
+# Wersja: 2.0.0 | Data: 2026-03-02
 # =============================================================================
-set -e
 
-# Kolory do logów (czytelne w docker logs)
+set -e          # Wyjdź przy błędzie (chyba że obsługujemy ręcznie)
+set -u          # Traktuj niezdefiniowane zmienne jako błąd
+
+# =============================================================================
+# KOLORY I FUNKCJE LOGOWANIA
+# =============================================================================
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
-log_info()    { echo "${BLUE}[ENTRYPOINT]${NC} ℹ️  $1"; }
-log_ok()      { echo "${GREEN}[ENTRYPOINT]${NC} ✅ $1"; }
-log_warn()    { echo "${YELLOW}[ENTRYPOINT]${NC} ⚠️  $1"; }
-log_error()   { echo "${RED}[ENTRYPOINT]${NC} ❌ $1"; }
+# Timestamp ISO 8601 dla logów
+_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 1: Sprawdź wymagane zmienne środowiskowe
-# ─────────────────────────────────────────────────────────────────────────────
-log_info "Weryfikacja konfiguracji..."
+log_info()    { printf "%s ${BLUE}[ENTRYPOINT]${NC} ℹ️  %s\n"    "$(_ts)" "$*"; }
+log_ok()      { printf "%s ${GREEN}[ENTRYPOINT]${NC} ✅ %s\n"    "$(_ts)" "$*"; }
+log_warn()    { printf "%s ${YELLOW}[ENTRYPOINT]${NC} ⚠️  %s\n"  "$(_ts)" "$*"; }
+log_error()   { printf "%s ${RED}[ENTRYPOINT]${NC} ❌ %s\n"      "$(_ts)" "$*"; }
+log_section() { printf "\n%s ${CYAN}${BOLD}[ENTRYPOINT]${NC} ══ %s ══\n\n" "$(_ts)" "$*"; }
+
+# Wyjście z błędem — zawsze wypisz na stderr
+die() {
+    log_error "$*"
+    exit 1
+}
+
+# =============================================================================
+# KONFIGURACJA Z WARTOŚCIAMI DOMYŚLNYMI
+# =============================================================================
+
+APP_ENV="${APP_ENV:-development}"
+DEBUG="${DEBUG:-false}"
+API_PORT="${API_PORT:-8000}"
+
+DB_HOST="${DB_HOST:-}"
+DB_PORT="${DB_PORT:-1433}"
+DB_NAME="${DB_NAME:-}"
+DB_USER="${DB_USER:-}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+ODBC_DRIVER="${ODBC_DRIVER:-ODBC Driver 18 for SQL Server}"
+
+REDIS_URL="${REDIS_URL:-redis://redis:6379/0}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+
+ALEMBIC_MODE="${ALEMBIC_MODE:-upgrade}"
+RUN_SEEDS="${RUN_SEEDS:-auto}"
+
+DB_WAIT_RETRIES="${DB_WAIT_RETRIES:-30}"
+DB_WAIT_SLEEP="${DB_WAIT_SLEEP:-3}"
+REDIS_WAIT_RETRIES="${REDIS_WAIT_RETRIES:-15}"
+REDIS_WAIT_SLEEP="${REDIS_WAIT_SLEEP:-2}"
+
+# Katalog seederów — database/ jest w ROOT projektu, montowany przez docker-compose
+SEED_DIR="${SEED_DIR:-/app/database/seeds}"
+
+# =============================================================================
+# KROK 1: Weryfikacja wymaganych zmiennych środowiskowych
+# =============================================================================
+
+log_section "KROK 1: Weryfikacja konfiguracji"
 
 _MISSING=""
-for VAR in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD SECRET_KEY; do
-  if [ -z "$(eval echo \$$VAR)" ]; then
-    _MISSING="$_MISSING $VAR"
-  fi
+for VAR in DB_HOST DB_NAME DB_USER DB_PASSWORD SECRET_KEY; do
+    _VAL="$(eval echo "\${${VAR}:-}")"
+    if [ -z "$_VAL" ]; then
+        _MISSING="$_MISSING  - ${VAR}\n"
+    fi
 done
 
 if [ -n "$_MISSING" ]; then
-  log_error "Brakujące zmienne środowiskowe:$_MISSING"
-  log_error "Uzupełnij plik .env i uruchom ponownie."
-  exit 1
+    log_error "Brakujące wymagane zmienne środowiskowe:"
+    printf "%b" "$_MISSING"
+    log_error "Uzupełnij plik .env i uruchom ponownie."
+    die "Konfiguracja niekompletna — zatrzymuję start."
 fi
 
-log_ok "Konfiguracja OK — DB_HOST=${DB_HOST}, DB_NAME=${DB_NAME}, APP_ENV=${APP_ENV:-development}"
+# Walidacja ALEMBIC_MODE
+case "$ALEMBIC_MODE" in
+    upgrade|stamp|skip) ;;
+    *) die "Nieprawidłowa wartość ALEMBIC_MODE='$ALEMBIC_MODE'. Dozwolone: upgrade | stamp | skip" ;;
+esac
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 2: Czekaj na MSSQL
-# ─────────────────────────────────────────────────────────────────────────────
-log_info "Czekam na SQL Server (${DB_HOST}:${DB_PORT})..."
+# Walidacja RUN_SEEDS
+case "$RUN_SEEDS" in
+    auto|always|skip) ;;
+    *) die "Nieprawidłowa wartość RUN_SEEDS='$RUN_SEEDS'. Dozwolone: auto | always | skip" ;;
+esac
 
-# TrustServerCertificate i Encrypt z .env (domyślnie bezpieczne dla dev)
-_TRUST="${DB_TRUST_SERVER_CERTIFICATE:-true}"
-_ENCRYPT="${DB_ENCRYPT:-false}"
+log_ok "Konfiguracja:"
+log_ok "  APP_ENV      = $APP_ENV"
+log_ok "  DB_HOST      = $DB_HOST:$DB_PORT / $DB_NAME"
+log_ok "  REDIS_URL    = $REDIS_URL"
+log_ok "  ALEMBIC_MODE = $ALEMBIC_MODE"
+log_ok "  RUN_SEEDS    = $RUN_SEEDS"
+log_ok "  SEED_DIR     = $SEED_DIR"
 
-# Konwersja bool Python ↔ string ODBC
-if [ "$_TRUST" = "true" ] || [ "$_TRUST" = "True" ] || [ "$_TRUST" = "1" ]; then
-  _ODBC_TRUST="yes"
-else
-  _ODBC_TRUST="no"
-fi
+# =============================================================================
+# KROK 2: Tworzenie katalogów roboczych
+# =============================================================================
 
-if [ "$_ENCRYPT" = "true" ] || [ "$_ENCRYPT" = "True" ] || [ "$_ENCRYPT" = "1" ]; then
-  _ODBC_ENCRYPT="yes"
-else
-  _ODBC_ENCRYPT="no"
-fi
+log_section "KROK 2: Katalogi robocze"
 
-_MSSQL_RETRIES=30
-_MSSQL_DELAY=3
-_ATTEMPT=0
-
-until python3 - << EOF
-import os, sys, pyodbc
-
-conn_str = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=tcp:${DB_HOST},${DB_PORT};"
-    "DATABASE=${DB_NAME};"
-    "UID=${DB_USER};"
-    "PWD=${DB_PASSWORD};"
-    "Encrypt=${_ODBC_ENCRYPT};"
-    "TrustServerCertificate=${_ODBC_TRUST};"
-    "Connection Timeout=5;"
-)
-
-try:
-    conn = pyodbc.connect(conn_str, timeout=5)
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 AS ping")
-    cursor.fetchone()
-    conn.close()
-    sys.exit(0)
-except pyodbc.Error as e:
-    print(f"  Błąd połączenia: {e}", flush=True)
-    sys.exit(1)
-EOF
-do
-  _ATTEMPT=$((_ATTEMPT + 1))
-  if [ "$_ATTEMPT" -ge "$_MSSQL_RETRIES" ]; then
-    log_error "SQL Server niedostępny po ${_MSSQL_RETRIES} próbach (${DB_HOST}:${DB_PORT})"
-    log_error "Sprawdź: adres IP, port 1433, SQL Server Auth, firewall"
-    exit 1
-  fi
-  log_warn "SQL Server niedostępny (próba ${_ATTEMPT}/${_MSSQL_RETRIES}), czekam ${_MSSQL_DELAY}s..."
-  sleep "$_MSSQL_DELAY"
-done
-
-log_ok "SQL Server dostępny (${DB_HOST}:${DB_PORT}/${DB_NAME})"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 3: Czekaj na Redis
-# ─────────────────────────────────────────────────────────────────────────────
-log_info "Czekam na Redis..."
-
-_REDIS_RETRIES=15
-_REDIS_ATTEMPT=0
-
-until python3 - << EOF
-import os, sys
-try:
-    import redis as _redis
-    # Parsuj REDIS_URL
-    url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-    r = _redis.from_url(url, socket_connect_timeout=3)
-    r.ping()
-    sys.exit(0)
-except Exception as e:
-    print(f"  Błąd Redis: {e}", flush=True)
-    sys.exit(1)
-EOF
-do
-  _REDIS_ATTEMPT=$((_REDIS_ATTEMPT + 1))
-  if [ "$_REDIS_ATTEMPT" -ge "$_REDIS_RETRIES" ]; then
-    log_error "Redis niedostępny po ${_REDIS_RETRIES} próbach"
-    exit 1
-  fi
-  log_warn "Redis niedostępny (próba ${_REDIS_ATTEMPT}/${_REDIS_RETRIES}), czekam 2s..."
-  sleep 2
-done
-
-log_ok "Redis dostępny"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 4: Utwórz katalogi robocze (na wypadek gdyby volume był pusty)
-# ─────────────────────────────────────────────────────────────────────────────
-log_info "Tworzenie katalogów roboczych..."
 mkdir -p /app/logs /app/snapshots /app/archives
 log_ok "Katalogi gotowe: /app/logs, /app/snapshots, /app/archives"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 5: Alembic — migracje bazy
-# ─────────────────────────────────────────────────────────────────────────────
-log_info "Uruchamiam migracje Alembic (alembic upgrade head)..."
+# =============================================================================
+# KROK 3: Czekaj na MSSQL
+# =============================================================================
 
-if alembic upgrade head; then
-  log_ok "Migracje zakończone pomyślnie"
-else
-  log_error "Migracje FAILED — sprawdź logi powyżej"
-  log_warn "Jeśli to pierwsze uruchomienie, sprawdź czy schemat dbo_ext istnieje w bazie"
-  exit 1
-fi
+log_section "KROK 3: Oczekiwanie na MSSQL ($DB_HOST:$DB_PORT)"
 
-log_info "Uruchamiam seedery (roles, permissions, admin, system_config)..."
+_db_retries=0
+until /opt/mssql-tools18/bin/sqlcmd \
+        -S "tcp:${DB_HOST},${DB_PORT}" \
+        -d "${DB_NAME}" \
+        -U "${DB_USER}" \
+        -P "${DB_PASSWORD}" \
+        -C -Q "SELECT 1 AS probe" \
+        -b -l 5 \
+        > /dev/null 2>&1; do
 
-SEED_DIR="/app/database/seeds"  # <--- tu musi wskazywać na to, co zmontowaliśmy w compose
+    _db_retries=$((_db_retries + 1))
 
-for FILE in 01_roles.sql 02_permissions.sql 03_role_permissions.sql 04_admin_user.sql 05_system_config.sql; do
-  PATH_SQL="${SEED_DIR}/${FILE}"
-  if [ -f "$PATH_SQL" ]; then
-    log_info "[SEED] uruchamiam ${FILE}"
-    /opt/mssql-tools18/bin/sqlcmd \
-      -S "tcp:${DB_HOST},${DB_PORT}" \
-      -d "${DB_NAME}" \
-      -U "${DB_USER}" \
-      -P "${DB_PASSWORD}" \
-      -C -b -I \
-      -i "$PATH_SQL" \
-      || { log_error "[SEED] ${FILE} FAILED"; exit 1; }
-  else
-    log_warn "[SEED] pomijam ${FILE} (brak pliku)"
-  fi
+    if [ "$_db_retries" -ge "$DB_WAIT_RETRIES" ]; then
+        die "MSSQL niedostępny po ${DB_WAIT_RETRIES} próbach (${DB_HOST}:${DB_PORT}/${DB_NAME}). Sprawdź połączenie sieciowe i dane logowania."
+    fi
+
+    # Exponential backoff z limitem 30 sekund
+    _sleep=$((DB_WAIT_SLEEP * _db_retries))
+    if [ "$_sleep" -gt 30 ]; then _sleep=30; fi
+
+    log_warn "MSSQL nie odpowiada (próba ${_db_retries}/${DB_WAIT_RETRIES}) — czekam ${_sleep}s..."
+    sleep "$_sleep"
 done
 
-log_ok "[SEED] gotowe."
+log_ok "MSSQL dostępny: ${DB_HOST}:${DB_PORT} / ${DB_NAME}"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KROK 6: Uruchom serwer
-# ─────────────────────────────────────────────────────────────────────────────
-log_ok "============================================="
-log_ok " System Windykacja — API startuje"
-log_ok " URL:  http://localhost:${API_PORT:-8000}"
-log_ok " Docs: http://localhost:${API_PORT:-8000}/api/v1/docs"
-log_ok " ENV:  ${APP_ENV:-development}"
-log_ok "============================================="
+# =============================================================================
+# KROK 4: Czekaj na Redis
+# =============================================================================
 
-if [ "${APP_ENV:-development}" = "development" ] || [ "${DEBUG:-false}" = "true" ]; then
-  # DEV: hot reload — zmiany w kodzie → automatyczny restart
-  log_info "Tryb: DEVELOPMENT (hot reload włączony)"
-  exec uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --reload \
-    --reload-dir /app \
-    --log-level warning \
-    --no-access-log
+log_section "KROK 4: Oczekiwanie na Redis"
+
+# UWAGA: Używamy Pythona zamiast redis-cli.
+# redis-cli NIE jest zainstalowany w obrazie FastAPI (python:3.12-slim).
+# Python z biblioteką redis jest zawsze dostępny (jest w requirements.txt).
+#
+# Skrypt pomocniczy: wysyła PING i czeka na PONG.
+# Obsługuje REDIS_URL z hasłem i bez (redis://:pass@host:port/db).
+
+_redis_ping() {
+    python3 - <<PYEOF
+import sys, os
+
+try:
+    import redis
+except ImportError:
+    # redis nie zainstalowany — fallback do gniazda TCP (tylko connectivity check)
+    import socket
+    url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+    # Wyciągnij host i port z URL
+    host = "redis"
+    port = 6379
+    try:
+        # Prosta ekstrakcja: redis://host:port/db lub redis://:pass@host:port/db
+        part = url.split("//", 1)[1]          # host:port/db lub :pass@host:port/db
+        if "@" in part:
+            part = part.split("@", 1)[1]       # host:port/db
+        part = part.split("/")[0]              # host:port
+        if ":" in part:
+            host, port_str = part.rsplit(":", 1)
+            port = int(port_str)
+        else:
+            host = part
+    except Exception:
+        pass
+    try:
+        s = socket.create_connection((host, port), timeout=3)
+        s.close()
+        sys.exit(0)
+    except Exception:
+        sys.exit(1)
+
+# redis zainstalowany — pełny PING z uwierzytelnieniem
+url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+password = os.environ.get("REDIS_PASSWORD") or None
+
+try:
+    client = redis.from_url(url, password=password, socket_connect_timeout=3, socket_timeout=3)
+    result = client.ping()
+    sys.exit(0 if result else 1)
+except Exception as e:
+    print(f"Redis PING błąd: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+_redis_retries=0
+until _redis_ping; do
+
+    _redis_retries=$((_redis_retries + 1))
+
+    if [ "$_redis_retries" -ge "$REDIS_WAIT_RETRIES" ]; then
+        die "Redis niedostępny po ${REDIS_WAIT_RETRIES} próbach (REDIS_URL=${REDIS_URL}). Sprawdź czy kontener redis działa: docker-compose ps"
+    fi
+
+    log_warn "Redis nie odpowiada (próba ${_redis_retries}/${REDIS_WAIT_RETRIES}) — czekam ${REDIS_WAIT_SLEEP}s..."
+    sleep "$REDIS_WAIT_SLEEP"
+done
+
+log_ok "Redis dostępny: ${REDIS_URL}"
+
+# =============================================================================
+# KROK 5: Weryfikacja schematu dbo_ext
+# =============================================================================
+
+log_section "KROK 5: Weryfikacja schematu dbo_ext"
+
+_SCHEMA_CHECK=$(/opt/mssql-tools18/bin/sqlcmd \
+    -S "tcp:${DB_HOST},${DB_PORT}" \
+    -d "${DB_NAME}" \
+    -U "${DB_USER}" \
+    -P "${DB_PASSWORD}" \
+    -C -b -h -1 \
+    -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.schemas WHERE name='dbo_ext';" \
+    2>/dev/null | tr -d ' \r\n' || echo "0")
+
+if [ "$_SCHEMA_CHECK" = "0" ] || [ -z "$_SCHEMA_CHECK" ]; then
+    log_warn "Schemat dbo_ext NIE ISTNIEJE w bazie ${DB_NAME}!"
+    log_warn "Uruchom DDL: sqlcmd -i database/ddl/000_create_schema.sql"
+    log_warn ""
+    log_warn "Jeśli używasz ALEMBIC_MODE=upgrade — Alembic spróbuje utworzyć schemat."
+    log_warn "Jeśli używasz ALEMBIC_MODE=stamp   — schemat MUSI istnieć wcześniej."
+
+    if [ "$ALEMBIC_MODE" = "stamp" ]; then
+        die "ALEMBIC_MODE=stamp wymaga istniejącego schematu dbo_ext. Uruchom DDL najpierw."
+    fi
 else
-  # PROD: bez hot reload, z większą liczbą workerów
-  log_info "Tryb: PRODUCTION"
-  exec uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --workers 2 \
-    --log-level warning \
-    --no-access-log \
-    --no-server-header
+    log_ok "Schemat dbo_ext istnieje w bazie ${DB_NAME}."
+
+    # Sprawdź ile tabel skw_ już istnieje
+    _SKW_COUNT=$(/opt/mssql-tools18/bin/sqlcmd \
+        -S "tcp:${DB_HOST},${DB_PORT}" \
+        -d "${DB_NAME}" \
+        -U "${DB_USER}" \
+        -P "${DB_PASSWORD}" \
+        -C -b -h -1 \
+        -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo_ext' AND t.name LIKE 'skw_%';" \
+        2>/dev/null | tr -d ' \r\n' || echo "0")
+
+    log_ok "Tabele skw_* w dbo_ext: ${_SKW_COUNT}/13"
+
+    # Ostrzeżenie gdy tabele istnieją ale ALEMBIC_MODE=upgrade
+    if [ "$_SKW_COUNT" -gt "0" ] && [ "$ALEMBIC_MODE" = "upgrade" ]; then
+        log_warn "Wykryto ${_SKW_COUNT} tabel skw_* w bazie."
+        log_warn "Jeśli DDL był wykonany ręcznie (sqlcmd), użyj ALEMBIC_MODE=stamp"
+        log_warn "aby uniknąć błędu 'Table already exists'."
+        log_warn "Kontynuuję z ALEMBIC_MODE=upgrade — migracja 0001 jest idempotentna (IF NOT EXISTS)."
+    fi
+fi
+
+# =============================================================================
+# KROK 6: Alembic — migracje
+# =============================================================================
+
+log_section "KROK 6: Alembic (ALEMBIC_MODE=${ALEMBIC_MODE})"
+
+cd /app
+
+case "$ALEMBIC_MODE" in
+
+    upgrade)
+        log_info "Uruchamiam: alembic upgrade head"
+        if alembic upgrade head; then
+            log_ok "Migracje zakończone pomyślnie."
+        else
+            _EXIT_CODE=$?
+            log_error "alembic upgrade head zakończone błędem (exit code: ${_EXIT_CODE})"
+            log_error ""
+            log_error "Możliwe przyczyny:"
+            log_error "  1. Tabele skw_* już istnieją (DDL przez sqlcmd) → użyj ALEMBIC_MODE=stamp"
+            log_error "  2. Błąd połączenia z bazą → sprawdź DB_HOST/DB_USER/DB_PASSWORD"
+            log_error "  3. Brak modelu w app/db/models/ → sprawdź import w alembic/env.py"
+            log_error "  4. Schemat dbo_ext nie istnieje → uruchom database/ddl/000_create_schema.sql"
+            die "Migracje FAILED — zatrzymuję start."
+        fi
+        ;;
+
+    stamp)
+        log_info "Uruchamiam: alembic stamp head"
+        log_info "(Tryb stamp: oznaczam bazę jako aktualną bez wykonywania migracji)"
+        log_info "Używaj po ręcznym uruchomieniu plików DDL przez sqlcmd."
+        if alembic stamp head; then
+            log_ok "alembic stamp head — zakończone pomyślnie."
+            log_ok "Baza danych oznaczona jako aktualna (revision: head)."
+        else
+            die "alembic stamp head FAILED — sprawdź konfigurację alembic.ini i env.py."
+        fi
+        ;;
+
+    skip)
+        log_warn "ALEMBIC_MODE=skip — pomijam migracje Alembic."
+        log_warn "UWAGA: Schema może być nieaktualna. Używaj tylko do debugowania."
+        ;;
+
+esac
+
+# Pokaż aktualną wersję po migracji
+_CURRENT=$(alembic current 2>/dev/null | head -1 || echo "nieznana")
+log_ok "Aktualna wersja Alembic: ${_CURRENT}"
+
+# =============================================================================
+# KROK 7: Seedery — dane inicjalne
+# =============================================================================
+
+log_section "KROK 7: Seedery (RUN_SEEDS=${RUN_SEEDS})"
+
+# Lista seederów w kolejności (seedery muszą być idempotentne: IF NOT EXISTS / MERGE)
+SEED_FILES="
+01_roles.sql
+02_permissions.sql
+03_role_permissions.sql
+04_admin_user.sql
+05_system_config.sql
+"
+
+_should_run_seeds=false
+
+case "$RUN_SEEDS" in
+    always)
+        _should_run_seeds=true
+        log_info "RUN_SEEDS=always — uruchamiam seedery bezwarunkowo."
+        ;;
+
+    skip)
+        log_info "RUN_SEEDS=skip — pomijam seedery."
+        ;;
+
+    auto)
+        # Sprawdź czy tabela skw_Roles ma jakiekolwiek dane
+        _ROLES_COUNT=$(/opt/mssql-tools18/bin/sqlcmd \
+            -S "tcp:${DB_HOST},${DB_PORT}" \
+            -d "${DB_NAME}" \
+            -U "${DB_USER}" \
+            -P "${DB_PASSWORD}" \
+            -C -b -h -1 \
+            -Q "SET NOCOUNT ON; IF OBJECT_ID(N'[dbo_ext].[skw_Roles]','U') IS NOT NULL SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM [dbo_ext].[skw_Roles] ELSE SELECT N'0';" \
+            2>/dev/null | tr -d ' \r\n' || echo "0")
+
+        if [ "$_ROLES_COUNT" = "0" ]; then
+            log_info "RUN_SEEDS=auto — tabela skw_Roles jest pusta → uruchamiam seedery."
+            _should_run_seeds=true
+        else
+            log_info "RUN_SEEDS=auto — tabela skw_Roles ma ${_ROLES_COUNT} rekordów → pomijam seedery."
+        fi
+        ;;
+esac
+
+if [ "$_should_run_seeds" = "true" ]; then
+    if [ ! -d "$SEED_DIR" ]; then
+        log_warn "Katalog seederów nie istnieje: ${SEED_DIR}"
+        log_warn "Sprawdź czy docker-compose montuje database/:"
+        log_warn "  volumes:"
+        log_warn "    - ./database:/app/database:ro"
+        log_warn "Pomijam seedery — aplikacja startuje bez danych inicjalnych."
+    else
+        _seed_ok=0
+        _seed_fail=0
+
+        for SEED_FILE in $SEED_FILES; do
+            SEED_FILE=$(echo "$SEED_FILE" | tr -d ' ')
+            [ -z "$SEED_FILE" ] && continue
+
+            SEED_PATH="${SEED_DIR}/${SEED_FILE}"
+
+            if [ ! -f "$SEED_PATH" ]; then
+                log_warn "[SEED] Pomijam (brak pliku): ${SEED_FILE}"
+                continue
+            fi
+
+            log_info "[SEED] Uruchamiam: ${SEED_FILE}"
+
+            if /opt/mssql-tools18/bin/sqlcmd \
+                    -S "tcp:${DB_HOST},${DB_PORT}" \
+                    -d "${DB_NAME}" \
+                    -U "${DB_USER}" \
+                    -P "${DB_PASSWORD}" \
+                    -C -b -I \
+                    -i "$SEED_PATH" \
+                    > /dev/null 2>&1; then
+                log_ok "[SEED] ${SEED_FILE} — OK"
+                _seed_ok=$((_seed_ok + 1))
+            else
+                log_error "[SEED] ${SEED_FILE} — BŁĄD"
+                _seed_fail=$((_seed_fail + 1))
+                # Seedery NIE blokują startu — logujemy błąd i kontynuujemy
+                # Aby zablokować start: zmień na: die "[SEED] Krytyczny błąd seeda — zatrzymuję."
+            fi
+        done
+
+        log_ok "Seedery zakończone: ${_seed_ok} OK, ${_seed_fail} BŁĘDÓW."
+
+        if [ "$_seed_fail" -gt "0" ]; then
+            log_warn "Niektóre seedery się nie powiodły."
+            log_warn "Sprawdź czy pliki SQL zawierają IF NOT EXISTS / MERGE (idempotentność)."
+        fi
+    fi
+fi
+
+# =============================================================================
+# KROK 8: Start serwera
+# =============================================================================
+
+log_section "KROK 8: Start uvicorn"
+
+log_ok "════════════════════════════════════════════"
+log_ok " System Windykacja — API"
+log_ok " URL:  http://0.0.0.0:${API_PORT}"
+log_ok " Docs: http://0.0.0.0:${API_PORT}/api/v1/docs"
+log_ok " ENV:  ${APP_ENV}"
+log_ok " DB:   ${DB_HOST}:${DB_PORT}/${DB_NAME}"
+log_ok "════════════════════════════════════════════"
+
+if [ "$APP_ENV" = "development" ] || [ "$DEBUG" = "true" ]; then
+    # ── DEV: hot reload — zmiana kodu → automatyczny restart ─────────────────
+    log_info "Tryb: DEVELOPMENT (hot reload włączony)"
+    exec uvicorn app.main:app \
+        --host 0.0.0.0 \
+        --port "${API_PORT}" \
+        --reload \
+        --reload-dir /app/app \
+        --log-level warning \
+        --no-access-log
+else
+    # ── PROD: bez hot reload, większa liczba workerów ─────────────────────────
+    log_info "Tryb: PRODUCTION"
+    exec uvicorn app.main:app \
+        --host 0.0.0.0 \
+        --port "${API_PORT}" \
+        --workers 2 \
+        --log-level warning \
+        --no-access-log \
+        --no-server-header \
+        --proxy-headers \
+        --forwarded-allow-ips "*"
 fi

@@ -19,7 +19,7 @@ from .base import Base
 
 
 class MasterAccessLog(Base):
-    __tablename__ = "MasterAccessLog"
+    __tablename__ = "skw_MasterAccessLog"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

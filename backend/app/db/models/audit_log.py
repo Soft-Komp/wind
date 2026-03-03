@@ -20,7 +20,7 @@ ACTION_CATEGORIES = frozenset({
 
 
 class AuditLog(Base):
-    __tablename__ = "AuditLog"
+    __tablename__ = "skw_AuditLog"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

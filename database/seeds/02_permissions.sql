@@ -32,7 +32,7 @@ BEGIN TRY
     -- =========================================================================
     -- MERGE: 83 uprawnienia — INSERT jeśli nie istnieje
     -- =========================================================================
-    MERGE [dbo_ext].[Permissions] AS target
+    MERGE [dbo_ext].[skw_Permissions] AS target
     USING (
         SELECT PermissionName, Description, Category FROM (VALUES
 
@@ -352,12 +352,12 @@ BEGIN TRY
         [Category],
         COUNT(*) AS Ilosc,
         SUM(CASE WHEN [IsActive] = 1 THEN 1 ELSE 0 END) AS Aktywne
-    FROM [dbo_ext].[Permissions]
+    FROM [dbo_ext].[skw_Permissions]
     GROUP BY [Category]
     ORDER BY [Category];
 
     -- Sprawdzenie sumy — powinno być 83
-    DECLARE @total INT = (SELECT COUNT(*) FROM [dbo_ext].[Permissions] WHERE [IsActive] = 1);
+    DECLARE @total INT = (SELECT COUNT(*) FROM [dbo_ext].[skw_Permissions] WHERE [IsActive] = 1);
     PRINT '';
     PRINT 'Łącznie aktywnych uprawnień: ' + CAST(@total AS NVARCHAR);
     IF @total < 83

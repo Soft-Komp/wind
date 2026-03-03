@@ -14,7 +14,7 @@ from .base import Base, _utcnow
 
 
 class RolePermission(Base):
-    __tablename__ = "RolePermissions"
+    __tablename__ = "skw_RolePermissions"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "Przypisanie uprawnień do ról (Many-to-Many)",

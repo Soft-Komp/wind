@@ -13,7 +13,7 @@ from .base import Base
 
 
 class RefreshToken(Base):
-    __tablename__ = "RefreshTokens"
+    __tablename__ = "skw_RefreshTokens"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": "JWT Refresh tokeny. Token kolumna przechowuje HASH sha256 tokenu.",

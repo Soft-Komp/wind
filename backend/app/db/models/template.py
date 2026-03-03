@@ -13,7 +13,7 @@ TEMPLATE_TYPES = frozenset({"email", "sms", "print"})
 
 
 class Template(AuditMixin, Base):
-    __tablename__ = "Templates"
+    __tablename__ = "skw_Templates"
     __table_args__ = {
         "schema": "dbo_ext",
         "comment": (

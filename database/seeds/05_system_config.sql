@@ -35,7 +35,7 @@ BEGIN TRY
     -- MERGE: 8 kluczy konfiguracyjnych
     -- Warunek UPDATE: nie nadpisuj master_key.pin_hash jeśli już ustawiony
     -- =========================================================================
-    MERGE [dbo_ext].[SystemConfig] AS target
+    MERGE [dbo_ext].[skw_SystemConfig] AS target
     USING (
         SELECT ConfigKey, ConfigValue, Description FROM (VALUES
 
@@ -124,14 +124,14 @@ BEGIN TRY
         [IsActive],
         CONVERT(NVARCHAR, [CreatedAt], 120) AS CreatedAt,
         CONVERT(NVARCHAR, [UpdatedAt], 120) AS UpdatedAt
-    FROM [dbo_ext].[SystemConfig]
+    FROM [dbo_ext].[skw_SystemConfig]
     ORDER BY [ConfigKey];
 
     -- Ostrzeżenie jeśli pin_hash pusty
     DECLARE @pin_hash NVARCHAR(MAX);
     SET @pin_hash = (
         SELECT [ConfigValue]
-        FROM [dbo_ext].[SystemConfig]
+        FROM [dbo_ext].[skw_SystemConfig]
         WHERE [ConfigKey] = N'master_key.pin_hash'
     );
 
