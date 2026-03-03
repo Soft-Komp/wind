@@ -118,7 +118,7 @@ class User(Base):
     role_id: Mapped[int] = mapped_column(
         "RoleID",
         Integer,
-        ForeignKey("dbo_ext.Roles.ID_ROLE", ondelete="RESTRICT"),
+        ForeignKey("dbo_ext.skw_Roles.ID_ROLE", ondelete="RESTRICT"),
         nullable=False,
         comment="FK → Roles.ID_ROLE — RESTRICT: nie można usunąć roli z userami",
     )

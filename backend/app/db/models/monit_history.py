@@ -45,7 +45,7 @@ class MonitHistory(Base):
     id_user: Mapped[int | None] = mapped_column(
         "ID_USER",
         Integer,
-        ForeignKey("dbo_ext.Users.ID_USER", ondelete="SET NULL"),
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="SET NULL"),
         nullable=True,
         comment="Kto zlecił wysyłkę. NULL = automatyczny task ARQ.",
     )
@@ -56,7 +56,7 @@ class MonitHistory(Base):
     template_id: Mapped[int | None] = mapped_column(
         "TemplateID",
         Integer,
-        ForeignKey("dbo_ext.Templates.ID_TEMPLATE", ondelete="SET NULL"),
+        ForeignKey("dbo_ext.skw_Templates.ID_TEMPLATE", ondelete="SET NULL"),
         nullable=True,
         comment="FK → Templates. NULL jeśli wysłano bez szablonu.",
     )

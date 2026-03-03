@@ -267,7 +267,7 @@ BEGIN TRY
         CREATE TABLE [dbo_ext].[skw_RefreshTokens] (
             [ID_TOKEN]    BIGINT         IDENTITY(1,1) NOT NULL,
             [ID_USER]     INT                          NOT NULL,
-            [TokenHash]   NVARCHAR(255)                NOT NULL,
+            [Token]       NVARCHAR(500)                NOT NULL,
             [IsRevoked]   BIT            NOT NULL CONSTRAINT [DF_skw_RefreshTokens_IsRevoked]  DEFAULT (0),
             [ExpiresAt]   DATETIME                     NOT NULL,
             [RevokedAt]   DATETIME                         NULL,
@@ -275,7 +275,7 @@ BEGIN TRY
             [IPAddress]   NVARCHAR(45)                     NULL,
             [CreatedAt]   DATETIME       NOT NULL CONSTRAINT [DF_skw_RefreshTokens_CreatedAt] DEFAULT (GETDATE()),
             CONSTRAINT [PK_skw_RefreshTokens]         PRIMARY KEY CLUSTERED ([ID_TOKEN] ASC),
-            CONSTRAINT [UQ_skw_RefreshTokens_Hash]     UNIQUE ([TokenHash]),
+            CONSTRAINT [UQ_skw_RefreshTokens_Token]    UNIQUE ([Token]),
             CONSTRAINT [FK_skw_RefreshTokens_UserID]   FOREIGN KEY ([ID_USER]) REFERENCES [dbo_ext].[skw_Users] ([ID_USER]) ON DELETE CASCADE
         );
         CREATE NONCLUSTERED INDEX [IX_skw_RefreshTokens_UserID]    ON [dbo_ext].[skw_RefreshTokens] ([ID_USER] ASC, [IsRevoked] ASC);

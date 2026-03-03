@@ -54,8 +54,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Stałe — nazwy widoków (NIGDY nie zmieniać bez migracji Alembic)
 # ---------------------------------------------------------------------------
-VIEW_KONTRAHENCI: str = "dbo.VIEW_kontrahenci"
-VIEW_ROZRACHUNKI_FAKTUR: str = "dbo.VIEW_rozrachunki_faktur"
+VIEW_KONTRAHENCI: str = "dbo.skw_kontrahenci"
+VIEW_ROZRACHUNKI_FAKTUR: str = "dbo.skw_rozrachunki_faktur"
 
 # Maksymalna długość parametrów tekstowych (ochrona przed payload injection)
 _MAX_SEARCH_LEN: int = 200
@@ -76,21 +76,15 @@ _TRANSIENT_SQL_STATES: frozenset[str] = frozenset({"08001", "08S01", "HYT00", "H
 _COLS_KONTRAHENCI = """
     ID_KONTRAHENTA,
     NazwaKontrahenta,
-    Skrot,
-    NIP,
-    Ulica,
-    KodPocztowy,
-    Miejscowosc,
     Email,
     Telefon,
     SumaDlugu,
     LiczbaFaktur,
-    LiczbaMonitow,
+    NajstarszaFaktura,
+    DniPrzeterminowania,
     OstatniMonitData,
     OstatniMonitTyp,
-    KategoriaWieku,
-    MaxDniPrzeterminowania,
-    LiczbaFakturPrzeterminowanych
+    LiczbaMonitow
 """
 
 # Kolumny SELECT dla VIEW_rozrachunki_faktur — jawna lista
@@ -141,13 +135,11 @@ class DebtorFilterParams:
     # Dozwolone kolumny sortowania — whitelist (nigdy interpolacja string z frontendu!)
     _ALLOWED_ORDER_BY: frozenset[str] = field(
         default=frozenset({
-            "SumaDlugu", "NazwaKontrahenta", "MaxDniPrzeterminowania",
+            "SumaDlugu", "NazwaKontrahenta", "DniPrzeterminowania",
             "OstatniMonitData", "LiczbaFaktur", "LiczbaMonitow",
-            "LiczbaFakturPrzeterminowanych",
+            "NajstarszaFaktura",
         }),
-        init=False,
-        repr=False,
-        compare=False,
+        init=False, repr=False, compare=False,
     )
     _ALLOWED_AGE_CATEGORIES: frozenset[str] = field(
         default=frozenset({
@@ -382,14 +374,15 @@ class WaproConnectionPool:
         )
 
     def _create_connection(self) -> pyodbc.Connection:
-        """Tworzy nowe połączenie pyodbc."""
         conn = pyodbc.connect(
             self._connection_string,
-            autocommit=True,   # WAPRO: tylko odczyt — autocommit OK
+            autocommit=True,
             timeout=self._timeout,
         )
-        # Ustawiamy encoding dla NVARCHAR (MSSQL 2022)
-        conn.setdecimalrounding(False)
+        # Encoding dla poprawnej obsługi polskich znaków NVARCHAR
+        conn.setdecoding(pyodbc.SQL_CHAR,  encoding="utf-8")
+        conn.setdecoding(pyodbc.SQL_WCHAR, encoding="utf-8")
+        conn.setencoding(encoding="utf-8")
         logger.debug("Nowe połączenie pyodbc utworzone")
         return conn
 
@@ -711,11 +704,9 @@ def _build_debtors_query(
     # search_query — LIKE z escape specjalnych znaków
     if params.search_query:
         escaped = _escape_like(params.search_query)
-        conditions.append(
-            "(NazwaKontrahenta LIKE ? OR Skrot LIKE ? OR NIP LIKE ?)"
-        )
+        conditions.append("NazwaKontrahenta LIKE ?")
         like_val = f"%{escaped}%"
-        query_params.extend([like_val, like_val, like_val])
+        query_params.append(like_val)
 
     # Kwoty
     if params.min_debt_amount is not None:
@@ -741,17 +732,12 @@ def _build_debtors_query(
 
     # Dni przeterminowania
     if params.overdue_days_min is not None:
-        conditions.append("MaxDniPrzeterminowania >= ?")
+        conditions.append("DniPrzeterminowania >= ?")   # było: MaxDniPrzeterminowania
         query_params.append(params.overdue_days_min)
 
     if params.overdue_days_max is not None:
-        conditions.append("MaxDniPrzeterminowania <= ?")
+        conditions.append("DniPrzeterminowania <= ?")   # było: MaxDniPrzeterminowania
         query_params.append(params.overdue_days_max)
-
-    # Kategoria wieku — whitelist już sprawdzona w DebtorFilterParams
-    if params.age_category is not None:
-        conditions.append("KategoriaWieku = ?")
-        query_params.append(params.age_category)
 
     # Email / telefon
     if params.has_email is True:

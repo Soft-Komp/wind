@@ -23,14 +23,14 @@ class RolePermission(Base):
     id_role: Mapped[int] = mapped_column(
         "ID_ROLE",
         Integer,
-        ForeignKey("dbo_ext.Roles.ID_ROLE", ondelete="CASCADE"),
+        ForeignKey("dbo_ext.skw_Roles.ID_ROLE", ondelete="CASCADE"),
         primary_key=True,
         comment="FK → Roles",
     )
     id_permission: Mapped[int] = mapped_column(
         "ID_PERMISSION",
         Integer,
-        ForeignKey("dbo_ext.Permissions.ID_PERMISSION", ondelete="CASCADE"),
+        ForeignKey("dbo_ext.skw_Permissions.ID_PERMISSION", ondelete="CASCADE"),
         primary_key=True,
         comment="FK → Permissions",
     )

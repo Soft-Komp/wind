@@ -30,7 +30,7 @@ class OtpCode(Base):
     id_user: Mapped[int] = mapped_column(
         "ID_USER",
         Integer,
-        ForeignKey("dbo_ext.Users.ID_USER", ondelete="CASCADE"),
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="CASCADE"),
         nullable=False,
         comment="FK → Users",
     )

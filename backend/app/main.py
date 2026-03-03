@@ -46,6 +46,8 @@ from starlette.types import ASGIApp
 from app.core.config import get_settings
 from app.core.logging_setup import setup_logging
 from app.db.session import close_db_engine, get_async_session, get_redis_client
+from app.db.wapro import initialize_pool as wapro_initialize_pool
+from app.db.wapro import shutdown_pool as wapro_shutdown_pool
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logger modułu (skonfigurowany przez setup_logging w lifespan)
@@ -775,6 +777,30 @@ async def lifespan(app: FastAPI):
     )
 
     # ── Aplikacja działa ──────────────────────────────────────────────────────
+    # ── KROK 7: WAPRO connection pool (pyodbc, read-only) ────────────────────
+    try:
+        wapro_initialize_pool(
+            connection_string=settings.get_odbc_dsn(),
+            pool_size=5,
+            timeout=30,
+            executor_workers=10,
+        )
+        logger.info(
+            orjson.dumps({
+                "event": "startup_wapro_pool_ok",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+    except Exception as exc:
+        logger.critical(
+            orjson.dumps({
+                "event": "startup_wapro_pool_error",
+                "error": str(exc),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise  # WAPRO niedostępne = aplikacja nie startuje
+
     yield
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -791,6 +817,25 @@ async def lifespan(app: FastAPI):
     )
 
     try:
+        # ── Zamknij WAPRO pool ────────────────────────────────────────────────────
+        try:
+            wapro_shutdown_pool()
+            logger.info(
+                orjson.dumps({
+                    "event": "app_shutdown_wapro_closed",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
+        except Exception as exc:
+            logger.error(
+                orjson.dumps({
+                    "event": "app_shutdown_wapro_error",
+                    "error": str(exc),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
+
+        # ← istniejący close_db_engine() już tu jest
         await close_db_engine()
         logger.info(
             orjson.dumps(

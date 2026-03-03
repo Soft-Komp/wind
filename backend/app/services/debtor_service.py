@@ -140,7 +140,7 @@ class DebtorListParams:
     has_active_monit: Optional[bool] = None
     page: int = 1
     page_size: int = 50
-    sort_by: str = "suma_dlugu"
+    sort_by: str = "total_debt"
     sort_desc: bool = True
 
     def __post_init__(self) -> None:
@@ -178,22 +178,35 @@ class DebtorListParams:
             object.__setattr__(self, "overdue_max_days", None)
 
     def to_wapro_params(self) -> DebtorFilterParams:
-        """
-        Konwertuje parametry warstwy biznesowej na parametry wapro.py.
+        # Mapowanie przyjaznych nazw frontendu → kolumny SQL widoku
+        _SORT_MAP: dict[str, str] = {
+            "total_debt":    "SumaDlugu",
+            "name":          "NazwaKontrahenta",
+            "overdue_days":  "DniPrzeterminowania",
+            "invoice_count": "LiczbaFaktur",
+            "monit_count":   "LiczbaMonitow",
+            "last_monit":    "OstatniMonitData",
+            # SQL pass-through
+            "SumaDlugu":          "SumaDlugu",
+            "NazwaKontrahenta":   "NazwaKontrahenta",
+            "DniPrzeterminowania":"DniPrzeterminowania",
+            "LiczbaFaktur":       "LiczbaFaktur",
+            "LiczbaMonitow":      "LiczbaMonitow",
+            "OstatniMonitData":   "OstatniMonitData",
+            "NajstarszaFaktura":  "NajstarszaFaktura",
+        }
+        order_by_sql = _SORT_MAP.get(self.sort_by, "SumaDlugu")  # fallback bezpieczny
 
-        Returns:
-            DebtorFilterParams gotowy do przekazania do wapro.get_debtors().
-        """
         return DebtorFilterParams(
-            search=self.search,
-            min_debt=self.min_debt,
-            max_debt=self.max_debt,
-            overdue_min_days=self.overdue_min_days,
-            overdue_max_days=self.overdue_max_days,
-            page=self.page,
-            page_size=self.page_size,
-            sort_by=self.sort_by,
-            sort_desc=self.sort_desc,
+            search_query=self.search,
+            min_debt_amount=self.min_debt,
+            max_debt_amount=self.max_debt,
+            overdue_days_min=self.overdue_min_days,
+            overdue_days_max=self.overdue_max_days,
+            limit=self.page_size,
+            offset=(self.page - 1) * self.page_size,
+            order_by=order_by_sql,
+            order_dir="DESC" if self.sort_desc else "ASC",
         )
 
     def cache_hash(self) -> str:
@@ -439,7 +452,6 @@ async def get_list(
         audit_service.log(
             db=db,
             action="debtors_list_viewed",
-            action_category="Debtors",
             entity_type="Debtor",
             details={
                 "from_cache": True,
@@ -454,7 +466,7 @@ async def get_list(
     # Pobierz z WAPRO
     try:
         wapro_params = params.to_wapro_params()
-        wapro_result = await get_debtors(wapro, wapro_params)
+        wapro_result = await get_debtors(wapro_params)
     except Exception as exc:
         logger.error(
             "Błąd pobierania listy dłużników z WAPRO",
@@ -470,8 +482,8 @@ async def get_list(
         )
         raise DebtorWaproError(f"Nie udało się pobrać listy dłużników: {exc}") from exc
 
-    total = wapro_result.get("total", 0)
-    items = wapro_result.get("items", [])
+    total = wapro_result.total_count or 0
+    items = wapro_result.rows
     total_pages = (total + params.page_size - 1) // params.page_size if total > 0 else 0
 
     result = {
@@ -503,7 +515,6 @@ async def get_list(
     audit_service.log(
         db=db,
         action="debtors_list_viewed",
-        action_category="Debtors",
         entity_type="Debtor",
         details={
             "from_cache": False,
@@ -578,7 +589,6 @@ async def get_by_id(
         audit_service.log(
             db=db,
             action="debtors_view_details",
-            action_category="Debtors",
             entity_type="Debtor",
             entity_id=debtor_id,
             details={"from_cache": True},
@@ -642,7 +652,6 @@ async def get_by_id(
     audit_service.log(
         db=db,
         action="debtors_view_details",
-        action_category="Debtors",
         entity_type="Debtor",
         entity_id=debtor_id,
         details={
@@ -747,7 +756,6 @@ async def get_invoices(
     audit_service.log(
         db=db,
         action="debtors_view_invoices",
-        action_category="Debtors",
         entity_type="Debtor",
         entity_id=debtor_id,
         details={"total_invoices": total, "page": page, "filter_paid": paid},
