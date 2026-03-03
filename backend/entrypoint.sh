@@ -313,6 +313,90 @@ else
 fi
 
 # =============================================================================
+# KROK 5b: Tworzenie schematu dbo_ext (jeśli nie istnieje)
+# =============================================================================
+
+log_section "KROK 5b: Bootstrap schematu dbo_ext"
+
+# Ścieżka do pliku DDL — montowana przez docker-compose
+# volumes:
+#   - ./database:/app/database:ro
+_SCHEMA_DDL="${SEED_DIR%/seeds}/ddl/000_create_schema.sql"
+
+# Sprawdź czy schemat już istnieje (to samo zapytanie co w KROKU 5)
+_SCHEMA_EXISTS=$(/opt/mssql-tools18/bin/sqlcmd \
+    -S "tcp:${DB_HOST},${DB_PORT}" \
+    -d "${DB_NAME}" \
+    -U "${DB_USER}" \
+    -P "${DB_PASSWORD}" \
+    -C -b -h -1 \
+    -Q "SET NOCOUNT ON; SELECT CAST(ISNULL(SCHEMA_ID(N'dbo_ext'), 0) AS NVARCHAR(10));" \
+    2>/dev/null | tr -d ' \r\n' || echo "0")
+
+if [ "$_SCHEMA_EXISTS" != "0" ]; then
+    log_ok "Schemat dbo_ext istnieje (schema_id=${_SCHEMA_EXISTS}) — pomijam DDL."
+else
+    log_info "Schemat dbo_ext NIE ISTNIEJE — uruchamiam DDL bootstrap..."
+
+    # Czy plik DDL jest dostępny?
+    if [ ! -f "$_SCHEMA_DDL" ]; then
+        log_error "Brak pliku DDL: ${_SCHEMA_DDL}"
+        log_error "Upewnij się że docker-compose montuje katalog database/:"
+        log_error "  volumes:"
+        log_error "    - ./database:/app/database:ro"
+        die "Nie mogę utworzyć schematu dbo_ext — brak pliku DDL. Zatrzymuję start."
+    fi
+
+    log_info "Plik DDL: ${_SCHEMA_DDL}"
+
+    # Wykonaj DDL — przechwytuj stdout i stderr
+    _DDL_OUT=$(/opt/mssql-tools18/bin/sqlcmd \
+        -S "tcp:${DB_HOST},${DB_PORT}" \
+        -d "${DB_NAME}" \
+        -U "${DB_USER}" \
+        -P "${DB_PASSWORD}" \
+        -C -b -I -r1 \
+        -i "$_SCHEMA_DDL" \
+        2>&1)
+    _DDL_RC=$?
+
+    # Pokaż output niezależnie od wyniku
+    if [ -n "$_DDL_OUT" ]; then
+        log_info "DDL output:"
+        printf '%s\n' "$_DDL_OUT" | while IFS= read -r _line; do
+            [ -n "$_line" ] && log_info "  $_line"
+        done
+    fi
+
+    if [ "$_DDL_RC" -eq 0 ]; then
+        log_ok "Schemat dbo_ext utworzony pomyślnie."
+    else
+        log_error "Błąd tworzenia schematu dbo_ext (exit code: ${_DDL_RC})"
+        log_error "Sprawdź uprawnienia: użytkownik '${DB_USER}' musi mieć prawo CREATE SCHEMA."
+        log_error "Na SQL Server: GRANT CREATE SCHEMA TO [${DB_USER}];"
+        log_error "Lub uruchom ręcznie jako sa:"
+        log_error "  sqlcmd -S tcp:HOST,PORT -d ${DB_NAME} -U sa -P PASS -C -b -i database/ddl/000_create_schema.sql"
+        die "Bootstrap schematu dbo_ext nieudany — zatrzymuję start."
+    fi
+
+    # Weryfikacja końcowa — upewnij się że schemat faktycznie istnieje
+    _SCHEMA_VERIFY=$(/opt/mssql-tools18/bin/sqlcmd \
+        -S "tcp:${DB_HOST},${DB_PORT}" \
+        -d "${DB_NAME}" \
+        -U "${DB_USER}" \
+        -P "${DB_PASSWORD}" \
+        -C -b -h -1 \
+        -Q "SET NOCOUNT ON; SELECT CAST(ISNULL(SCHEMA_ID(N'dbo_ext'), 0) AS NVARCHAR(10));" \
+        2>/dev/null | tr -d ' \r\n' || echo "0")
+
+    if [ "$_SCHEMA_VERIFY" = "0" ]; then
+        die "Weryfikacja nieudana: schemat dbo_ext nadal nie istnieje po DDL. Sprawdź uprawnienia."
+    fi
+
+    log_ok "Weryfikacja: schemat dbo_ext istnieje (schema_id=${_SCHEMA_VERIFY})."
+fi
+
+# =============================================================================
 # KROK 6: Alembic — migracje
 # =============================================================================
 
@@ -410,55 +494,278 @@ case "$RUN_SEEDS" in
 esac
 
 if [ "$_should_run_seeds" = "true" ]; then
+
+    # ── Katalog seederów istnieje? ────────────────────────────────────────────
     if [ ! -d "$SEED_DIR" ]; then
         log_warn "Katalog seederów nie istnieje: ${SEED_DIR}"
-        log_warn "Sprawdź czy docker-compose montuje database/:"
+        log_warn "Upewnij się że docker-compose montuje database/:"
         log_warn "  volumes:"
         log_warn "    - ./database:/app/database:ro"
         log_warn "Pomijam seedery — aplikacja startuje bez danych inicjalnych."
+
     else
+        # ── Inicjalizacja katalogów logów ─────────────────────────────────────
+        # WAŻNE: używamy || true żeby set -e nie zabił skryptu przy błędzie IO
+        SEED_LOG_DIR="/app/logs/seeds"
+        _RUN_TS=$(date '+%Y%m%d_%H%M%S')
+        _RUN_DATE=$(date '+%Y-%m-%dT%H:%M:%S%z')
+        _REPORT_FILE="${SEED_LOG_DIR}/report_$(date '+%Y-%m-%d').jsonl"
+
+        # Spróbuj utworzyć katalog — raportuj błąd ale nie zabijaj startu
+        if mkdir -p "$SEED_LOG_DIR" 2>/dev/null; then
+            _LOGS_AVAILABLE=true
+            log_info "Logi seederów → ${SEED_LOG_DIR}/"
+            log_info "Raport JSONL   → ${_REPORT_FILE}"
+        else
+            _LOGS_AVAILABLE=false
+            log_warn "Nie można utworzyć katalogu logów: ${SEED_LOG_DIR}"
+            log_warn "Logi seederów będą tylko na konsoli."
+            log_warn "Sprawdź uprawnienia do /app/logs/ (Docker volume?)"
+        fi
+
+        # ── Pliki tymczasowe — tworzymy je od razu (touch) ───────────────────
+        _TMP_OUT="/tmp/sw_seed_out_$$"
+        _TMP_ERR="/tmp/sw_seed_err_$$"
+        touch "$_TMP_OUT" "$_TMP_ERR" 2>/dev/null || {
+            # /tmp niedostępny? Ekstremalny edge-case, ale obsługujemy
+            _TMP_OUT="/app/logs/seed_tmp_out_$$"
+            _TMP_ERR="/app/logs/seed_tmp_err_$$"
+            touch "$_TMP_OUT" "$_TMP_ERR" 2>/dev/null || true
+        }
+
+        # Cleanup przy wyjściu z kontenera
+        trap 'rm -f "$_TMP_OUT" "$_TMP_ERR" 2>/dev/null; trap - EXIT INT TERM' \
+            EXIT INT TERM
+
+        # ── Funkcja pomocnicza: dopisz wpis do JSONL raportu ─────────────────
+        _report_jsonl() {
+            # Argumenty: seed status exit_code duration_ts error log_path
+            _r_seed="$1"; _r_status="$2"; _r_code="$3"
+            _r_dur="$4";  _r_err="$5";   _r_log="$6"
+            if [ "$_LOGS_AVAILABLE" = "true" ]; then
+                printf '{"ts":"%s","run_ts":"%s","seed":"%s","status":"%s","exit_code":%s,"duration_sec":"%s","error":"%s","log":"%s"}\n' \
+                    "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+                    "$_RUN_TS" \
+                    "$_r_seed" \
+                    "$_r_status" \
+                    "$_r_code" \
+                    "$_r_dur" \
+                    "$_r_err" \
+                    "$_r_log" \
+                    >> "$_REPORT_FILE" 2>/dev/null || true
+            fi
+        }
+
+        # ── Liczniki ──────────────────────────────────────────────────────────
         _seed_ok=0
         _seed_fail=0
+        _seed_skip=0
 
+        # ════════════════════════════════════════════════════════════════════
+        # PĘTLA — każdy seed oddzielnie
+        # ════════════════════════════════════════════════════════════════════
         for SEED_FILE in $SEED_FILES; do
-            SEED_FILE=$(echo "$SEED_FILE" | tr -d ' ')
+
+            # Trim whitespace (newline z wieloliniowej zmiennej)
+            SEED_FILE=$(printf '%s' "$SEED_FILE" | tr -d ' \t\r\n')
             [ -z "$SEED_FILE" ] && continue
 
             SEED_PATH="${SEED_DIR}/${SEED_FILE}"
+            _SEED_NAME="${SEED_FILE%.sql}"   # np. "01_roles"
 
+            # ── Plik seeda istnieje? ──────────────────────────────────────────
             if [ ! -f "$SEED_PATH" ]; then
-                log_warn "[SEED] Pomijam (brak pliku): ${SEED_FILE}"
+                log_warn "[SEED] Pomijam — brak pliku: ${SEED_PATH}"
+                _seed_skip=$((_seed_skip + 1))
+                _report_jsonl "$SEED_FILE" "SKIP" "0" "0" "file_not_found" ""
                 continue
             fi
 
-            log_info "[SEED] Uruchamiam: ${SEED_FILE}"
+            # ── Ścieżka do pliku logu (tylko jeśli katalog dostępny) ──────────
+            if [ "$_LOGS_AVAILABLE" = "true" ]; then
+                _SEED_LOG="${SEED_LOG_DIR}/${_RUN_TS}_${_SEED_NAME}.log"
+            else
+                _SEED_LOG=""
+            fi
 
+            # ── Nagłówek do konsoli ───────────────────────────────────────────
+            log_info "[SEED] ══════════════════════════════════════════"
+            log_info "[SEED] Uruchamiam : ${SEED_FILE}"
+            log_info "[SEED] Ścieżka   : ${SEED_PATH}"
+            [ -n "$_SEED_LOG" ] && log_info "[SEED] Log       : ${_SEED_LOG}"
+
+            # ── Nagłówek do pliku logu (jeśli dostępny) ───────────────────────
+            if [ -n "$_SEED_LOG" ]; then
+                {
+                    printf "================================================================\n"
+                    printf " SEED LOG: %s\n" "$SEED_FILE"
+                    printf "================================================================\n"
+                    printf " Czas:      %s\n" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+                    printf " Plik:      %s\n" "$SEED_PATH"
+                    printf " Serwer:    tcp:%s,%s / %s\n" "$DB_HOST" "$DB_PORT" "$DB_NAME"
+                    printf " User:      %s\n" "$DB_USER"
+                    printf "================================================================\n\n"
+                } > "$_SEED_LOG" 2>/dev/null || {
+                    log_warn "[SEED] Nie moge zapisac naglowka do: ${_SEED_LOG}"
+                    _SEED_LOG=""
+                }
+            fi
+
+            # ── Wyczyść pliki tymczasowe ──────────────────────────────────────
+            : > "$_TMP_OUT" 2>/dev/null || true
+            : > "$_TMP_ERR" 2>/dev/null || true
+
+            _T_START="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+
+            # ── Uruchomienie sqlcmd ───────────────────────────────────────────
+            # KLUCZOWE: "|| true" na końcu bloku if/else — set -e nie propaguje
+            # -r1 : komunikaty błędów → stderr (oddzielone od stdout)
+            # -b  : EXIT on SQL error (returncode != 0)
+            # -I  : QUOTED_IDENTIFIER ON (wymagane przez nasze MERGE)
+            # -C  : TrustServerCertificate (dev / self-signed)
             if /opt/mssql-tools18/bin/sqlcmd \
                     -S "tcp:${DB_HOST},${DB_PORT}" \
                     -d "${DB_NAME}" \
                     -U "${DB_USER}" \
                     -P "${DB_PASSWORD}" \
-                    -C -b -I \
+                    -C -b -I -r1 \
                     -i "$SEED_PATH" \
-                    > /dev/null 2>&1; then
+                    > "$_TMP_OUT" 2> "$_TMP_ERR"; then
+
+                # ════════════════════════
+                # SUKCES
+                # ════════════════════════
                 log_ok "[SEED] ${SEED_FILE} — OK"
+
+                # Pokaż PRINT-y z SQL (postęp seeda, liczba wierszy itp.)
+                if [ -s "$_TMP_OUT" ]; then
+                    log_info "[SEED] ── SQL output (PRINT) ──────────────────"
+                    while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && log_info "[SEED]   $_ln"
+                    done < "$_TMP_OUT"
+                fi
+
+                # Dopisz stdout do pliku logu
+                if [ -n "$_SEED_LOG" ]; then
+                    {
+                        printf "\n--- STDOUT ---\n"
+                        cat "$_TMP_OUT" 2>/dev/null || true
+                        printf "\n--- WYNIK: OK ---\n"
+                        printf "Czas zakonczenia: %s\n" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+                    } >> "$_SEED_LOG" 2>/dev/null || true
+                fi
+
                 _seed_ok=$((_seed_ok + 1))
+                _report_jsonl "$SEED_FILE" "OK" "0" "$_T_START" "" "$_SEED_LOG"
+
             else
-                log_error "[SEED] ${SEED_FILE} — BŁĄD"
+                # ════════════════════════
+                # BŁĄD SQLCMD
+                # ════════════════════════
+                _RC=$?
+
+                log_error "[SEED] ══════════════════════════════════════════"
+                log_error "[SEED] BŁĄD: ${SEED_FILE} (sqlcmd exit code: ${_RC})"
+                log_error "[SEED] ══════════════════════════════════════════"
+
+                # Błędy SQL Server idą na stderr dzięki -r1
+                if [ -s "$_TMP_ERR" ]; then
+                    log_error "[SEED] ── SQL Server ERROR (stderr) ───────────"
+                    while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && log_error "[SEED]   $_ln"
+                    done < "$_TMP_ERR"
+                    log_error "[SEED] ──────────────────────────────────────"
+                else
+                    log_error "[SEED] (brak wyjscia na stderr — sprawdz polaczenie DB)"
+                fi
+
+                # Kontekst przed błędem (stdout — to co się zdążyło wykonać)
+                if [ -s "$_TMP_OUT" ]; then
+                    log_error "[SEED] ── Output przed bledem (stdout) ───────"
+                    while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && log_error "[SEED]   $_ln"
+                    done < "$_TMP_OUT"
+                    log_error "[SEED] ──────────────────────────────────────"
+                fi
+
+                # Dopisz pełne logi do pliku
+                if [ -n "$_SEED_LOG" ]; then
+                    {
+                        printf "\n--- STDOUT (przed bledem) ---\n"
+                        cat "$_TMP_OUT" 2>/dev/null || true
+                        printf "\n--- STDERR (bledy SQL) ---\n"
+                        cat "$_TMP_ERR" 2>/dev/null || true
+                        printf "\n--- WYNIK: ERROR (exit_code=%d) ---\n" "$_RC"
+                        printf "Czas zakonczenia: %s\n" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+                    } >> "$_SEED_LOG" 2>/dev/null || true
+                    log_error "[SEED] Pelny log: ${_SEED_LOG}"
+                fi
+
+                log_error "[SEED] ══════════════════════════════════════════"
+
+                # Zbierz treść błędu do raportu JSONL (pierwsze 5 linii)
+                _ERR_BRIEF=$(head -5 "$_TMP_ERR" 2>/dev/null \
+                    | tr '\n' '|' \
+                    | sed "s/\"/'/g; s/[[:cntrl:]]//g" \
+                    || true)
+
                 _seed_fail=$((_seed_fail + 1))
-                # Seedery NIE blokują startu — logujemy błąd i kontynuujemy
-                # Aby zablokować start: zmień na: die "[SEED] Krytyczny błąd seeda — zatrzymuję."
-            fi
-        done
+                _report_jsonl "$SEED_FILE" "ERROR" "$_RC" "$_T_START" \
+                    "$_ERR_BRIEF" "$_SEED_LOG"
 
-        log_ok "Seedery zakończone: ${_seed_ok} OK, ${_seed_fail} BŁĘDÓW."
+                # ── Krytyczność seeda ─────────────────────────────────────────
+                # 01_roles + 02_permissions = system nieużywalny bez nich
+                # 03-05 = dane opcjonalne, system ruszy z ostrzeżeniem
+                case "$SEED_FILE" in
+                    01_roles.sql|02_permissions.sql)
+                        log_error "[SEED] SEED KRYTYCZNY — zatrzymuje start!"
+                        log_error "[SEED] Bez ról/uprawnień autentykacja nie działa."
+                        log_error ""
+                        log_error "[SEED] Jak debugować:"
+                        log_error "[SEED]   docker exec -it windykacja_api /opt/mssql-tools18/bin/sqlcmd \\"
+                        log_error "[SEED]     -S tcp:\${DB_HOST},\${DB_PORT} -d \${DB_NAME} \\"
+                        log_error "[SEED]     -U \${DB_USER} -P \${DB_PASSWORD} \\"
+                        log_error "[SEED]     -C -b -I -r1 -i ${SEED_PATH}"
+                        log_error ""
+                        log_error "[SEED] Typowe przyczyny:"
+                        log_error "[SEED]   1. Schemat dbo_ext nie istnieje (ALEMBIC_MODE=skip bez wcześniejszego DDL)"
+                        log_error "[SEED]   2. Tabele skw_* nie istnieją (migracje nie wykonane)"
+                        log_error "[SEED]   3. Brak uprawnień INSERT na dbo_ext dla użytkownika ${DB_USER}"
+                        log_error "[SEED]   4. Błąd składniowy w pliku SQL (GO bez LF?)"
 
-        if [ "$_seed_fail" -gt "0" ]; then
-            log_warn "Niektóre seedery się nie powiodły."
-            log_warn "Sprawdź czy pliki SQL zawierają IF NOT EXISTS / MERGE (idempotentność)."
+                        # Wymuś cleanup przed exitem
+                        rm -f "$_TMP_OUT" "$_TMP_ERR" 2>/dev/null || true
+                        trap - EXIT INT TERM
+                        exit 1
+                        ;;
+                    *)
+                        log_warn "[SEED] Seed niekrytyczny — kontynuuje."
+                        log_warn "[SEED] System uruchomi sie, ale dane inicjalne moga byc niekompletne."
+                        ;;
+                esac
+
+            fi  # if sqlcmd
+
+        done  # for SEED_FILE
+
+        # ── Podsumowanie ──────────────────────────────────────────────────────
+        log_info "[SEED] ══════════════════════════════════════════"
+        log_ok   "Seedery: ${_seed_ok} OK | ${_seed_fail} BLEDOW | ${_seed_skip} POMINIETYCH"
+        [ -n "$_REPORT_FILE" ] && [ "$_LOGS_AVAILABLE" = "true" ] && \
+            log_info "[SEED] Raport: ${_REPORT_FILE}"
+        log_info "[SEED] ══════════════════════════════════════════"
+
+        if [ "$_seed_fail" -gt 0 ]; then
+            log_warn "Niektoré seedery nie powiodly sie."
+            log_warn "Sprawdz logi powyzej lub: docker exec windykacja_api cat ${_REPORT_FILE}"
         fi
-    fi
-fi
+
+        # Cleanup plików tymczasowych
+        rm -f "$_TMP_OUT" "$_TMP_ERR" 2>/dev/null || true
+        trap - EXIT INT TERM
+
+    fi  # if [ ! -d "$SEED_DIR" ]
+fi  # if [ "$_should_run_seeds" = "true" ]
 
 # =============================================================================
 # KROK 8: Start serwera

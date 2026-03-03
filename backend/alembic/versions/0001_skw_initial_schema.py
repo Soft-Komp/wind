@@ -249,7 +249,7 @@ def _create_skw_permissions() -> None:
                     UNIQUE ([PermissionName]),
                 CONSTRAINT [CK_skw_Permissions_Category]
                     CHECK ([Category] IN (
-                        N'auth', N'users', N'roles', N'debtors', N'monits',
+                        N'auth', N'users', N'roles', N'permissions', N'debtors', N'monits',
                         N'comments', N'pdf', N'reports', N'snapshots',
                         N'audit', N'system'
                     ))

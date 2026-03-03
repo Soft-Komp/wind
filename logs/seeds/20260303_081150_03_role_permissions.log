@@ -1,0 +1,20 @@
+================================================================
+ SEED LOG: 03_role_permissions.sql
+================================================================
+ Czas:      2026-03-03T08:11:52+0000
+ Plik:      /app/database/seeds/03_role_permissions.sql
+ Serwer:    tcp:sv2016\slq2022,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT ---
+RoleName                                           LiczbaUprawnienia
+-------------------------------------------------- -----------------
+Admin                                                             83
+Manager                                                           47
+ReadOnly                                                          15
+User                                                              24
+
+--- WYNIK: OK ---
+Czas zakonczenia: 2026-03-03T08:11:53+0000

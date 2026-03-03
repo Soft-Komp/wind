@@ -114,7 +114,7 @@ target_metadata = Base.metadata
 
 # Schemat dla tabeli wersji Alembic (alembic_version)
 # Musi być w dbo_ext — tam mamy PEŁNY CRUD
-_VERSION_TABLE_SCHEMA = "dbo_ext"
+_VERSION_TABLE_SCHEMA = "dbo"
 
 # Monitorowany schemat — tylko dbo_ext śledzony przez ORM
 _TRACKED_SCHEMA = "dbo_ext"
@@ -333,68 +333,106 @@ def _configure_context_for_migration(connection: Connection) -> None:
         version_table_schema=_VERSION_TABLE_SCHEMA,
         # MSSQL specyfika: transakcja DDL (domyślnie True dla MSSQL)
         # Gwarantuje atomowość każdej migracji
-        transaction_per_migration=True,
+        transaction_per_migration=False,
     )
 
 
 async def _verify_connection(connection: Connection) -> None:
     """
-    Weryfikuje połączenie z bazą i istnienie schematu dbo_ext.
+    Weryfikuje połączenie z bazą danych przed uruchomieniem migracji.
 
-    Wywoływana przed migracjami — wczesne wykrycie problemu
-    zamiast tajemniczego błędu w połowie migracji.
+    ZAKRES WERYFIKACJI:
+      ✅ Dostępność bazy danych (SELECT 1 + DB_NAME + @@VERSION)
+      ✅ Informacja o istnieniu schematu dbo_ext (log INFO/WARNING)
+      ❌ NIE blokuje startu gdy dbo_ext nie istnieje —
+         schemat tworzy migracja 0001_skw_initial_schema.
+
+    KIEDY BLOKUJE (raise SystemExit):
+      - Baza danych jest całkowicie niedostępna (connection error)
+      - Zapytanie weryfikacyjne nie zwróciło wyników
 
     Args:
-        connection: Aktywne połączenie SQLAlchemy.
+        connection: Aktywne połączenie SQLAlchemy async.
 
     Raises:
-        SystemExit: Gdy baza niedostępna lub schemat nie istnieje.
+        SystemExit: Wyłącznie gdy baza jest niedostępna.
     """
     try:
+        # ── Krok 1: Podstawowa weryfikacja połączenia ─────────────────────────
         result = await connection.execute(
             text(
                 "SELECT "
+                "  1                    AS probe, "
                 "  DB_NAME()            AS db_name, "
-                "  @@VERSION            AS version, "
-                "  SCHEMA_ID(:schema)   AS schema_id"
+                "  SCHEMA_ID(:schema)   AS schema_id, "
+                "  SUBSTRING(@@VERSION, 1, 80) AS sql_version"
             ),
             {"schema": _TRACKED_SCHEMA},
         )
         row = result.mappings().first()
 
         if row is None:
-            raise RuntimeError("Zapytanie weryfikacyjne nie zwróciło wyników")
+            # Zapytanie poszło ale nic nie zwróciło — bardzo dziwne
+            raise RuntimeError(
+                "Zapytanie weryfikacyjne SELECT 1 nie zwróciło wierszy. "
+                "Sprawdź uprawnienia użytkownika DB."
+            )
 
-        if row["schema_id"] is None:
-            logger.critical(
-                "Schemat '%s' NIE ISTNIEJE w bazie '%s'!\n"
-                "Uruchom DDL: database/ddl/000_create_schema.sql",
-                _TRACKED_SCHEMA,
-                row["db_name"],
-            )
-            raise SystemExit(
-                f"[ALEMBIC ENV] Schemat {_TRACKED_SCHEMA} nie istnieje"
-            )
+        db_name    = row["db_name"]
+        schema_id  = row["schema_id"]
+        sql_ver    = row["sql_version"]
 
         logger.info(
-            "Połączenie z bazą OK | db=%s | schemat=%s | schema_id=%s",
-            row["db_name"],
-            _TRACKED_SCHEMA,
-            row["schema_id"],
+            "Połączenie z bazą OK | db=%s | sql_server=%s",
+            db_name,
+            sql_ver.strip() if sql_ver else "?",
         )
 
+        # ── Krok 2: Informacja o schemacie (NIE blokuje) ─────────────────────
+        if schema_id is not None:
+            logger.info(
+                "Schemat '%s' ISTNIEJE w bazie '%s' (schema_id=%s) — "
+                "migracje będą aktualizować istniejące tabele.",
+                _TRACKED_SCHEMA,
+                db_name,
+                schema_id,
+            )
+        else:
+            # Schemat nie istnieje — to normalne przy pierwszym uruchomieniu.
+            # Migracja 0001 go stworzy. NIE przerywamy.
+            logger.warning(
+                "Schemat '%s' NIE ISTNIEJE w bazie '%s'. "
+                "Migracja 0001_skw_initial_schema utworzy go automatycznie. "
+                "To jest oczekiwane przy pierwszym uruchomieniu systemu.",
+                _TRACKED_SCHEMA,
+                db_name,
+            )
+            # Drukuj też na stdout żeby było widać w docker logs
+            print(
+                f"[ALEMBIC ENV] INFO: Schemat {_TRACKED_SCHEMA} nie istnieje — "
+                f"zostanie utworzony przez migrację 0001.",
+                flush=True,
+            )
+
+    except SystemExit:
+        # Przepuść SystemExit bez modyfikacji (własny raise z tej funkcji)
+        raise
+
     except Exception as exc:
-        if isinstance(exc, SystemExit):
-            raise
+        # Każdy inny błąd = baza niedostępna lub problem z połączeniem
         logger.critical(
-            "Nie można połączyć się z bazą danych: %s",
+            "Nie można zweryfikować połączenia z bazą danych: %s | "
+            "Sprawdź DB_HOST=%s DB_PORT=%s DB_NAME=%s DB_USER=%s",
             exc,
+            os.environ.get("DB_HOST", "?"),
+            os.environ.get("DB_PORT", "?"),
+            os.environ.get("DB_NAME", "?"),
+            os.environ.get("DB_USER", "?"),
             exc_info=True,
         )
         raise SystemExit(
-            f"[ALEMBIC ENV] Błąd połączenia z bazą: {exc}"
+            f"[ALEMBIC ENV] Baza danych niedostępna: {exc}"
         ) from exc
-
 
 async def _run_migrations_online() -> None:
     """
@@ -427,6 +465,10 @@ async def _run_migrations_online() -> None:
 
     try:
         async with connectable.connect() as connection:
+            # MSSQL + SQLAlchemy 2.0: wyłącz autobegin żeby nie
+            # kolidował z zarządzaniem transakcjami przez Alembic
+            await connection.execute(text("SET XACT_ABORT OFF"))
+
             # Weryfikacja połączenia i schematu przed migracjami
             await _verify_connection(connection)
 
@@ -436,7 +478,11 @@ async def _run_migrations_online() -> None:
             # Wykonaj migracje
             logger.info("Uruchamianie migracji...")
             await connection.run_sync(lambda conn: context.run_migrations())
-            logger.info("Migracje zakończone pomyślnie.")
+
+            # KRYTYCZNE dla MSSQL + async: jawny commit
+            # Bez tego SQLAlchemy 2.0 robi rollback całego DDL przy zamknięciu
+            await connection.commit()
+            logger.info("Migracje zakończone pomyślnie — COMMIT wykonany.")
 
     except Exception as exc:
         if isinstance(exc, SystemExit):
