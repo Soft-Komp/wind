@@ -118,9 +118,6 @@ class MonitHistory(Base):
         "Cost", Numeric(10, 4), nullable=True,
         comment="Koszt wysyłki (SMS = per message, Email = zwykle 0)",
     )
-    is_active: Mapped[bool] = mapped_column(
-        "IsActive", nullable=False, default=True, server_default=text("1"),
-    )
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False,
         default=datetime.utcnow, server_default=text("GETDATE()"),

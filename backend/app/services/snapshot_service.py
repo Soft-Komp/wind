@@ -770,8 +770,14 @@ def list_available(
         for filepath in sorted(date_dir.glob("snapshot_*.json.gz"), reverse=True):
             # Wyciągnij nazwę tabeli z pliku
             name = filepath.name.removeprefix("snapshot_")
-            parts = name.split("_")
-            table_hint = parts[0] if parts else "unknown"
+            # Usun timestamp na koncu (ostatnie dwa segmenty: YYYYMMDD_HHMMSS)
+            # Przyklad: skw_roles_20260303_105544.json.gz -> skw_roles
+            name_no_ext = name.removesuffix(".json.gz")
+            parts = name_no_ext.split("_")
+            # Ostatnie dwa segmenty to timestamp (YYYYMMDD i HHMMSS) - odcinamy je
+            # Przyklad: ["skw", "roles", "20260303", "105544"] -> ["skw", "roles"]
+            table_parts = parts[:-2] if len(parts) > 2 else parts[:1]
+            table_hint = "_".join(table_parts) if table_parts else "unknown"
 
             if table_filter and table_filter.lower() not in table_hint.lower():
                 continue
