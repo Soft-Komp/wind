@@ -598,7 +598,7 @@ async def get_by_id(
 
     # Pobierz dane z WAPRO
     try:
-        debtor_data = await get_debtor_by_id(wapro, debtor_id)
+        wapro_result = await get_debtor_by_id(debtor_id)
     except Exception as exc:
         logger.error(
             "Błąd pobierania szczegółów dłużnika z WAPRO",
@@ -612,10 +612,12 @@ async def get_by_id(
             f"Nie udało się pobrać dłużnika ID={debtor_id}: {exc}"
         ) from exc
 
-    if debtor_data is None:
+    if not wapro_result.rows:
         raise DebtorNotFoundError(
             f"Dłużnik ID={debtor_id} nie istnieje w bazie WAPRO."
         )
+
+    debtor_data = wapro_result.rows[0]  # ← dict z pierwszego wiersza
 
     # Pobierz historię monitów z dbo_ext
     monit_history = await _fetch_monit_history(
@@ -715,11 +717,11 @@ async def get_invoices(
     try:
         invoice_params = InvoiceFilterParams(
             kontrahent_id=debtor_id,
-            paid=paid,
-            page=page,
-            page_size=page_size,
+            include_paid=paid if paid is not None else False,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         )
-        wapro_result = await get_invoices_for_debtor(wapro, invoice_params)
+        wapro_result = await get_invoices_for_debtor(invoice_params)
     except Exception as exc:
         logger.error(
             "Błąd pobierania faktur dłużnika z WAPRO",
@@ -727,8 +729,8 @@ async def get_invoices(
         )
         raise DebtorWaproError(f"Nie udało się pobrać faktur: {exc}") from exc
 
-    total = wapro_result.get("total", 0)
-    items = wapro_result.get("items", [])
+    total = wapro_result.total_count
+    items = wapro_result.rows
     total_pages = (total + page_size - 1) // page_size if total > 0 else 0
 
     result = {
@@ -875,8 +877,7 @@ async def get_monit_history(
         Słownik z listą monitów i metadanymi paginacji.
     """
     conditions = [
-        MonitHistory.id_kontrahenta == params.debtor_id,
-        MonitHistory.is_active == True,  # noqa: E712
+        MonitHistory.id_kontrahenta == params.debtor_id
     ]
 
     if params.monit_type:
@@ -957,8 +958,7 @@ async def _fetch_monit_history(
         select(MonitHistory)
         .where(
             and_(
-                MonitHistory.id_kontrahenta == debtor_id,
-                MonitHistory.is_active == True,  # noqa: E712
+                MonitHistory.id_kontrahenta == debtor_id
             )
         )
         .order_by(desc(MonitHistory.created_at))
@@ -1026,8 +1026,7 @@ async def _compute_monit_stats(
         )
         .where(
             and_(
-                MonitHistory.id_kontrahenta == debtor_id,
-                MonitHistory.is_active == True,  # noqa: E712
+                MonitHistory.id_kontrahenta == debtor_id
             )
         )
     )

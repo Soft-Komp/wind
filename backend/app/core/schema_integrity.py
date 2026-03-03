@@ -5,7 +5,7 @@ Weryfikacja integralności schematu bazy danych przy starcie aplikacji.
 
 Mechanizm:
     1. Pobierz aktualne checksums z sys.sql_modules (oba schematy: dbo_ext + dbo)
-    2. Pobierz zapisane checksums z dbo_ext.SchemaChecksums
+    2. Pobierz zapisane checksums z dbo_ext.skw_SchemaChecksums
     3. Porównaj — każda niezgodność to potencjalny tamper
     4. Zareaguj zgodnie z SystemConfig.schema_integrity.reaction:
          WARN  → log WARNING + kontynuuj
@@ -91,7 +91,7 @@ SELECT
     sc.AlembicRevision,
     sc.LastVerifiedAt,
     sc.CreatedAt
-FROM dbo_ext.SchemaChecksums sc
+FROM dbo_ext.skw_SchemaChecksums sc
 WHERE sc.SchemaName IN ('dbo_ext', 'dbo')
   AND sc.ObjectType NOT IN ('INDEX', 'STATISTICS', 'TRIGGER')
 ORDER BY sc.SchemaName, sc.ObjectName
@@ -121,7 +121,7 @@ class LiveChecksum:
 
 @dataclass
 class StoredChecksum:
-    """Zapisany checksum z tabeli dbo_ext.SchemaChecksums."""
+    """Zapisany checksum z tabeli dbo_ext.skw_SchemaChecksums."""
     id_checksum: int
     object_name: str
     object_type: str
@@ -357,11 +357,11 @@ async def _fetch_stored_checksums(
     verification_id: str,
 ) -> dict[str, StoredChecksum]:
     """
-    Pobiera zapisane checksums z dbo_ext.SchemaChecksums.
+    Pobiera zapisane checksums z dbo_ext.skw_SchemaChecksums.
     Klucz słownika: 'schema_name.object_name' (lowercase).
     """
     logger.debug(
-        "Pobieranie zapisanych checksums z dbo_ext.SchemaChecksums",
+        "Pobieranie zapisanych checksums z dbo_ext.skw_SchemaChecksums",
         extra={"verification_id": verification_id},
     )
 
@@ -579,7 +579,7 @@ async def _update_last_verified(
             await db.execute(
                 text(
                     """
-                    UPDATE dbo_ext.SchemaChecksums
+                    UPDATE dbo_ext.skw_SchemaChecksums
                     SET LastVerifiedAt = :verified_at
                     WHERE LOWER(SchemaName) = :schema_name
                       AND LOWER(ObjectName) = :object_name
@@ -1052,7 +1052,7 @@ async def register_object(
         await db.execute(
             text(
                 """
-                MERGE dbo_ext.SchemaChecksums AS target
+                MERGE dbo_ext.skw_SchemaChecksums AS target
                 USING (
                     SELECT
                         :object_name  AS ObjectName,
@@ -1197,7 +1197,7 @@ class SchemaIntegrityChecker:
             )
             # Przy błędzie infrastruktury (np. brak tabeli SchemaChecksums)
             # zwracamy OK żeby nie blokować startu gdy tabela nie istnieje jeszcze
-            if "SchemaChecksums" in (result.error or ""):
+            if "SchemaChecksums" in (result.error or "") or "skw_SchemaChecksums" in (result.error or ""):
                 logger.warning(
                     "verify_all: tabela SchemaChecksums niedostępna — "
                     "pominięcie weryfikacji (pierwsze uruchomienie?)",
@@ -1316,7 +1316,7 @@ async def _run_full_verification(
     """
     Wykonuje pełny cykl weryfikacji integralności schematu:
       1. Pobierz live checksums z sys.sql_modules
-      2. Pobierz stored checksums z dbo_ext.SchemaChecksums
+      2. Pobierz stored checksums z dbo_ext.skw_SchemaChecksums
       3. Porównaj
       4. Zaktualizuj LastVerifiedAt dla OK obiektów
       5. Zaloguj wynik do jsonl

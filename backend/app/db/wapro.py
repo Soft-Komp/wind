@@ -90,17 +90,16 @@ _COLS_KONTRAHENCI = """
 # Kolumny SELECT dla VIEW_rozrachunki_faktur — jawna lista
 _COLS_ROZRACHUNKI = """
     ID_KONTRAHENTA,
+    NazwaKontrahenta,
     NumerFaktury,
     DataWystawienia,
     TerminPlatnosci,
     KwotaBrutto,
-    KwotaPozostala,
     KwotaZaplacona,
-    CzyZaplacona,
-    CzyPrzeterminowana,
-    DniPrzeterminowania,
+    KwotaPozostala,
     MetodaPlatnosci,
-    KategoriaWieku
+    DniPo,
+    rozliczony
 """
 
 
@@ -980,7 +979,7 @@ def _build_invoices_query(
     query_params: list[Any] = [params.kontrahent_id]
 
     if not params.include_paid:
-        conditions.append("CzyZaplacona = 0")
+            conditions.append("rozliczony = 0")
 
     where_clause = "WHERE " + " AND ".join(conditions)
     order_clause = f"ORDER BY {params.order_by} {params.order_dir}"
@@ -1029,12 +1028,11 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
     try:
         data_sql, data_params = _build_invoices_query(params)
 
-        # COUNT zapytanie — te same warunki bez OFFSET/LIMIT
         count_sql = f"""
             SELECT COUNT(*) AS TotalCount
             FROM {VIEW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
-            {' AND CzyZaplacona = 0' if not params.include_paid else ''}
+            {' AND rozliczony = 0' if not params.include_paid else ''}
         """
 
         rows_task = _run_in_executor(

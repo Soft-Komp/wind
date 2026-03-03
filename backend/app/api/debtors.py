@@ -320,7 +320,7 @@ async def send_bulk_monits(
     ),
     response_description="Szczegóły dłużnika z danymi WAPRO",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.view")],
+    dependencies=[require_permission("debtors.view_details")],
     responses={404: {"description": "Dłużnik nie istnieje w WAPRO"}},
 )
 async def get_debtor(
@@ -361,13 +361,14 @@ async def get_debtor(
     ),
     response_description="Lista faktur dłużnika",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.view")],
+    dependencies=[require_permission("debtors.view_invoices")],
 )
 async def get_debtor_invoices(
     debtor_id: int,
     current_user: CurrentUser,
     wapro: WaproDB,
     redis: RedisClient,
+    db: DB,
     request_id: RequestID,
 ):
     from app.services import debtor_service
@@ -376,6 +377,7 @@ async def get_debtor_invoices(
         invoices = await debtor_service.get_invoices(
             wapro=wapro,
             redis=redis,
+            db=db,
             debtor_id=debtor_id,
         )
     except Exception as exc:
@@ -402,7 +404,7 @@ async def get_debtor_invoices(
     ),
     response_description="Historia monitów dłużnika",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.view")],
+    dependencies=[require_permission("debtors.view_monit_history")],
 )
 async def get_debtor_monit_history(
     debtor_id: int,
