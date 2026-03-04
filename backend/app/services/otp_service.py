@@ -266,7 +266,7 @@ async def _invalidate_old_codes(
     Returns:
         Liczba unieważnionych kodów.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Pobierz aktywne (nieużyte, nie wygasłe) kody — posortowane od najstarszego
     result = await db.execute(
@@ -388,7 +388,7 @@ async def generate(
         key="otp.expiry_minutes",
         default=_DEFAULT_OTP_EXPIRY_MINUTES,
     )
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=expiry_minutes)
 
     # --- 4. Unieważnienie nadmiarowych starych kodów ---
     invalidated = await _invalidate_old_codes(db, user_id, purpose)
@@ -551,7 +551,7 @@ async def verify(
         raise OtpRateLimitError(email=email, ttl_seconds=max(ttl, 0))
 
     # --- 4. Pobierz aktywny, nie-wygasły kod z bazy ---
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     result = await db.execute(
         select(OtpCode)
         .where(

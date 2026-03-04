@@ -397,7 +397,7 @@ def _write_audit_jsonl(entry: AuditEntry) -> None:
 # ---------------------------------------------------------------------------
 
 _INSERT_AUDIT_SQL = text("""
-    INSERT INTO dbo_ext.AuditLog (
+    INSERT INTO dbo_ext.skw_AuditLog (
         ID_USER,
         Username,
         Action,
@@ -928,9 +928,9 @@ async def get_logs(
         conditions.append("Timestamp <= :date_to")
         params["date_to"] = date_to
 
-    if request_id is not None:
-        conditions.append("RequestID = :request_id")
-        params["request_id"] = request_id[:36]
+    # if request_id is not None:
+    #     conditions.append("RequestID = :request_id")
+    #     params["request_id"] = request_id[:36]
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -942,7 +942,7 @@ async def get_logs(
             OldValue, NewValue, Details,
             IPAddress, UserAgent, RequestURL, RequestMethod, RequestID,
             Timestamp, Success, ErrorMessage
-        FROM dbo_ext.AuditLog
+        FROM dbo_ext.skw_AuditLog
         {where_clause}
         ORDER BY Timestamp DESC, ID_LOG DESC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
@@ -952,7 +952,7 @@ async def get_logs(
     # Count query
     count_sql = text(f"""
         SELECT COUNT(*) AS total
-        FROM dbo_ext.AuditLog
+        FROM dbo_ext.skw_AuditLog
         {where_clause}
     """)
 

@@ -576,6 +576,12 @@ async def otp_request(
         if exc_type == "RateLimitExceededError":
             _raise_from_auth_error(exc)
         # Inne błędy (np. user nie istnieje) — logujemy, ale zwracamy 200
+        # TYMCZASOWO — loguj pełny traceback żeby znaleźć błąd
+        logger.exception(
+            "OTP request FAILED (połknięty wyjątek): %s | type=%s",
+            exc, exc_type,
+            extra={"exc_type": exc_type, "exc_msg": str(exc)},
+        )
 
     logger.info(
         orjson.dumps({

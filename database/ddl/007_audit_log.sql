@@ -61,6 +61,7 @@ BEGIN TRY
             [UserAgent]       NVARCHAR(500)                     NULL,
             [RequestURL]      NVARCHAR(500)                     NULL,
             [RequestMethod]   NVARCHAR(10)                      NULL,
+            [RequestID]       NVARCHAR(36)                      NULL,  
 
             -- ── Wynik ────────────────────────────────────────────────────────
             [Success]         BIT                           NOT NULL
