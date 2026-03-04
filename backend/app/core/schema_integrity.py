@@ -639,7 +639,7 @@ async def _write_audit_log(
         await db.execute(
             text(
                 """
-                INSERT INTO dbo_ext.AuditLog (
+                INSERT INTO dbo_ext.skw_AuditLog (
                     ID_USER,
                     Username,
                     Action,

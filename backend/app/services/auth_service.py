@@ -1422,7 +1422,7 @@ async def forgot_password(
     await db.execute(
         update(OtpCode)
         .where(
-            OtpCode.user_id == user.id_user,
+            OtpCode.id_user == user.id_user,
             OtpCode.purpose == "password_reset",
             OtpCode.is_used == False,
         )
@@ -1431,7 +1431,7 @@ async def forgot_password(
 
     # Zapisz nowy OTP
     new_otp = OtpCode(
-        user_id=user.id_user,
+        id_user=user.id_user,
         code=otp_hash,
         purpose="password_reset",
         expires_at=expires_at,

@@ -267,9 +267,9 @@ async def _fetch_from_db(db: AsyncSession, key: str) -> Optional[str]:
         result = await db.execute(
             text("""
                 SELECT ConfigValue
-                FROM dbo_ext.SystemConfig
+                FROM dbo_ext.skw_SystemConfig
                 WHERE ConfigKey  = :key
-                  AND IsActive   = 1
+                AND IsActive   = 1
             """),
             {"key": key},
         )
@@ -307,7 +307,7 @@ async def _fetch_all_from_db(db: AsyncSession) -> dict[str, str]:
         result = await db.execute(
             text("""
                 SELECT ConfigKey, ConfigValue
-                FROM dbo_ext.SystemConfig
+                FROM dbo_ext.skw_SystemConfig
                 WHERE IsActive = 1
                 ORDER BY ConfigKey
             """)
@@ -635,7 +635,7 @@ async def set_value(
     try:
         await db.execute(
             text("""
-                MERGE dbo_ext.SystemConfig AS target
+                MERGE dbo_ext.skw_SystemConfig AS target
                 USING (SELECT :key AS ConfigKey) AS source
                 ON (target.ConfigKey = source.ConfigKey)
                 WHEN MATCHED THEN
