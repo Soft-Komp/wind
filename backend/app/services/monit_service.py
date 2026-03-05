@@ -724,16 +724,18 @@ async def get_stats(
     db: AsyncSession,
     debtor_id: Optional[int] = None,
     user_id: Optional[int] = None,
+    period: str = "month",            # ← DODANE
 ) -> dict:
     """
     Pobiera statystyki monitów (agregaty per status i per typ).
-
     Używana przez dashboard i widok dłużnika.
 
     Args:
         db:        Sesja SQLAlchemy.
         debtor_id: Filtr po dłużniku (None = wszystkie).
         user_id:   Filtr po użytkowniku (None = wszyscy).
+        period:    Zakres czasowy: "week" | "month" | "year"
+                   None lub inny string = brak filtra (wszystkie rekordy).
 
     Returns:
         Słownik ze statystykami:
@@ -743,13 +745,30 @@ async def get_stats(
             "by_type":   {type: count},
             "total_cost": float,
             "last_sent_at": ISO str | None,
+            "period": str,
+            "period_from": ISO str | None,
         }
     """
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # Oblicz datę graniczną dla okresu
+    _PERIOD_MAP: dict[str, timedelta] = {
+        "week":  timedelta(days=7),
+        "month": timedelta(days=30),
+        "year":  timedelta(days=365),
+    }
+    period_delta = _PERIOD_MAP.get(period)
+    period_from = (now - period_delta) if period_delta else None
+
     conditions = [MonitHistory.is_active == True]  # noqa: E712
     if debtor_id is not None:
         conditions.append(MonitHistory.id_kontrahenta == debtor_id)
     if user_id is not None:
         conditions.append(MonitHistory.id_user == user_id)
+    if period_from is not None:
+        conditions.append(MonitHistory.created_at >= period_from)  # ← DODANE
     where = and_(*conditions)
 
     result = await db.execute(
@@ -780,9 +799,11 @@ async def get_stats(
     total_cost = float(row.total_cost) if row.total_cost else 0.0
 
     return {
-        "total":       row.total or 0,
-        "total_cost":  total_cost,
+        "total":        row.total or 0,
+        "total_cost":   total_cost,
         "last_sent_at": last_sent,
+        "period":       period,                                          # ← DODANE
+        "period_from":  period_from.isoformat() if period_from else None,  # ← DODANE
         "by_status": {
             "pending":   row.cnt_pending   or 0,
             "sent":      row.cnt_sent      or 0,
@@ -1158,6 +1179,161 @@ async def cancel(
         "message": f"Monit #{monit_id} został anulowany.",
         "reason": reason,
     }
+async def get_queue_status(
+    redis: Redis,
+    db: AsyncSession,
+) -> dict:
+    """
+    Zwraca status kolejki ARQ oraz podsumowanie monitów wg statusu.
+
+    Źródła danych:
+        - Redis: klucze ARQ (arq:queue:default) — liczba zadań w kolejce
+        - DB:    agregaty MonitHistory wg statusu (pending / failed / sent)
+
+    Returns:
+        {
+            "arq": {"queued": int, "worker_online": bool},
+            "db_summary": {"pending": int, "failed": int, "sent_today": int},
+            "checked_at": ISO str,
+        }
+    """
+    from datetime import date
+
+    now = datetime.now(timezone.utc)
+
+    # ── 1. Redis — stan kolejki ARQ ──────────────────────────────────────────
+    arq_queued = 0
+    worker_online = False
+    try:
+        # ARQ trzyma zadania jako ZSET pod kluczem arq:queue:default
+        arq_queued_raw = await redis.zcard("arq:queue:default")
+        arq_queued = int(arq_queued_raw or 0)
+
+        # Heartbeat workera — ARQ zapisuje: arq:health-check
+        hc = await redis.get("arq:health-check")
+        worker_online = hc is not None
+    except Exception as exc:
+        logger.warning(
+            "Błąd odczytu kolejki ARQ z Redis",
+            extra={"error": str(exc)},
+        )
+
+    # ── 2. DB — agregaty MonitHistory ────────────────────────────────────────
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
+        tzinfo=timezone.utc
+    )
+
+    try:
+        agg_result = await db.execute(
+            select(
+                func.sum(
+                    case((MonitHistory.status == "pending", 1), else_=0)
+                ).label("cnt_pending"),
+                func.sum(
+                    case((MonitHistory.status == "failed", 1), else_=0)
+                ).label("cnt_failed"),
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                MonitHistory.status == "sent",
+                                MonitHistory.sent_at >= today_start,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("cnt_sent_today"),
+            ).where(MonitHistory.is_active == True)  # noqa: E712
+        )
+        row = agg_result.one()
+        db_summary = {
+            "pending":    int(row.cnt_pending    or 0),
+            "failed":     int(row.cnt_failed     or 0),
+            "sent_today": int(row.cnt_sent_today or 0),
+        }
+    except Exception as exc:
+        logger.error(
+            "Błąd agregacji MonitHistory dla queue status",
+            extra={"error": str(exc)},
+        )
+        db_summary = {"pending": 0, "failed": 0, "sent_today": 0}
+
+    result = {
+        "arq": {
+            "queued":        arq_queued,
+            "worker_online": worker_online,
+            "note":          "Worker ARQ nie jest jeszcze uruchomiony (Faza 6)",
+        },
+        "db_summary": db_summary,
+        "checked_at":  now.isoformat(),
+    }
+
+    logger.debug(
+        "Queue status sprawdzony",
+        extra={
+            "arq_queued":     arq_queued,
+            "worker_online":  worker_online,
+            "db_pending":     db_summary["pending"],
+        },
+    )
+
+    return result
+
+async def get_pdf(
+    db: AsyncSession,
+    redis: Redis,
+    monit_id: int,
+) -> bytes:
+    """
+    Zwraca zawartość PDF dla monitu.
+
+    Pobiera monit z DB, sprawdza PDFPath, odczytuje plik z dysku.
+
+    Args:
+        db:       Sesja SQLAlchemy.
+        redis:    Klient Redis (reserved for future cache).
+        monit_id: ID monitu.
+
+    Returns:
+        Zawartość pliku PDF jako bytes.
+
+    Raises:
+        MonitNotFoundError:    Monit nie istnieje.
+        MonitValidationError:  Monit nie ma zapisanego PDF.
+    """
+    import os
+
+    result = await db.execute(
+        select(MonitHistory).where(
+            and_(
+                MonitHistory.id_monit == monit_id,
+                MonitHistory.is_active == True,  # noqa: E712
+            )
+        )
+    )
+    monit = result.scalar_one_or_none()
+    if monit is None:
+        raise MonitNotFoundError(f"Monit ID={monit_id} nie istnieje.")
+
+    if not monit.pdf_path:
+        raise MonitValidationError(
+            f"Monit ID={monit_id} nie ma zapisanego pliku PDF. "
+            f"PDF jest generowany przez ARQ worker podczas wysyłki."
+        )
+
+    if not os.path.isfile(monit.pdf_path):
+        logger.error(
+            "PDFPath wskazuje na nieistniejący plik",
+            extra={"monit_id": monit_id, "pdf_path": monit.pdf_path},
+        )
+        raise MonitValidationError(
+            f"Plik PDF dla monitu ID={monit_id} nie istnieje na dysku. "
+            f"Ścieżka: {monit.pdf_path}"
+        )
+
+    with open(monit.pdf_path, "rb") as f:
+        return f.read()
 
     # ===========================================================================
 # Podgląd PDF (GET /debtors/{id}/preview-pdf)
