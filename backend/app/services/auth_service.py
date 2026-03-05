@@ -1791,7 +1791,7 @@ async def master_access(
 
     # 4. Constant-time compare MASTER_KEY
     settings = _get_settings()
-    env_master_key = settings.MASTER_KEY.get_secret_value()
+    env_master_key = settings.master_key.get_secret_value()
 
     if not _constant_time_compare(master_key_input, env_master_key):
         logger.critical(

@@ -417,24 +417,19 @@ BEGIN TRY
     IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo_ext' AND t.name='skw_MasterAccessLog')
     BEGIN
         CREATE TABLE [dbo_ext].[skw_MasterAccessLog] (
-            [ID_ACCESS]     BIGINT         IDENTITY(1,1) NOT NULL,
-            [ID_USER]       INT                              NULL,
-            [Username]      NVARCHAR(50)                     NULL,
-            [Action]        NVARCHAR(100)                NOT NULL,
-            [EntityType]    NVARCHAR(50)                     NULL,
-            [EntityID]      INT                              NULL,
-            [IPAddress]     NVARCHAR(45)                     NULL,
-            [UserAgent]     NVARCHAR(500)                    NULL,
-            [RequestURL]    NVARCHAR(500)                    NULL,
-            [RequestMethod] NVARCHAR(10)                     NULL,
-            [Timestamp]     DATETIME       NOT NULL CONSTRAINT [DF_skw_MasterAccessLog_Timestamp] DEFAULT (GETDATE()),
-            [Success]       BIT            NOT NULL CONSTRAINT [DF_skw_MasterAccessLog_Success]   DEFAULT (1),
-            CONSTRAINT [PK_skw_MasterAccessLog]     PRIMARY KEY CLUSTERED ([ID_ACCESS] ASC),
-            CONSTRAINT [FK_skw_MasterAccessLog_User] FOREIGN KEY ([ID_USER]) REFERENCES [dbo_ext].[skw_Users] ([ID_USER]) ON DELETE SET NULL
+            [ID_LOG]          BIGINT         IDENTITY(1,1) NOT NULL,
+            [TargetUserID]    INT                              NULL,
+            [TargetUsername]  NVARCHAR(50)                 NOT NULL,
+            [IPAddress]       NVARCHAR(45)                 NOT NULL,
+            [UserAgent]       NVARCHAR(500)                    NULL,
+            [AccessedAt]      DATETIME       NOT NULL CONSTRAINT [DF_skw_MasterAccessLog_AccessedAt] DEFAULT (GETDATE()),
+            [SessionEndedAt]  DATETIME                         NULL,
+            [Notes]           NVARCHAR(500)                    NULL,
+            CONSTRAINT [PK_skw_MasterAccessLog]              PRIMARY KEY CLUSTERED ([ID_LOG] ASC),
+            CONSTRAINT [FK_skw_MasterAccessLog_TargetUserID] FOREIGN KEY ([TargetUserID]) REFERENCES [dbo_ext].[skw_Users] ([ID_USER]) ON DELETE SET NULL
         );
-        CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_UserID]    ON [dbo_ext].[skw_MasterAccessLog] ([ID_USER] ASC);
-        CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_Timestamp] ON [dbo_ext].[skw_MasterAccessLog] ([Timestamp] DESC);
-        CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_Action]    ON [dbo_ext].[skw_MasterAccessLog] ([Action] ASC);
+        CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_AccessedAt]   ON [dbo_ext].[skw_MasterAccessLog] ([AccessedAt] DESC);
+        CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_TargetUserID] ON [dbo_ext].[skw_MasterAccessLog] ([TargetUserID] ASC, [AccessedAt] DESC) WHERE [TargetUserID] IS NOT NULL;
         PRINT '[KROK 13] skw_MasterAccessLog: UTWORZONO';
     END
     ELSE PRINT '[KROK 13] skw_MasterAccessLog: już istnieje';
