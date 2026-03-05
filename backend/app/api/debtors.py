@@ -140,7 +140,7 @@ async def list_debtors(
     ),
     response_description="Statystyki zbiorcze",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.stats")],
+    dependencies=[require_permission("debtors.view_list")],
 )
 async def get_debtors_stats(
     current_user: CurrentUser,
