@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -116,8 +116,18 @@ class MonitHistory(Base):
     )
     cost: Mapped[Decimal | None] = mapped_column(
         "Cost", Numeric(10, 4), nullable=True,
-        comment="Koszt wysyłki (SMS = per message, Email = zwykle 0)",
+        comment="Koszt wysyłki SMS/email",
     )
+    # ── DODANE ────────────────────────────────────────────────────────────────
+    is_active: Mapped[bool] = mapped_column(
+        "IsActive",
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
+        comment="Soft-delete: 1 = aktywny, 0 = usunięty",
+    )
+    # ──────────────────────────────────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False,
         default=datetime.utcnow, server_default=text("GETDATE()"),

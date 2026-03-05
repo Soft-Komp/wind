@@ -99,25 +99,23 @@ async def list_monits(
             },
         )
 
-    result = await monit_service.get_list(
+    result = await monit_service.get_history(
         db=db,
-        offset=pagination.offset,
-        limit=pagination.per_page,
+        page=pagination.page,
+        page_size=pagination.per_page,
         debtor_id=debtor_id,
-        status=status_filter.upper() if status_filter else None,
-        channel=channel,
-        date_from=date_from,
-        date_to=date_to,
-        sent_by=sent_by,
+        status=status_filter.lower() if status_filter else None,
+        user_id=sent_by,
+        # channel / date_from / date_to — filtry do dodania w get_history później
     )
 
     return BaseResponse.ok(
         data={
-            "items": result["items"],
-            "total": result["total"],
-            "page": pagination.page,
-            "per_page": pagination.per_page,
-            "pages": _pages(result["total"], pagination.per_page),
+            "items":      result["items"],
+            "total":      result["total"],
+            "page":       result["page"],
+            "per_page":   result["page_size"],
+            "pages":      result["total_pages"],
         },
         app_code="monits.list",
     )
@@ -305,8 +303,8 @@ async def retry_monit(
             db=db,
             redis=redis,
             monit_id=monit_id,
-            retried_by_id=current_user.id_user,
-            ip=client_ip,
+            triggered_by_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_monit_error(exc)
@@ -361,6 +359,7 @@ async def update_monit_status(
     request: Request,
     current_user: CurrentUser,
     db: DB,
+    redis: RedisClient,
     client_ip: ClientIP,
     request_id: RequestID,
 ):
@@ -388,11 +387,14 @@ async def update_monit_status(
     try:
         result = await monit_service.update_status(
             db=db,
+            redis=redis,
             monit_id=monit_id,
             new_status=new_status,
-            changed_by_id=current_user.id_user,
-            note=note,
-            allowed_transitions=_ALLOWED_TRANSITIONS,
+            extra_data={
+                "changed_by_id": current_user.id_user,
+                "note": note,
+                "source": "operator_manual",
+            },
         )
     except Exception as exc:
         _raise_from_monit_error(exc)
@@ -448,10 +450,9 @@ async def cancel_monit(
     try:
         result = await monit_service.cancel(
             db=db,
-            redis=redis,
             monit_id=monit_id,
-            cancelled_by_id=current_user.id_user,
-            ip=client_ip,
+            cancelled_by_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_monit_error(exc)
@@ -498,7 +499,9 @@ def _raise_from_monit_error(exc: Exception) -> None:
 
     _MAP: dict[str, tuple[int, str, str]] = {
         "MonitNotFoundError":         (404, "monits.not_found",          "Monit nie istnieje"),
-        "TemplateNotFoundError":      (404, "monits.template_not_found", "Szablon monitu nie istnieje"),
+        "MonitValidationError":       (422, "monits.validation_error",   "Błąd walidacji monitu"),
+        "MonitRetryError":            (400, "monits.retry_not_allowed",  "Retry możliwy tylko dla statusu FAILED"),
+        "MonitTemplateNotFoundError": (404, "monits.template_not_found", "Szablon monitu nie istnieje"),
         "MonitNotFailedError":        (400, "monits.not_failed",         "Retry możliwy tylko dla FAILED"),
         "MonitNotPendingError":       (400, "monits.not_pending",        "Anulowanie możliwe tylko dla PENDING"),
         "MonitInProgressError":       (409, "monits.in_progress",        "Wysyłka już IN_PROGRESS — za późno"),
@@ -508,6 +511,7 @@ def _raise_from_monit_error(exc: Exception) -> None:
         "MonitPDFNotFoundError":      (404, "monits.pdf_not_found",      "Plik PDF nie istnieje"),
         "WaproConnectionError":       (503, "wapro.unavailable",         "Baza WAPRO niedostępna"),
         "MonitServiceError":          (400, "monits.service_error",      "Błąd operacji na monicie"),
+        "MonitError":                 (400, "monits.error",              "Błąd operacji na monicie"),
     }
 
     if exc_type in _MAP:
