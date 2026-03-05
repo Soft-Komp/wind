@@ -172,7 +172,7 @@ async def get_debtors_stats(
     ),
     response_description="Wynik walidacji: valid i invalid z powodami",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("monits.send")],
+    dependencies=[require_permission("debtors.view_list")],
 )
 async def validate_bulk_debtors(
     request: Request,
@@ -198,22 +198,22 @@ async def validate_bulk_debtors(
             detail={"code": "validation.error", "message": "Błąd walidacji", "errors": _errors},
         )
 
-    result = await debtor_service.validate_ids(
+    valid_ids = await debtor_service.validate_ids(
         wapro=wapro,
-        redis=redis,
-        db=db,
         ids=debtor_ids,
-        channel=channel,
-        template_id=template_id,
     )
+
+    all_ids_set = set(debtor_ids)
+    valid_set = set(valid_ids)
+    invalid_ids = sorted(all_ids_set - valid_set)
 
     return BaseResponse.ok(
         data={
-            "valid": result["valid"],
-            "invalid": result["invalid"],
-            "valid_count": len(result["valid"]),
-            "invalid_count": len(result["invalid"]),
-            "channel": channel,
+            "valid":         sorted(valid_ids),
+            "invalid":       invalid_ids,
+            "valid_count":   len(valid_ids),
+            "invalid_count": len(invalid_ids),
+            "channel":       channel,
         },
         app_code="debtors.validate_bulk",
     )
@@ -384,7 +384,7 @@ async def get_debtor_invoices(
         _raise_from_debtor_error(exc)
 
     return BaseResponse.ok(
-        data={"items": invoices, "total": len(invoices), "debtor_id": debtor_id},
+        data=invoices,
         app_code="debtors.invoices",
     )
 
@@ -414,10 +414,14 @@ async def get_debtor_monit_history(
 ):
     from app.services import debtor_service
 
-    history = await debtor_service.get_monit_history(db=db, debtor_id=debtor_id)
+    from app.services.debtor_service import MonitHistoryParams
 
+    history = await debtor_service.get_monit_history(
+        db=db,
+        params=MonitHistoryParams(debtor_id=debtor_id),
+    )
     return BaseResponse.ok(
-        data={"items": history, "total": len(history), "debtor_id": debtor_id},
+        data=history,
         app_code="debtors.monit_history",
     )
 
@@ -436,7 +440,7 @@ async def get_debtor_monit_history(
     ),
     response_description="Lista komentarzy dłużnika",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("debtors.view")],
+    dependencies=[require_permission("comments.view")],
 )
 async def get_debtor_comments(
     debtor_id: int,
@@ -446,10 +450,10 @@ async def get_debtor_comments(
 ):
     from app.services import comment_service
 
-    comments = await comment_service.get_by_debtor(db=db, debtor_id=debtor_id)
+    comments = await comment_service.get_list(db=db, debtor_id=debtor_id)
 
     return BaseResponse.ok(
-        data={"items": comments, "total": len(comments), "debtor_id": debtor_id},
+        data=comments,
         app_code="debtors.comments",
     )
 
@@ -470,7 +474,7 @@ async def get_debtor_comments(
     ),
     response_description="Strumień PDF monitu",
     status_code=status.HTTP_200_OK,
-    dependencies=[require_permission("monits.send")],
+    dependencies=[require_permission("pdf.generate")],
     responses={
         200: {"content": {"application/pdf": {}}, "description": "Strumień PDF"},
         404: {"description": "Dłużnik lub szablon nie istnieje"},

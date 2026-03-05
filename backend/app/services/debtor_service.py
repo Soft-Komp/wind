@@ -67,6 +67,7 @@ from app.db.wapro import (
     WaproConnectionPool,
     get_debtor_by_id,
     get_debtors,
+    get_debtors_stats, 
     get_invoices_for_debtor,
     validate_kontrahent_ids,
 )
@@ -793,7 +794,8 @@ async def validate_ids(
     sanitized_ids = _validate_debtor_ids_input(ids)
 
     try:
-        valid_ids = await validate_kontrahent_ids(wapro, sanitized_ids)
+        result_dict = await validate_kontrahent_ids(sanitized_ids)
+        valid_ids = sorted(k for k, v in result_dict.items() if v)
     except Exception as exc:
         logger.error(
             "Błąd batch-walidacji ID dłużników w WAPRO",
@@ -1119,3 +1121,54 @@ async def ping_wapro(wapro: WaproConnectionPool) -> dict:
             "error": str(exc),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        # ===========================================================================
+# Statystyki zbiorcze (GET /debtors/stats)
+# ===========================================================================
+
+async def get_stats(
+    wapro: WaproConnectionPool,
+    redis: Redis,
+) -> dict:
+    """
+    Zagregowane statystyki dłużników z WAPRO. Cache TTL 120s.
+    """
+    cache_key = "debtors:stats"
+    cached = await _get_redis_cache(redis, cache_key)
+    if cached is not None:
+        logger.debug("Stats dłużników pobrane z cache")
+        return cached
+
+    try:
+        wapro_result = await get_debtors_stats()
+    except Exception as exc:
+        logger.error(
+            "Błąd pobierania statystyk dłużników",
+            extra={"error": str(exc)},
+        )
+        raise DebtorWaproError(f"Nie udało się pobrać statystyk: {exc}") from exc
+
+    row = wapro_result.rows[0] if wapro_result.rows else {}
+
+    result = {
+        "total_debtors":      int(row.get("total_debtors")      or 0),
+        "overdue_debtors":    int(row.get("overdue_debtors")     or 0),
+        "total_debt":         float(row.get("total_debt")        or 0),
+        "avg_debt":           round(float(row.get("avg_debt")    or 0), 2),
+        "max_debt":           float(row.get("max_debt")          or 0),
+        "max_overdue_days":   int(row.get("max_overdue_days")    or 0),
+        "debtors_with_email": int(row.get("debtors_with_email")  or 0),
+        "debtors_with_phone": int(row.get("debtors_with_phone")  or 0),
+    }
+
+    await _set_redis_cache(redis, cache_key, result, 120)
+
+    logger.info(
+        "Statystyki dłużników pobrane z WAPRO",
+        extra={
+            "total_debtors": result["total_debtors"],
+            "total_debt":    result["total_debt"],
+            "overdue":       result["overdue_debtors"],
+        },
+    )
+
+    return result
