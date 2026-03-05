@@ -963,6 +963,73 @@ async def get_debtor_by_id(kontrahent_id: int) -> QueryResult:
 
     return result
 
+async def get_debtors_stats() -> QueryResult:
+    """
+    Pobiera zagregowane statystyki dłużników z VIEW_kontrahenci.
+
+    Używane przez GET /api/v1/debtors/stats.
+
+    Returns:
+        QueryResult z jednym wierszem zawierającym agregaty.
+    """
+    query_id = str(uuid.uuid4())
+    result = QueryResult(
+        query_id=query_id,
+        query_type="debtors_stats",
+        params_summary={},
+    )
+
+    logger.info(
+        "get_debtors_stats start [%s]",
+        query_id,
+        extra={"query_id": query_id},
+    )
+
+    t_start = time.monotonic()
+
+    try:
+        sql = f"""
+            SELECT
+                COUNT(*)                                              AS total_debtors,
+                COUNT(CASE WHEN DniPrzeterminowania > 0 THEN 1 END)  AS overdue_debtors,
+                COALESCE(SUM(SumaDlugu), 0)                          AS total_debt,
+                COALESCE(AVG(SumaDlugu), 0)                          AS avg_debt,
+                COALESCE(MAX(SumaDlugu), 0)                          AS max_debt,
+                COALESCE(MAX(DniPrzeterminowania), 0)                AS max_overdue_days,
+                COUNT(CASE WHEN Email   IS NOT NULL THEN 1 END)      AS debtors_with_email,
+                COUNT(CASE WHEN Telefon IS NOT NULL THEN 1 END)      AS debtors_with_phone
+            FROM {VIEW_KONTRAHENCI}
+        """
+
+        rows = await _run_in_executor(
+            _execute_query_sync,
+            sql.strip(), (), query_id, "debtors_stats",
+        )
+
+        result.rows = rows
+        result.total_count = 1
+        result.duration_ms = (time.monotonic() - t_start) * 1000
+        result.success = True
+
+        logger.info(
+            "get_debtors_stats OK [%s]: %.1fms",
+            query_id, result.duration_ms,
+            extra=result.to_log_dict(),
+        )
+
+    except Exception as exc:
+        result.duration_ms = (time.monotonic() - t_start) * 1000
+        result.error = str(exc)
+        result.success = False
+
+        logger.error(
+            "get_debtors_stats BŁĄD [%s]: %s",
+            query_id, exc,
+            extra={**result.to_log_dict(), "traceback": traceback.format_exc()},
+        )
+        raise
+
+    return result
 
 # ---------------------------------------------------------------------------
 # ZAPYTANIE 3: Faktury kontrahenta (VIEW_rozrachunki_faktur)
@@ -1260,4 +1327,5 @@ __all__ = [
     # Stałe — nazwy widoków (do referencji w serwisach)
     "VIEW_KONTRAHENCI",
     "VIEW_ROZRACHUNKI_FAKTUR",
+    "get_debtors_stats",
 ]

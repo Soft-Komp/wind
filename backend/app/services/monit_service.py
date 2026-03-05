@@ -63,7 +63,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
-from backend.app import db
+from app import db
 import orjson
 from redis.asyncio import Redis
 from sqlalchemy import and_, case, desc, func, select, update
@@ -1158,3 +1158,134 @@ async def cancel(
         "message": f"Monit #{monit_id} został anulowany.",
         "reason": reason,
     }
+
+    # ===========================================================================
+# Podgląd PDF (GET /debtors/{id}/preview-pdf)
+# ===========================================================================
+
+async def generate_pdf_preview(
+    db: AsyncSession,
+    wapro: WaproConnectionPool,
+    redis: Redis,
+    debtor_id: int,
+    template_id: int,
+    channel: str = "email",
+) -> bytes:
+    """
+    Generuje podgląd PDF monitu w pamięci (bez zapisu do MonitHistory).
+
+    Pobiera dane dłużnika z WAPRO i szablon z dbo_ext.skw_Templates,
+    generuje PDF przez ReportLab i zwraca jako bytes.
+
+    Args:
+        db:          Sesja SQLAlchemy.
+        wapro:       Pula połączeń WAPRO.
+        redis:       Klient Redis.
+        debtor_id:   ID kontrahenta WAPRO.
+        template_id: ID szablonu z skw_Templates.
+        channel:     Kanał: email | sms | letter.
+
+    Returns:
+        Bajty PDF gotowe do StreamingResponse.
+
+    Raises:
+        MonitTemplateNotFoundError: Szablon nie istnieje.
+        MonitDebtorNotFoundError:   Dłużnik nie istnieje w WAPRO.
+    """
+    from io import BytesIO
+    from sqlalchemy import select as sa_select
+
+    # 1. Pobierz szablon z dbo_ext
+    from app.db.models.monit_history import MonitHistory  # noqa (reuse session)
+    from sqlalchemy import text
+
+    tmpl_result = await db.execute(
+        text(
+            "SELECT ID_TEMPLATE, TemplateName, TemplateType, Subject, Body "
+            "FROM dbo_ext.skw_Templates "
+            "WHERE ID_TEMPLATE = :tid AND IsActive = 1"
+        ),
+        {"tid": template_id},
+    )
+    tmpl_row = tmpl_result.mappings().one_or_none()
+    if tmpl_row is None:
+        raise MonitTemplateNotFoundError(
+            f"Szablon ID={template_id} nie istnieje lub jest nieaktywny."
+        )
+
+    # 2. Pobierz dłużnika z WAPRO (przez debtor_service cache)
+    from app.services import debtor_service
+    try:
+        debtor_data = await debtor_service.get_by_id(
+            wapro=wapro, db=db, redis=redis, debtor_id=debtor_id
+        )
+    except Exception as exc:
+        raise MonitDebtorNotFoundError(
+            f"Dłużnik ID={debtor_id} nie istnieje w WAPRO."
+        ) from exc
+
+    debtor = debtor_data.get("debtor", {})
+
+    # 3. Generuj PDF przez ReportLab
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import cm
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    except ImportError as exc:
+        raise RuntimeError(
+            "ReportLab nie jest zainstalowany. "
+            "Dodaj 'reportlab' do requirements.txt i przebuduj kontener."
+        ) from exc
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2 * cm,
+        leftMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    # Nagłówek — nazwa firmy dłużnika
+    nazwa = debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or f"ID {debtor_id}"
+    story.append(Paragraph(f"<b>Podgląd monitu — {nazwa}</b>", styles["Title"]))
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Metadane
+    story.append(Paragraph(f"Szablon: {tmpl_row['TemplateName']}", styles["Normal"]))
+    story.append(Paragraph(f"Kanał: {channel}", styles["Normal"]))
+    if tmpl_row.get("Subject"):
+        story.append(Paragraph(f"Temat: {tmpl_row['Subject']}", styles["Normal"]))
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Treść szablonu
+    body_text = tmpl_row.get("Body") or "(brak treści szablonu)"
+    # Zamień \n na <br/> dla ReportLab
+    body_text = body_text.replace("\n", "<br/>")
+    story.append(Paragraph(body_text, styles["Normal"]))
+
+    story.append(Spacer(1, 1 * cm))
+    story.append(Paragraph(
+        "<i>Ten dokument to podgląd — nie został zapisany w historii monitów.</i>",
+        styles["Italic"],
+    ))
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    logger.info(
+        "Wygenerowano podgląd PDF monitu",
+        extra={
+            "debtor_id": debtor_id,
+            "template_id": template_id,
+            "channel": channel,
+            "pdf_size_bytes": len(pdf_bytes),
+        },
+    )
+
+    return pdf_bytes
