@@ -387,6 +387,7 @@ async def create(
         )
     )
 
+    await db.commit()
     audit_service.log_crud(
         db=db,
         action="comment_created",
@@ -399,7 +400,6 @@ async def create(
         },
         success=True,
     )
-
     return _comment_to_dict(new_comment)
 
 
@@ -455,7 +455,7 @@ async def update(
     comment.tresc = data.tresc
     comment.updated_at = datetime.now(timezone.utc)
     await db.flush()
-
+    await db.commit()
     new_value = _comment_to_dict(comment)
 
     logger.info(
@@ -572,7 +572,7 @@ async def initiate_delete(
 
     delete_token = jwt.encode(
         token_payload,
-        settings.secret_key,
+        settings.secret_key.get_secret_value(),
         algorithm=settings.algorithm,
     )
 
@@ -665,7 +665,7 @@ async def confirm_delete(
     try:
         payload = jwt.decode(
             confirm_token,
-            settings.secret_key,
+            settings.secret_key.get_secret_value(),
             algorithms=[settings.algorithm],
         )
     except JWTError as exc:
@@ -711,7 +711,7 @@ async def confirm_delete(
     comment.is_active = False
     comment.updated_at = datetime.now(timezone.utc)
     await db.flush()
-
+    await db.commit()
     logger.warning(
         "Komentarz usunięty (soft-delete)",
         extra={
