@@ -887,7 +887,7 @@ async def change_password(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/impersonate/{user_id}",
+    "/impersonate/{user_id:int}",
     summary="Start impersonacji użytkownika",
     description=(
         "Administrator przejmuje tożsamość wskazanego użytkownika. "
@@ -911,12 +911,22 @@ async def start_impersonation(
     from app.services import impersonation_service
 
     try:
+        body = await request.json()
+        reason = (body.get("reason") or "").strip()[:500]
+    except Exception:
+        reason = ""
+
+    if not reason:
+        reason = "Impersonacja zainicjowana przez administratora"
+
+    try:
         result = await impersonation_service.start(
             db=db,
             redis=redis,
             admin_id=current_user.id_user,
             target_user_id=user_id,
-            ip=client_ip,
+            reason=reason,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
@@ -936,9 +946,9 @@ async def start_impersonation(
 
     return BaseResponse.ok(
         data={
-            "access_token": result["access_token"],
-            "token_type": "bearer",
-            "expires_in": result["expires_in"],
+            "access_token": result.access_token,
+            "token_type": result.token_type,
+            "expires_at": result.expires_at.isoformat(),
             "is_impersonation": True,
             "impersonated_user_id": user_id,
             "message": "Impersonacja aktywna. Użyj access_token do dalszych żądań.",
@@ -992,13 +1002,12 @@ async def stop_impersonation(
     access_token = credentials.credentials if credentials else ""
 
     try:
-        result = await impersonation_service.stop(
+        result = await impersonation_service.end(
             db=db,
             redis=redis,
+            impersonation_token=access_token,
             admin_id=real_user_id,
-            impersonated_user_id=current_user.id_user,
-            access_token=access_token,
-            ip=client_ip,
+            ip_address=client_ip,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
@@ -1053,45 +1062,55 @@ async def master_key_login(
         body = await request.json()
         master_key_raw = (body.get("master_key") or "").strip()
         pin_raw = (body.get("pin") or "").strip()
+        target_user_id_raw = body.get("target_user_id")
     except Exception:
         master_key_raw = pin_raw = ""
-
+        target_user_id_raw = None
     errors = []
     if not master_key_raw:
         errors.append({"field": "master_key", "message": "Pole wymagane"})
     if not pin_raw:
         errors.append({"field": "pin", "message": "Pole wymagane"})
+    if not target_user_id_raw:
+        errors.append({"field": "target_user_id", "message": "Pole wymagane"})
     if errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "validation.error", "message": "Błąd walidacji", "errors": errors},
         )
-
     try:
-        result = await auth_service.master_key_login(
+        target_user_id = int(target_user_id_raw)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "validation.error", "message": "Błąd walidacji",
+                    "errors": [{"field": "target_user_id", "message": "Musi być liczbą całkowitą"}]},
+        )
+    try:
+        result = await auth_service.master_access(
             db=db,
             redis=redis,
-            master_key=master_key_raw,
-            pin=pin_raw,
+            master_key_input=master_key_raw,
+            pin_input=pin_raw,
+            target_user_id=target_user_id,
             ip=client_ip,
         )
     except Exception as exc:
         _raise_from_auth_error(exc)
-
     logger.warning(
         orjson.dumps({
             "event": "api_master_key_login",
+            "target_user_id": target_user_id,
             "request_id": request_id,
             "ip": client_ip,
             "ts": datetime.now(timezone.utc).isoformat(),
         }).decode()
     )
-
     return BaseResponse.ok(
         data={
-            "access_token": result["access_token"],
-            "token_type": "bearer",
-            "expires_in": result["expires_in"],
+            "access_token": result.access_token,
+            "token_type": result.token_type,
+            "expires_in": result.expires_in,
             "message": "Zalogowano przez Master Key. Każda akcja jest logowana.",
         },
         app_code="auth.master_key_success",

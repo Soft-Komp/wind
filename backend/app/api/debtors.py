@@ -683,3 +683,499 @@ def _pages(total: int, per_page: int) -> int:
     if per_page <= 0:
         return 0
     return (total + per_page - 1) // per_page
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT: POST /debtors/{debtor_id}/comments
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{debtor_id}/comments",
+    summary="Dodaj komentarz do dłużnika",
+    description=(
+        "Tworzy nowy komentarz przypisany do dłużnika. "
+        "Właścicielem komentarza zostaje zalogowany użytkownik. "
+        "Treść: NFC, max 10 000 znaków. "
+        "**Wymaga uprawnienia:** `comments.create`"
+    ),
+    response_description="Nowo utworzony komentarz",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_permission("comments.create")],
+)
+async def create_comment(
+    debtor_id: int,
+    request: Request,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import comment_service
+    from app.services.comment_service import (
+        CommentCreateData,
+        CommentNotFoundError,
+        CommentPermissionError,
+        CommentValidationError,
+    )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    tresc_raw = (body.get("tresc") or "").strip()
+    if not tresc_raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "validation.error",
+                "message": "Błąd walidacji",
+                "errors": [{"field": "tresc", "message": "Pole wymagane"}],
+            },
+        )
+
+    try:
+        data = CommentCreateData(debtor_id=debtor_id, tresc=tresc_raw)
+    except CommentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "validation.error",
+                "message": "Błąd walidacji",
+                "errors": [{"field": "tresc", "message": str(exc)}],
+            },
+        )
+
+    try:
+        result = await comment_service.create(
+            db=db,
+            data=data,
+            author_user_id=current_user.id_user,
+            ip_address=client_ip,
+        )
+    except CommentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "comments.validation_error",
+                "message": str(exc),
+                "errors": [{"field": "tresc", "message": str(exc)}],
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event": "create_comment_error",
+                "debtor_id": debtor_id,
+                "user_id": current_user.id_user,
+                "error": str(exc),
+                "request_id": request_id,
+                "ip": client_ip,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "server.internal_error", "message": "Błąd serwera", "errors": []},
+        )
+
+    logger.info(
+        orjson.dumps({
+            "event": "comment_created",
+            "comment_id": result.get("id_comment"),
+            "debtor_id": debtor_id,
+            "user_id": current_user.id_user,
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data=result,
+        app_code="comments.created",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT: PUT /debtors/{debtor_id}/comments/{comment_id}
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.put(
+    "/{debtor_id}/comments/{comment_id:int}",
+    summary="Edytuj komentarz",
+    description=(
+        "Aktualizuje treść komentarza. "
+        "Właściciel może edytować własny komentarz (`comments.edit_own`). "
+        "Inni użytkownicy wymagają `comments.edit_any`. "
+        "**Wymaga uprawnienia:** `comments.edit_own` lub `comments.edit_any`"
+    ),
+    response_description="Zaktualizowany komentarz",
+    status_code=status.HTTP_200_OK,
+)
+async def update_comment(
+    debtor_id: int,
+    comment_id: int,
+    request: Request,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import comment_service
+    from app.services.comment_service import (
+        CommentNotFoundError,
+        CommentPermissionError,
+        CommentUpdateData,
+        CommentValidationError,
+    )
+
+    # Sprawdź uprawnienia — user musi mieć edit_own LUB edit_any
+    from app.core.dependencies import _get_role_permissions
+    user_perms = await _get_role_permissions(current_user.role_id, db, redis)
+    has_edit_own = "comments.edit_own" in user_perms
+    has_edit_any = "comments.edit_any" in user_perms
+
+    if not has_edit_own and not has_edit_any:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "auth.permission_denied",
+                "message": "Wymagane uprawnienie: comments.edit_own lub comments.edit_any",
+                "errors": [{"field": "permission", "message": "Brak wymaganego uprawnienia"}],
+            },
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    tresc_raw = (body.get("tresc") or "").strip()
+    if not tresc_raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "validation.error",
+                "message": "Błąd walidacji",
+                "errors": [{"field": "tresc", "message": "Pole wymagane"}],
+            },
+        )
+
+    try:
+        data = CommentUpdateData(tresc=tresc_raw)
+    except CommentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "validation.error",
+                "message": "Błąd walidacji",
+                "errors": [{"field": "tresc", "message": str(exc)}],
+            },
+        )
+
+    try:
+        result = await comment_service.update(
+            db=db,
+            comment_id=comment_id,
+            data=data,
+            requesting_user_id=current_user.id_user,
+            has_edit_any=has_edit_any,
+            ip_address=client_ip,
+        )
+    except CommentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "comments.not_found", "message": str(exc), "errors": []},
+        )
+    except CommentPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "auth.permission_denied", "message": str(exc), "errors": []},
+        )
+    except CommentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "comments.validation_error",
+                "message": str(exc),
+                "errors": [{"field": "tresc", "message": str(exc)}],
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event": "update_comment_error",
+                "comment_id": comment_id,
+                "debtor_id": debtor_id,
+                "user_id": current_user.id_user,
+                "error": str(exc),
+                "request_id": request_id,
+                "ip": client_ip,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "server.internal_error", "message": "Błąd serwera", "errors": []},
+        )
+
+    logger.info(
+        orjson.dumps({
+            "event": "comment_updated",
+            "comment_id": comment_id,
+            "debtor_id": debtor_id,
+            "user_id": current_user.id_user,
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data=result,
+        app_code="comments.updated",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT: DELETE /debtors/{debtor_id}/comments/{comment_id}
+# Krok 1 — inicjacja usunięcia, zwraca token potwierdzający
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/{debtor_id}/comments/{comment_id:int}",
+    summary="Inicjuj usunięcie komentarza (krok 1/2)",
+    description=(
+        "Krok 1 dwuetapowego usunięcia komentarza. "
+        "Zwraca token potwierdzający (JWT) ważny przez TTL z konfiguracji. "
+        "Właściciel może usunąć własny (`comments.delete_own`). "
+        "Inni wymagają `comments.delete_any`. "
+        "**Wymaga uprawnienia:** `comments.delete_own` lub `comments.delete_any`"
+    ),
+    response_description="Token potwierdzający usunięcie",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def initiate_delete_comment(
+    debtor_id: int,
+    comment_id: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import comment_service
+    from app.services.comment_service import (
+        CommentNotFoundError,
+        CommentPermissionError,
+    )
+
+    from app.core.dependencies import _get_role_permissions
+    user_perms = await _get_role_permissions(current_user.role_id, db, redis)
+    has_delete_own = "comments.delete_own" in user_perms
+    has_delete_any = "comments.delete_any" in user_perms
+
+    if not has_delete_own and not has_delete_any:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "auth.permission_denied",
+                "message": "Wymagane uprawnienie: comments.delete_own lub comments.delete_any",
+                "errors": [{"field": "permission", "message": "Brak wymaganego uprawnienia"}],
+            },
+        )
+
+    try:
+        result = await comment_service.initiate_delete(
+            db=db,
+            redis=redis,
+            comment_id=comment_id,
+            requesting_user_id=current_user.id_user,
+            has_delete_any=has_delete_any,
+            ip_address=client_ip,
+        )
+    except CommentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "comments.not_found", "message": str(exc), "errors": []},
+        )
+    except CommentPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "auth.permission_denied", "message": str(exc), "errors": []},
+        )
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event": "initiate_delete_comment_error",
+                "comment_id": comment_id,
+                "debtor_id": debtor_id,
+                "user_id": current_user.id_user,
+                "error": str(exc),
+                "request_id": request_id,
+                "ip": client_ip,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "server.internal_error", "message": "Błąd serwera", "errors": []},
+        )
+
+    logger.warning(
+        orjson.dumps({
+            "event": "comment_delete_initiated",
+            "comment_id": comment_id,
+            "debtor_id": debtor_id,
+            "user_id": current_user.id_user,
+            "expires_in": result.expires_in,
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data={
+            "token": result.token,
+            "expires_in": result.expires_in,
+            "comment_id": result.comment_id,
+            "debtor_id": result.debtor_id,
+            "tresc_preview": result.tresc_preview,
+            "message": (
+                f"Potwierdź usunięcie wysyłając token na "
+                f"DELETE /debtors/{debtor_id}/comments/{comment_id}/confirm"
+            ),
+        },
+        app_code="comments.delete_initiated",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT: DELETE /debtors/{debtor_id}/comments/{comment_id}/confirm
+# Krok 2 — potwierdzenie usunięcia tokenem
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/{debtor_id}/comments/{comment_id:int}/confirm",
+    summary="Potwierdź usunięcie komentarza (krok 2/2)",
+    description=(
+        "Krok 2 dwuetapowego usunięcia. "
+        "Wymaga tokenu z kroku 1 w nagłówku `X-Confirm-Token` lub body `{confirm_token}`. "
+        "Wykonuje soft-delete (IsActive=0). "
+        "**Wymaga uprawnienia:** `comments.delete_own` lub `comments.delete_any`"
+    ),
+    response_description="Potwierdzenie usunięcia",
+    status_code=status.HTTP_200_OK,
+)
+async def confirm_delete_comment(
+    debtor_id: int,
+    comment_id: int,
+    request: Request,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import comment_service
+    from app.services.comment_service import (
+        CommentDeleteTokenError,
+        CommentNotFoundError,
+        CommentPermissionError,
+    )
+
+    from app.core.dependencies import _get_role_permissions
+    user_perms = await _get_role_permissions(current_user.role_id, db, redis)
+    has_delete_own = "comments.delete_own" in user_perms
+    has_delete_any = "comments.delete_any" in user_perms
+
+    if not has_delete_own and not has_delete_any:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "auth.permission_denied",
+                "message": "Wymagane uprawnienie: comments.delete_own lub comments.delete_any",
+                "errors": [{"field": "permission", "message": "Brak wymaganego uprawnienia"}],
+            },
+        )
+
+    # Token z nagłówka lub body
+    confirm_token = request.headers.get("X-Confirm-Token", "").strip()
+    if not confirm_token:
+        try:
+            body = await request.json()
+            confirm_token = (body.get("confirm_token") or "").strip()
+        except Exception:
+            confirm_token = ""
+
+    if not confirm_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "validation.error",
+                "message": "Błąd walidacji",
+                "errors": [{"field": "confirm_token", "message": "Token potwierdzający wymagany"}],
+            },
+        )
+
+    try:
+        result = await comment_service.confirm_delete(
+            db=db,
+            redis=redis,
+            comment_id=comment_id,
+            confirm_token=confirm_token,
+            requesting_user_id=current_user.id_user,
+            ip_address=client_ip,
+        )
+    except CommentDeleteTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "comments.invalid_token", "message": str(exc), "errors": []},
+        )
+    except CommentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "comments.not_found", "message": str(exc), "errors": []},
+        )
+    except CommentPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "auth.permission_denied", "message": str(exc), "errors": []},
+        )
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event": "confirm_delete_comment_error",
+                "comment_id": comment_id,
+                "debtor_id": debtor_id,
+                "user_id": current_user.id_user,
+                "error": str(exc),
+                "request_id": request_id,
+                "ip": client_ip,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "server.internal_error", "message": "Błąd serwera", "errors": []},
+        )
+
+    logger.warning(
+        orjson.dumps({
+            "event": "comment_deleted",
+            "comment_id": comment_id,
+            "debtor_id": debtor_id,
+            "user_id": current_user.id_user,
+            "request_id": request_id,
+            "ip": client_ip,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data=result,
+        app_code="comments.deleted",
+    )    

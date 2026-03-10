@@ -5,13 +5,13 @@
 # MSSQL:  zewnętrzny, sieć lokalna — 192.168.0.53 (NIE w kontenerze)
 # Redis:  kontener lokalny
 # API:    kontener lokalny, port 8000
-# Worker: TODO Faza 6 — ARQ (niezaimplementowany, odkomentuj gdy gotowy)
+# Worker: Faza 6 — ARQ Worker + REST API (port 8001)
 #
 # Uruchomienie:
-#   1. Skopiuj .env.example → .env i uzupełnij hasła
-#   2. docker-compose up --build
-#   3. API dostępne na http://localhost:8000
-#   4. Docs: http://localhost:8000/api/v1/docs
+#   docker-compose up --build
+#
+# Tylko API bez workera:
+#   docker-compose up redis api
 #
 # Zatrzymanie:
 #   docker-compose down
@@ -63,6 +63,7 @@ services:
 
   # ─────────────────────────────────────────────────────────────────────────
   # API — FastAPI backend
+  # IDENTYCZNA konfiguracja jak w działającej wersji — nic nie zmieniono
   # ─────────────────────────────────────────────────────────────────────────
   api:
     build:
@@ -73,7 +74,6 @@ services:
       - .env
     environment:
       # MSSQL — zewnętrzny serwer w sieci lokalnej
-      # Kontenery Docker Desktop mogą bezpośrednio dosięgnąć 192.168.0.53
       DB_HOST: "${DB_HOST:-192.168.0.53}"
       DB_PORT: "${DB_PORT:-1433}"
       DB_NAME: "${DB_NAME}"
@@ -81,21 +81,17 @@ services:
       DB_PASSWORD: "${DB_PASSWORD}"
       DB_TRUST_SERVER_CERTIFICATE: "${DB_TRUST_SERVER_CERTIFICATE:-true}"
       DB_ENCRYPT: "${DB_ENCRYPT:-false}"
-
       # Redis — usługa w tym samym compose
       REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
-
       # Aplikacja
       APP_ENV: "${APP_ENV:-development}"
       DEBUG: "${DEBUG:-true}"
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # Hot reload w dev — mapuje cały backend do kontenera
       - ./backend:/app
-      - ./database:/app/database  # ⬅️ NOWE: seedery
+      - ./database:/app/database
       - ./database:/app/database:ro
-      # Wolumeny trwałe — logi/snapshoty/archiwa poza kontenerem
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
       - ./archives:/app/archives
@@ -118,33 +114,57 @@ services:
         max-file: "10"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # WORKER — ARQ (TODO: Faza 6 — odkomentuj po implementacji)
+  # WORKER — ARQ background worker + REST API (port 8001)
+  # Faza 6: odkomentowana i uzupełniona wersja z oryginalnego docker-compose
   # ─────────────────────────────────────────────────────────────────────────
-  # worker:
-  #   build:
-  #     context: ./worker
-  #     dockerfile: Dockerfile
-  #   container_name: windykacja_worker
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     DB_HOST: "${DB_HOST:-192.168.0.53}"
-  #     DB_PORT: "${DB_PORT:-1433}"
-  #     DB_NAME: "${DB_NAME}"
-  #     DB_USER: "${DB_USER:-sa}"
-  #     DB_PASSWORD: "${DB_PASSWORD}"
-  #     REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
-  #   volumes:
-  #     - ./worker:/app
-  #     - ./logs:/app/logs
-  #     - ./snapshots:/app/snapshots
-  #     - ./archives:/app/archives
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   restart: unless-stopped
-  #   networks:
-  #     - windykacja_net
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: windykacja_worker
+    env_file:
+      - .env
+    environment:
+      # MSSQL — identyczne jak API
+      DB_HOST: "${DB_HOST:-192.168.0.53}"
+      DB_PORT: "${DB_PORT:-1433}"
+      DB_NAME: "${DB_NAME}"
+      DB_USER: "${DB_USER:-sa}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      DB_TRUST_SERVER_CERTIFICATE: "${DB_TRUST_SERVER_CERTIFICATE:-true}"
+      DB_ENCRYPT: "${DB_ENCRYPT:-false}"
+      # Redis — identyczne jak API
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      # Timezone + Python
+      TZ: "Europe/Warsaw"
+      PYTHONPATH: "/app"
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./worker:/app/worker
+      - ./logs:/app/logs
+      - ./snapshots:/app/snapshots
+      - ./archives:/app/archives
+      - ./pdf_cache:/app/pdf_cache
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "10"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WOLUMENY

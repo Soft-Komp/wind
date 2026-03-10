@@ -70,8 +70,8 @@ _DEFAULT_MAX_HOURS: int = 4
 _REDIS_BLACKLIST_KEY = "auth:blacklist:{jti}"
 
 # Klucz w payloadzie JWT oznaczający impersonację
-_JWT_CLAIM_IS_IMPERSONATION = "is_impersonation"
-_JWT_CLAIM_IMPERSONATED_BY  = "impersonated_by"
+_JWT_CLAIM_IS_IMPERSONATION = "imp"
+_JWT_CLAIM_IMPERSONATED_BY  = "imp_by"
 
 # Plik logów impersonacji
 _IMPERSONATION_LOG_FILE_PATTERN = "logs/impersonation_{date}.jsonl"
@@ -244,9 +244,12 @@ def _sanitize_reason(reason: str) -> str:
 
 
 async def _get_active_user(db: AsyncSession, user_id: int) -> Optional[User]:
-    """Pobiera aktywnego użytkownika po ID."""
+    """Pobiera aktywnego użytkownika po ID z eager-load roli (unika lazy load poza async)."""
+    from sqlalchemy.orm import selectinload
     result = await db.execute(
-        select(User).where(
+        select(User)
+        .options(selectinload(User.role))
+        .where(
             and_(User.id_user == user_id, User.is_active == True)  # noqa: E712
         )
     )
@@ -454,27 +457,31 @@ async def start(
         default=_DEFAULT_MAX_HOURS,
     )
 
-    # --- 7. Pobranie uprawnień docelowego użytkownika ---
-    # Ładujemy uprawnienia aby umieścić je w JWT (tak jak w normalnym login)
+    # --- 7. Pobranie uprawnień admina ---
+    # Token należy do admina (sub=admin_id) — perms muszą być jego uprawnieniami
     from sqlalchemy.orm import selectinload
+    from app.db.models.role import Role
+    from app.db.models.role_permission import RolePermission
+    from app.db.models.permission import Permission
     result = await db.execute(
         select(User)
         .options(
-            selectinload(User.role).selectinload("permissions")
+            selectinload(User.role)
+            .selectinload(Role.role_permissions)
+            .selectinload(RolePermission.permission)
         )
-        .where(User.id_user == target_user_id)
+        .where(User.id_user == admin_id)
     )
-    target_user_with_role = result.scalar_one_or_none()
-
-    # Ekstrakcja uprawnień z roli
+    admin_with_role = result.scalar_one_or_none()
+    # Ekstrakcja uprawnień z roli admina
     permissions: list[str] = []
-    if target_user_with_role and target_user_with_role.role:
-        role = target_user_with_role.role
-        if hasattr(role, "permissions"):
+    if admin_with_role and admin_with_role.role:
+        role = admin_with_role.role
+        if hasattr(role, "role_permissions"):
             permissions = [
-                p.permission_name
-                for p in role.permissions
-                if p.is_active
+                rp.permission.permission_name
+                for rp in role.role_permissions
+                if rp.permission and rp.permission.is_active
             ]
 
     # --- 8. Tworzenie tokenu JWT impersonacji ---
@@ -486,21 +493,22 @@ async def start(
 
     # Payload tokenu impersonacji (rozszerzony o metadane impersonacji)
     token_payload = {
-        "sub": str(target_user_id),
-        "username": target_user.username,
-        "role": target_role_name or "Unknown",
-        "permissions": permissions,
-        "iat": int(now.timestamp()),
-        "exp": int(expires_at.timestamp()),
-        "type": "access",
-        "jti": jti,
-        _JWT_CLAIM_IS_IMPERSONATION: True,
-        _JWT_CLAIM_IMPERSONATED_BY: admin_id,
+        "sub":    str(admin_id),
+        "scope":  "access",
+        "uid":    admin_id,
+        "uname":  admin.username,
+        "rid":    admin.role_id,
+        "perms":  permissions,
+        "imp":    target_user_id,
+        "imp_by": admin_id,
+        "iat":    now,
+        "exp":    expires_at,
+        "jti":    jti,
     }
 
     access_token = jwt.encode(
         token_payload,
-        settings.secret_key,
+        settings.secret_key.get_secret_value(),
         algorithm=settings.algorithm,
     )
 
@@ -560,7 +568,7 @@ async def start(
     audit_service.log(
         db=db,
         action="user_impersonation_start",
-        action_category="Auth",
+        category="Auth",
         entity_type="User",
         entity_id=target_user_id,
         details={
@@ -725,7 +733,7 @@ async def end(
     audit_service.log(
         db=db,
         action="user_impersonation_end",
-        action_category="Auth",
+        category="Auth",
         entity_type="User",
         entity_id=int(target_user_id) if target_user_id else None,
         details={

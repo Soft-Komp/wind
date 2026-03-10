@@ -121,3 +121,5 @@ python-dateutil==2.9.0
 # respx==0.21.1          # mock dla httpx (zewnętrzne API w testach)
 # coverage==7.6.10
 # =============================================================================
+
+arq==0.26.1

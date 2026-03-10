@@ -42,13 +42,13 @@ class Comment(AuditMixin, Base):
         comment="Ref do WAPRO.KONTRAHENT — brak FK (WAPRO read-only, osobny schemat)",
     )
     tresc: Mapped[str] = mapped_column(
-        "Tresc",        # ← polska nazwa kolumny zgodna z dokumentacją v1.5
+        "Content",        # ← polska nazwa kolumny zgodna z dokumentacją v1.5
         Text,
         nullable=False,
         comment="Treść komentarza. Np. 'Obiecał zapłacić do piątku.'",
     )
     uzytkownik_id: Mapped[int] = mapped_column(
-        "UzytkownikID", # ← polska nazwa kolumny zgodna z dokumentacją v1.5
+        "ID_USER", # ← polska nazwa kolumny zgodna z dokumentacją v1.5
         Integer,
         ForeignKey(
             "dbo_ext.skw_Users.ID_USER",

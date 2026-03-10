@@ -1304,6 +1304,100 @@ async def ping() -> dict[str, Any]:
         }
 
 
+
+async def get_kontrahent_names_batch(
+    ids: list[int],
+) -> dict[int, str | None]:
+    """
+    Pobiera nazwy kontrahentów dla listy ID w jednym zapytaniu (batch).
+
+    Używana do wzbogacenia list monitów o nazwę kontrahenta bez N+1 queries.
+    Zapytanie sparametryzowane — bezpieczne dla dowolnej listy IDs.
+
+    Args:
+        ids: Lista ID_KONTRAHENTA (duplikaty dozwolone — deduplikacja wewnętrzna).
+
+    Returns:
+        Słownik {id_kontrahenta: NazwaKontrahenta | None}.
+        Dla ID nieznalezionych w WAPRO — klucz istnieje z wartością None.
+        Pusty słownik jeśli ids jest pusty.
+
+    Raises:
+        Nic — wszelkie błędy są łapane i logowane.
+        W razie błędu zwraca słownik z None dla wszystkich ID.
+
+    Przykład:
+        names = await get_kontrahent_names_batch([7, 12, 42])
+        # → {7: "Firma ABC Sp. z o.o.", 12: "Jan Kowalski", 42: None}
+    """
+    # Walidacja i deduplicacja — ochrona przed pustym IN()
+    unique_ids = list({int(i) for i in ids if i is not None and i > 0})
+
+    if not unique_ids:
+        return {}
+
+    query_id = str(uuid.uuid4())
+
+    # Buduj IN (?, ?, ...) bezpiecznie — tylko ints, bez interpolacji stringów
+    placeholders = ", ".join("?" * len(unique_ids))
+    sql = f"""
+        SELECT ID_KONTRAHENTA, NazwaKontrahenta
+        FROM {VIEW_KONTRAHENCI}
+        WHERE ID_KONTRAHENTA IN ({placeholders})
+    """
+    params = tuple(unique_ids)
+
+    # Inicjalizuj wynik z None dla wszystkich — graceful degradation
+    result: dict[int, str | None] = {i: None for i in unique_ids}
+
+    t_start = time.monotonic()
+
+    try:
+        rows = await _run_in_executor(
+            _execute_query_sync,
+            sql, params, query_id, "kontrahent_names_batch",
+        )
+
+        found_count = 0
+        for row in rows:
+            kontrahent_id = row.get("ID_KONTRAHENTA")
+            nazwa         = row.get("NazwaKontrahenta")
+            if kontrahent_id is not None:
+                result[int(kontrahent_id)] = nazwa
+                found_count += 1
+
+        duration_ms = (time.monotonic() - t_start) * 1000
+
+        logger.debug(
+            "get_kontrahent_names_batch OK [%s]: requested=%d, found=%d, %.1fms",
+            query_id, len(unique_ids), found_count, duration_ms,
+            extra={
+                "query_id":    query_id,
+                "requested":   len(unique_ids),
+                "found":       found_count,
+                "not_found":   len(unique_ids) - found_count,
+                "duration_ms": round(duration_ms, 2),
+            },
+        )
+
+    except Exception as exc:
+        duration_ms = (time.monotonic() - t_start) * 1000
+        logger.warning(
+            "get_kontrahent_names_batch BŁĄD [%s]: %s — degradacja graceful (None dla wszystkich)",
+            query_id, exc,
+            extra={
+                "query_id":    query_id,
+                "ids_count":   len(unique_ids),
+                "duration_ms": round(duration_ms, 2),
+                "error":       str(exc),
+            },
+        )
+        # NIE rzucamy — zwracamy None dla wszystkich ID (graceful degradation)
+
+    return result
+
+
+
 # ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------
@@ -1328,4 +1422,5 @@ __all__ = [
     "VIEW_KONTRAHENCI",
     "VIEW_ROZRACHUNKI_FAKTUR",
     "get_debtors_stats",
+    "get_kontrahent_names_batch"
 ]

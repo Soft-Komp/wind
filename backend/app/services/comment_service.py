@@ -210,17 +210,60 @@ def _build_log_record(action: str, **kwargs) -> dict:
     }
 
 
-def _comment_to_dict(comment: Comment) -> dict:
-    """Konwertuje obiekt Comment na słownik bezpieczny do zwrotu przez API."""
+def _comment_to_dict(comment) -> dict:
+    """
+    Konwertuje obiekt Comment na słownik bezpieczny do zwrotu przez API.
+
+    Relacja `uzytkownik` (lazy="selectin") jest już załadowana przez SQLAlchemy
+    — brak dodatkowych zapytań do bazy.
+
+    Zwracane pola autora:
+        uzytkownik_id   — raw ID (zachowane: używane wewnętrznie do logiki edit_own)
+        autor_full_name — imię i nazwisko (FullName z skw_Users), None jeśli brak
+        autor_username  — login (Username), zawsze NOT NULL — fallback dla UI
+
+    Przykładowa odpowiedź:
+        {
+            "id_comment": 42,
+            "id_kontrahenta": 7,
+            "tresc": "Obiecał zapłacić do piątku.",
+            "uzytkownik_id": 1,
+            "autor_full_name": "Jan Kowalski",
+            "autor_username": "jkowalski",
+            "is_active": true,
+            "created_at": "2026-03-10T09:15:00+00:00",
+            "updated_at": null
+        }
+    """
+    # Bezpieczne pobranie danych autora — relacja może być None przy uszkodzonych danych
+    autor = getattr(comment, "uzytkownik", None)
+    autor_full_name: str | None = None
+
+    if autor is not None:
+        # full_name może być NULL w bazie (pole opcjonalne w skw_Users)
+        autor_full_name = autor.full_name or None
+    else:
+        # Sytuacja awaryjna: relacja nie załadowana lub user usunięty
+        # Logujemy ostrzeżenie — nie rzucamy wyjątku (nie blokujemy odpowiedzi)
+        logger.warning(
+            "Komentarz bez załadowanego autora (relacja uzytkownik=None)",
+            extra={
+                "comment_id":    comment.id_comment,
+                "uzytkownik_id": comment.uzytkownik_id,
+            }
+        )
+
     return {
-        "id_comment":     comment.id_comment,
-        "id_kontrahenta": comment.id_kontrahenta,
-        "tresc":          comment.tresc,
-        "uzytkownik_id":  comment.uzytkownik_id,
-        "is_active":      comment.is_active,
-        "created_at":     comment.created_at.isoformat() if comment.created_at else None,
-        "updated_at":     comment.updated_at.isoformat() if comment.updated_at else None,
+        "id_comment":      comment.id_comment,
+        "id_kontrahenta":  comment.id_kontrahenta,
+        "tresc":           comment.tresc,
+        "uzytkownik_id":   comment.uzytkownik_id,   # zachowane — logika edit_own
+        "autor_full_name": autor_full_name,          # NOWE: imię i nazwisko
+        "is_active":       comment.is_active,
+        "created_at":      comment.created_at.isoformat() if comment.created_at else None,
+        "updated_at":      comment.updated_at.isoformat() if comment.updated_at else None,
     }
+
 
 
 # ===========================================================================
@@ -387,6 +430,7 @@ async def create(
         )
     )
 
+    await db.commit()
     audit_service.log_crud(
         db=db,
         action="comment_created",
@@ -399,7 +443,6 @@ async def create(
         },
         success=True,
     )
-
     return _comment_to_dict(new_comment)
 
 
@@ -455,7 +498,7 @@ async def update(
     comment.tresc = data.tresc
     comment.updated_at = datetime.now(timezone.utc)
     await db.flush()
-
+    await db.commit()
     new_value = _comment_to_dict(comment)
 
     logger.info(
@@ -572,7 +615,7 @@ async def initiate_delete(
 
     delete_token = jwt.encode(
         token_payload,
-        settings.secret_key,
+        settings.secret_key.get_secret_value(),
         algorithm=settings.algorithm,
     )
 
@@ -665,7 +708,7 @@ async def confirm_delete(
     try:
         payload = jwt.decode(
             confirm_token,
-            settings.secret_key,
+            settings.secret_key.get_secret_value(),
             algorithms=[settings.algorithm],
         )
     except JWTError as exc:
@@ -711,7 +754,7 @@ async def confirm_delete(
     comment.is_active = False
     comment.updated_at = datetime.now(timezone.utc)
     await db.flush()
-
+    await db.commit()
     logger.warning(
         "Komentarz usunięty (soft-delete)",
         extra={
