@@ -347,51 +347,45 @@ async def _enqueue_to_arq(
     task_payload: dict,
 ) -> str:
     """
-    Kolejkuje task do ARQ worker.
+    Kolejkuje task do ARQ worker przez oficjalny ARQ pool.
 
-    ARQ używa Redis LPUSH do listy arq:queue:default.
-    Format payloadu: {"function": task_name, "args": [], "kwargs": {...}}
+    Używa get_arq_pool() z app.core.arq_pool — ARQ zapisuje
+    zadanie jako ZSET (nie LIST). Stara implementacja z LPUSH
+    była niezgodna z ARQ i powodowała WRONGTYPE error.
 
     Args:
-        redis:        Klient Redis.
-        task_name:    Nazwa funkcji workera (np. "send_email_task").
-        task_payload: Argumenty dla workera.
+        redis:        Klient Redis (nieużywany bezpośrednio — ARQ pool ma własne połączenie).
+        task_name:    Nazwa funkcji workera (np. "send_bulk_emails").
+        task_payload: Argumenty kwargs dla workera.
 
     Returns:
-        Wygenerowany task_id (UUID).
+        job_id (str) wygenerowany przez ARQ.
 
     Raises:
         MonitError: Gdy kolejkowanie się nie powiodło.
     """
-    import uuid
-    task_id = str(uuid.uuid4())
-    arq_payload = {
-        "function":  task_name,
-        "args":      [],
-        "kwargs":    task_payload,
-        "task_id":   task_id,
-        "enqueued_at": datetime.now(timezone.utc).isoformat(),
-    }
-
     try:
-        await redis.lpush(_ARQ_QUEUE_KEY, orjson.dumps(arq_payload))
+        from app.core.arq_pool import get_arq_pool
+        arq = get_arq_pool()
+        job = await arq.enqueue_job(task_name, **task_payload)
+        task_id = str(job.job_id) if job else "unknown"
+
         logger.info(
             "Task kolejkowany do ARQ",
             extra={
-                "task_id": task_id,
+                "task_id":   task_id,
                 "task_name": task_name,
-                "queue": _ARQ_QUEUE_KEY,
             }
         )
         return task_id
+
     except Exception as exc:
         logger.error(
             "Nie udało się kolejkować task do ARQ",
             extra={"task_name": task_name, "error": str(exc)}
         )
         raise MonitError(f"Błąd kolejkowania zadania '{task_name}': {exc}") from exc
-
-
+    
 # ===========================================================================
 # Publiczne API serwisu — SEND
 # ===========================================================================
