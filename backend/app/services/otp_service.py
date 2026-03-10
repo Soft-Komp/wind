@@ -49,6 +49,7 @@ from app.db.models.otp_code import OtpCode
 from app.db.models.user import User
 from app.services import audit_service
 from app.services import config_service
+from app.core.arq_pool import get_arq_pool
 
 # ---------------------------------------------------------------------------
 # Logger własny dla tego modułu
@@ -773,35 +774,19 @@ async def send_stub(
     ip_address: Optional[str] = None,
 ) -> None:
     """
-    STUB wysyłki kodu OTP — zastępstwo do czasu implementacji ARQ workera (Faza 6).
+    Wysyłka kodu OTP — dwa równoległe mechanizmy:
 
-    Działanie:
-        1. Loguje szczegóły planowanej wysyłki do pliku diagnostycznego
-        2. Zapisuje rekord do kolejki JSONL (logs/otp_send_queue_YYYY-MM-DD.jsonl)
-           — plik ten jest odczytywany przez ARQ workera w Fazie 6
-        3. Log WARNING widoczny w docker logs (informacja że to stub)
+    1. JSONL (dziennik audytowy) — zapis do pliku kolejki jak dotychczas.
+       Służy jako redundantny dziennik nawet gdy ARQ działa poprawnie.
 
-    ⚠️  WAŻNE: Ten stub NIE wysyła żadnego emaila/SMS.
-    Właściwa wysyłka implementowana jest w:
-        worker/tasks/email_task.py (Faza 6)
+    2. ARQ Enqueue (właściwa wysyłka) — task send_otp w workerze.
+       Worker wysyła email/SMS z kodem OTP.
 
-    Kolejka JSONL zawiera wszystkie dane potrzebne do wysyłki:
-        - user_id, email, full_name
-        - otp_code (PLAIN — wyłącznie w kolejce, NIE w bazie)
-        - purpose, otp_id, expires_at
-
-    Args:
-        db:         Sesja SQLAlchemy (do potwierdzenia stanu w logach).
-        user:       Obiekt User (email, username, full_name).
-        otp_code:   Czysty 6-cyfrowy kod OTP do "wysłania".
-        purpose:    Cel wysyłki ("password_reset" lub "2fa").
-        otp_id:     ID rekordu w tabeli OtpCodes.
-        expires_at: Czas wygaśnięcia kodu.
-        ip_address: IP inicjatora (opcjonalny).
+    Jeśli ARQ niedostępny → graceful degradation (tylko JSONL, log error).
     """
     now = datetime.now(timezone.utc)
 
-    # Rekord kolejki wysyłki — kompletne dane dla ARQ workera
+    # ── 1. Zapis do JSONL (zawsze, niezależnie od stanu ARQ) ──────────────────
     send_queue_record = {
         "ts": now.isoformat(),
         "action": "otp_send_pending",
@@ -812,32 +797,72 @@ async def send_stub(
         "full_name": user.full_name,
         "purpose": purpose,
         # UWAGA: plain OTP code zapisany tylko w kolejce (nie w DB)
-        # ARQ worker odczyta ten plik i wyśle email/SMS
         "otp_code": otp_code,
         "expires_at": expires_at.isoformat(),
-        "channel": "email",  # Domyślny kanał — worker może obsługiwać email/SMS
+        "channel": "email",
         "ip_address": ip_address,
-        "stub": True,  # Flaga: to jest stub — właściwy send w Fazie 6
+        "stub": False,          # Faza 6 — właściwa wysyłka przez ARQ
+        "arq_enqueued": False,  # Zaktualizowane poniżej po udanym enqueue
     }
 
-    # Zapis do kolejki JSONL (ARQ worker odbierze w Fazie 6)
     _append_to_file(_get_send_queue_file(), send_queue_record)
 
-    # Log diagnostyczny
-    logger.warning(
-        "[STUB] Kod OTP wygenerowany — faktyczna wysyłka przez ARQ worker (Faza 6). "
-        "Kod zapisany do kolejki JSONL.",
-        extra={
-            "otp_id": otp_id,
-            "user_id": user.id_user,
-            "email": user.email,
-            "purpose": purpose,
-            "expires_at": expires_at.isoformat(),
-            "queue_file": str(_get_send_queue_file()),
-            "stub": True,
-        }
-    )
+    # ── 2. ARQ Enqueue (właściwa wysyłka przez workera) ───────────────────────
+    arq_job_id: Optional[str] = None
+    try:
+        from app.core.arq_pool import get_arq_pool
+        arq = get_arq_pool()
 
+        job = await arq.enqueue_job(
+            "send_otp",
+            otp_id=otp_id,
+            user_id=user.id_user,
+            username=user.username,
+            email=user.email,
+            phone=getattr(user, "phone", None),
+            full_name=user.full_name,
+            otp_code=otp_code,
+            purpose=purpose,
+            expires_at=expires_at.isoformat(),
+            channel="email",
+            ip_address=ip_address,
+        )
+        arq_job_id = str(job.job_id) if job else None
+
+        logger.info(
+            "OTP task enqueued do ARQ workera",
+            extra={
+                "otp_id":   otp_id,
+                "user_id":  user.id_user,
+                "email":    user.email,
+                "purpose":  purpose,
+                "job_id":   arq_job_id,
+            },
+        )
+
+        # Zapisz potwierdzenie enqueue do JSONL (aktualizacja statusu)
+        _append_to_file(_get_send_queue_file(), {
+            **send_queue_record,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "otp_send_enqueued",
+            "arq_enqueued": True,
+            "arq_job_id": arq_job_id,
+        })
+
+    except Exception as exc:
+        # ARQ niedostępny — JSONL jest fallbackiem, nie przerywamy flow
+        logger.error(
+            "Nie można enqueue OTP do ARQ — kod zapisany tylko w JSONL "
+            "(sprawdź czy kontener worker działa)",
+            extra={
+                "otp_id":   otp_id,
+                "user_id":  user.id_user,
+                "email":    user.email,
+                "purpose":  purpose,
+                "error":    str(exc),
+                "fallback": "jsonl_only",
+            },
+        )
 
 async def invalidate_all_for_user(
     db: AsyncSession,
