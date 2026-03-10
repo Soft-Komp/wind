@@ -238,12 +238,10 @@ def _comment_to_dict(comment) -> dict:
     # Bezpieczne pobranie danych autora — relacja może być None przy uszkodzonych danych
     autor = getattr(comment, "uzytkownik", None)
     autor_full_name: str | None = None
-    autor_username: str | None = None
 
     if autor is not None:
         # full_name może być NULL w bazie (pole opcjonalne w skw_Users)
         autor_full_name = autor.full_name or None
-        autor_username  = autor.username   # NOT NULL w schemacie — zawsze obecny
     else:
         # Sytuacja awaryjna: relacja nie załadowana lub user usunięty
         # Logujemy ostrzeżenie — nie rzucamy wyjątku (nie blokujemy odpowiedzi)
@@ -261,7 +259,6 @@ def _comment_to_dict(comment) -> dict:
         "tresc":           comment.tresc,
         "uzytkownik_id":   comment.uzytkownik_id,   # zachowane — logika edit_own
         "autor_full_name": autor_full_name,          # NOWE: imię i nazwisko
-        "autor_username":  autor_username,           # NOWE: login (fallback)
         "is_active":       comment.is_active,
         "created_at":      comment.created_at.isoformat() if comment.created_at else None,
         "updated_at":      comment.updated_at.isoformat() if comment.updated_at else None,

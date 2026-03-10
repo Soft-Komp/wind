@@ -79,6 +79,7 @@ from app.services.debtor_service import (
     DebtorValidationError,
     DebtorWaproError,
 )
+from app.db.wapro import get_kontrahent_names_batch
 
 # ---------------------------------------------------------------------------
 # Logger własny modułu
@@ -608,37 +609,47 @@ async def send_bulk(
 # ===========================================================================
 
 async def get_history(
-    db: AsyncSession,
-    debtor_id: Optional[int] = None,
-    user_id: Optional[int] = None,
-    monit_type: Optional[str] = None,
-    status: Optional[str] = None,
+    db,                             # AsyncSession
     page: int = 1,
-    page_size: int = _DEFAULT_PAGE_SIZE,
+    page_size: int = 50,
+    debtor_id=None,                 # Optional[int]
+    user_id=None,                   # Optional[int]
+    monit_type=None,                # Optional[str]
+    status=None,                    # Optional[str]
 ) -> dict:
     """
-    Pobiera paginowaną historię monitów.
+    Pobiera paginowaną listę monitów z opcjonalnym wzbogaceniem o nazwę kontrahenta.
 
-    Obsługuje filtrowanie po dłużniku, użytkowniku, typie i statusie.
-    Używana przez dwa endpointy:
-        - GET /api/v1/debtors/{id}/monits → debtor_id podany
-        - GET /api/v1/monits → brak filtrów (admin widzi wszystkie)
+    Architektura dwuetapowa:
+        1. SQLAlchemy (dbo_ext): pobierz stronę MonitHistory wg filtrów
+        2. WAPRO (pyodbc, batch): pobierz NazwaKontrahenta dla unikalnych ID
+           Jeden SELECT ... WHERE IN (...) — zero N+1 queries.
+
+    Graceful degradation:
+        Jeśli WAPRO niedostępne → nazwa_kontrahenta = None w każdym monit.
+        Błąd wzbogacenia NIE przerywa odpowiedzi.
 
     Args:
-        db:        Sesja SQLAlchemy.
-        debtor_id: Filtr po ID kontrahenta (None = wszystkie).
-        user_id:   Filtr po ID zlecającego (None = wszyscy).
-        monit_type: Filtr po typie (None = wszystkie).
-        status:    Filtr po statusie (None = wszystkie).
-        page:      Numer strony.
-        page_size: Rozmiar strony (max 200).
+        db:         Sesja SQLAlchemy (AsyncSession).
+        page:       Numer strony (1-based).
+        page_size:  Rozmiar strony (max 200).
+        debtor_id:  Filtr po ID kontrahenta (None = wszystkie).
+        user_id:    Filtr po ID operatora (None = wszyscy).
+        monit_type: Filtr po typie: email | sms | print (None = wszystkie).
+        status:     Filtr po statusie (None = wszystkie).
 
     Returns:
-        Słownik z listą monitów i metadanymi paginacji.
+        Słownik z items[], total, page, page_size, total_pages.
+        Każdy item zawiera pole "nazwa_kontrahenta" (str | None).
     """
+    from sqlalchemy import and_, desc, func, select
+    from app.db.models.monit_history import MonitHistory
+    from app.db.wapro import get_kontrahent_names_batch
+
     page      = max(page, 1)
     page_size = min(max(page_size, 1), _MAX_PAGE_SIZE)
 
+    # ── Krok 1: Buduj warunki WHERE ─────────────────────────────────────────
     conditions = [MonitHistory.is_active == True]  # noqa: E712
 
     if debtor_id is not None:
@@ -656,6 +667,7 @@ async def get_history(
 
     where = and_(*conditions)
 
+    # ── Krok 2: COUNT ────────────────────────────────────────────────────────
     count_result = await db.execute(
         select(func.count(MonitHistory.id_monit)).where(where)
     )
@@ -667,6 +679,7 @@ async def get_history(
             "page": page, "page_size": page_size, "total_pages": 0,
         }
 
+    # ── Krok 3: Pobierz stronę danych (SQLAlchemy) ───────────────────────────
     data_result = await db.execute(
         select(MonitHistory)
         .where(where)
@@ -677,14 +690,54 @@ async def get_history(
     monits = data_result.scalars().all()
     total_pages = (total + page_size - 1) // page_size
 
+    # ── Krok 4: Batch WAPRO — nazwy kontrahentów ────────────────────────────
+    # Zbierz unikalne ID z aktualnej strony (max page_size wartości)
+    unique_debtor_ids = list({m.id_kontrahenta for m in monits if m.id_kontrahenta})
+
+    kontrahent_names: dict[int, str | None] = {}
+    if unique_debtor_ids:
+        try:
+            kontrahent_names = await get_kontrahent_names_batch(unique_debtor_ids)
+        except Exception as exc:
+            # Nie przerywaj odpowiedzi — degradacja graceful
+            logger.warning(
+                "Nie udało się pobrać nazw kontrahentów dla listy monitów — degradacja",
+                extra={
+                    "ids_count": len(unique_debtor_ids),
+                    "error":     str(exc),
+                    "page":      page,
+                }
+            )
+
+    logger.debug(
+        "get_history: total=%d, page=%d/%d, enriched=%d kontrahentów",
+        total, page, total_pages, len(kontrahent_names),
+        extra={
+            "total":         total,
+            "page":          page,
+            "total_pages":   total_pages,
+            "returned":      len(monits),
+            "enriched_ids":  len(kontrahent_names),
+            "debtor_filter": debtor_id,
+            "status_filter": status,
+        }
+    )
+
+    # ── Krok 5: Buduj wyniki z wzbogaceniem ─────────────────────────────────
+    items = []
+    for m in monits:
+        d = _monit_to_dict(m)
+        # Dodaj nazwę kontrahenta — None jeśli WAPRO nie odpowiedział lub ID nieznane
+        d["nazwa_kontrahenta"] = kontrahent_names.get(m.id_kontrahenta)
+        items.append(d)
+
     return {
-        "items":       [_monit_to_dict(m) for m in monits],
+        "items":       items,
         "total":       total,
         "page":        page,
         "page_size":   page_size,
         "total_pages": total_pages,
     }
-
 
 async def get_by_id(
     db: AsyncSession,
