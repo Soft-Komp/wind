@@ -101,6 +101,11 @@ async def _try_send(
     # Załączniki (np. PDF monitu)
     if message.attachments:
         outer = MIMEMultipart("mixed")
+        outer["From"] = msg["From"]
+        outer["To"] = msg["To"]
+        outer["Subject"] = msg["Subject"]
+        if message.reply_to:
+            outer["Reply-To"] = msg["Reply-To"]
         outer.attach(msg)
         for att in message.attachments:
             part = MIMEApplication(att["data"], Name=att["filename"])

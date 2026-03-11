@@ -95,6 +95,7 @@ services:
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
       - ./archives:/app/archives
+      - ./pdf_cache:/app/pdf_cache
     depends_on:
       redis:
         condition: service_healthy

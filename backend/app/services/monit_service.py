@@ -1491,14 +1491,28 @@ async def generate_pdf_preview(
     # 3. Generuj PDF przez ReportLab
     try:
         from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
     except ImportError as exc:
         raise RuntimeError(
             "ReportLab nie jest zainstalowany. "
             "Dodaj 'reportlab' do requirements.txt i przebuduj kontener."
         ) from exc
+
+    # Rejestracja fontów DejaVu z obsługą polskich znaków
+    _DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", f"{_DEJAVU_DIR}/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVu-Bold", f"{_DEJAVU_DIR}/DejaVuSans-Bold.ttf"))
+        pdfmetrics.registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold")
+    except Exception as font_exc:
+        logger.warning(
+            "Nie można załadować fontu DejaVu — polskie znaki mogą nie działać",
+            extra={"error": str(font_exc), "dejavu_dir": _DEJAVU_DIR},
+        )
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -1509,31 +1523,54 @@ async def generate_pdf_preview(
         topMargin=2 * cm,
         bottomMargin=2 * cm,
     )
-    styles = getSampleStyleSheet()
-    story = []
 
+    # Style z fontem DejaVu (Unicode — pełna obsługa polskich znaków)
+    base_styles = getSampleStyleSheet()
+    style_normal = ParagraphStyle(
+        "DejaVuNormal",
+        parent=base_styles["Normal"],
+        fontName="DejaVu",
+        fontSize=10,
+        leading=14,
+    )
+    style_title = ParagraphStyle(
+        "DejaVuTitle",
+        parent=base_styles["Title"],
+        fontName="DejaVu-Bold",
+        fontSize=14,
+        leading=18,
+    )
+    style_italic = ParagraphStyle(
+        "DejaVuItalic",
+        parent=base_styles["Italic"],
+        fontName="DejaVu",
+        fontSize=9,
+        leading=13,
+    )
+
+    story = []
     # Nagłówek — nazwa firmy dłużnika
     nazwa = debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or f"ID {debtor_id}"
-    story.append(Paragraph(f"<b>Podgląd monitu — {nazwa}</b>", styles["Title"]))
+    story.append(Paragraph(f"<b>Podgląd monitu — {nazwa}</b>", style_title))
     story.append(Spacer(1, 0.5 * cm))
-
     # Metadane
-    story.append(Paragraph(f"Szablon: {tmpl_row['TemplateName']}", styles["Normal"]))
-    story.append(Paragraph(f"Kanał: {channel}", styles["Normal"]))
+    story.append(Paragraph(f"Szablon: {tmpl_row['TemplateName']}", style_normal))
+    story.append(Paragraph(f"Kanał: {channel}", style_normal))
     if tmpl_row.get("Subject"):
-        story.append(Paragraph(f"Temat: {tmpl_row['Subject']}", styles["Normal"]))
+        story.append(Paragraph(f"Temat: {tmpl_row['Subject']}", style_normal))
     story.append(Spacer(1, 0.5 * cm))
 
     # Treść szablonu
     body_text = tmpl_row.get("Body") or "(brak treści szablonu)"
     # Zamień \n na <br/> dla ReportLab
-    body_text = body_text.replace("\n", "<br/>")
-    story.append(Paragraph(body_text, styles["Normal"]))
+    # Obsługa zarówno dosłownych \n (z bazy) jak i prawdziwych newline
+    body_text = body_text.replace("\\n", "<br/>").replace("\n", "<br/>")
+    story.append(Paragraph(body_text, style_normal))
 
     story.append(Spacer(1, 1 * cm))
     story.append(Paragraph(
         "<i>Ten dokument to podgląd — nie został zapisany w historii monitów.</i>",
-        styles["Italic"],
+        style_italic,
     ))
 
     doc.build(story)

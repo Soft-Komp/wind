@@ -174,3 +174,12 @@ _register_router(
     prefix="/system",
     tags=["System"],
 )
+
+# 12. TEMPLATES
+_register_router(
+    api_router,
+    module_path="app.api.templates",
+    attr="router",
+    prefix="/templates",
+    tags=["Szablony"],
+)
