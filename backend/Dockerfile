@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg \
         ca-certificates \
         apt-transport-https \
+        fonts-dejavu-core \
     # Dodaj repozytorium Microsoft (Debian 12 Bookworm)
     && mkdir -p /usr/share/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \

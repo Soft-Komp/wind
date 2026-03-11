@@ -250,8 +250,8 @@ async def download_monit_pdf(
     except Exception as exc:
         _raise_from_monit_error(exc)
 
-    pdf_bytes: bytes = result["pdf_bytes"]
-    filename: str = result.get("filename", f"monit_{monit_id}.pdf")
+    pdf_bytes: bytes = result
+    filename: str = f"monit_{monit_id}.pdf"
 
     return StreamingResponse(
         content=iter([pdf_bytes]),
