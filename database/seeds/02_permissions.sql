@@ -331,6 +331,9 @@ BEGIN TRY
              N'system'),
             (N'system.schema_integrity_view',
              N'Podgląd stanu checksumów schematu (/system/schema-integrity)',
+             N'system'),
+            (N'system.view_admin_events', 
+             N'Dostęp do strumienia SSE zdarzeń administracyjnych', 
              N'system')
 
         ) AS src (PermissionName, Description, Category)

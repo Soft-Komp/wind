@@ -22,7 +22,8 @@ from worker.settings import get_settings
 logger = logging.getLogger("worker.redis")
 
 # ── Klucze Redis ──────────────────────────────────────────────────────────────
-CHANNEL_EVENTS = "windykacja:events"         # SSE pub/sub channel
+CHANNEL_ADMINS       = "channel:admins"           # broadcast do adminów
+CHANNEL_USER_PATTERN = "channel:user:{user_id}"   # per-user channel
 KEY_DLQ = "windykacja:dlq"                   # Dead Letter Queue (ZSET score=timestamp)
 KEY_TASK_RESULTS = "windykacja:task_results" # Hash: task_id → result JSON
 KEY_WORKER_HEALTH = "arq:health-check"       # ARQ health check key
@@ -119,26 +120,52 @@ async def publish_sse_event(
     }
 
     redis = get_redis()
+    published_to: list[str] = []
+
+    # Publikacja do kanału per-user
+    if target_user_id is not None:
+        user_channel = CHANNEL_USER_PATTERN.format(user_id=target_user_id)
+        try:
+            count = await redis.publish(
+                user_channel,
+                json.dumps(payload, ensure_ascii=False, default=str),
+            )
+            published_to.append(user_channel)
+            logger.debug(
+                "SSE event → per-user channel",
+                extra={
+                    "event_type":  event_type,
+                    "channel":     user_channel,
+                    "subscribers": count,
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                "Błąd publikacji SSE event do per-user channel",
+                extra={"event_type": event_type, "channel": user_channel, "error": str(exc)},
+            )
+        # Nie rzucaj — SSE failure nie może blokować głównego taska
+
+    # Broadcast do adminów (zawsze, niezależnie od target_user_id)
     try:
-        subscribers = await redis.publish(
-            CHANNEL_EVENTS,
+        count = await redis.publish(
+            CHANNEL_ADMINS,
             json.dumps(payload, ensure_ascii=False, default=str),
         )
+        published_to.append(CHANNEL_ADMINS)
         logger.debug(
-            "SSE event opublikowany",
+            "SSE event → admins channel",
             extra={
-                "event_type": event_type,
-                "subscribers": subscribers,
-                "has_target": target_user_id is not None,
+                "event_type":  event_type,
+                "channel":     CHANNEL_ADMINS,
+                "subscribers": count,
             },
         )
     except Exception as exc:
         logger.error(
-            "Błąd publikacji SSE event",
-            extra={"event_type": event_type, "error": str(exc)},
+            "Błąd publikacji SSE event do admins channel",
+            extra={"event_type": event_type, "channel": CHANNEL_ADMINS, "error": str(exc)},
         )
-        # Nie rzucaj — SSE failure nie może blokować głównego taska
-
 
 async def publish_task_completed(
     task_name: str,

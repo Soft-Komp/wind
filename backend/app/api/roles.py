@@ -186,7 +186,7 @@ async def update_roles(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.delete(
-    "/{role_id}",
+    "/{role_id}/initiate",
     summary="Krok 1/2 — Inicjuj usunięcie roli",
     description=(
         "Pierwszy krok dwuetapowego usuwania roli. "

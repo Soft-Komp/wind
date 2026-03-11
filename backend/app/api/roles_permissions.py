@@ -47,7 +47,8 @@ from __future__ import annotations
 
 import logging
 import unicodedata
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import orjson
@@ -63,6 +64,8 @@ from app.core.dependencies import (
     require_permission,
 )
 from app.schemas.common import BaseResponse
+from app.core.config import get_settings
+from jose import jwt as jose_jwt
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logger
@@ -705,22 +708,28 @@ async def replace_role_permissions(
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 7: DELETE /roles/{role_id}/permissions/{permission_id}
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 7: DELETE /roles/{role_id}/permissions/{permission_id}/initiate
+#             Krok 1/2 — inicjuj odebranie uprawnienia roli
+# ─────────────────────────────────────────────────────────────────────────────
 
 @roles_router.delete(
-    "/{role_id}/permissions/{permission_id}",
-    summary="Usunięcie uprawnienia z roli",
+    "/{role_id}/permissions/{permission_id}/initiate",
+    summary="Krok 1/2 — Inicjuj odebranie uprawnienia roli",
     description=(
-        "Odbiera konkretne uprawnienie od roli. "
-        "Po operacji: inwalidacja cache Redis + SSE event permissions_updated. "
+        "Pierwszy krok dwuetapowego odbierania uprawnienia od roli. "
+        "Sprawdza czy uprawnienie jest przypisane do roli. "
+        "Zwraca jednorazowy token JWT ważny 60 sekund. "
+        "Token wymagany w kroku 2: DELETE /{role_id}/permissions/{permission_id}/confirm. "
         "**Wymaga uprawnienia:** `permissions.revoke_from_role`"
     ),
-    response_description="Wynik usunięcia uprawnienia",
-    status_code=status.HTTP_200_OK,
+    response_description="Token potwierdzający odebranie uprawnienia",
+    status_code=status.HTTP_202_ACCEPTED,
     dependencies=[require_permission("permissions.revoke_from_role")],
 )
-async def remove_role_permission(
+async def initiate_remove_role_permission(
     role_id: int = Path(..., ge=1, description="ID roli."),
-    permission_id: int = Path(..., ge=1, description="ID uprawnienia do usunięcia."),
+    permission_id: int = Path(..., ge=1, description="ID uprawnienia do odebrania."),
     current_user: CurrentUser = None,
     db: DB = None,
     redis: RedisClient = None,
@@ -731,7 +740,7 @@ async def remove_role_permission(
     from sqlalchemy import select
     from app.db.models.role_permission import RolePermission
 
-    # Pobierz aktualne uprawnienia
+    # Sprawdź czy uprawnienie jest przypisane do roli
     result = await db.execute(
         select(RolePermission.id_permission).where(
             RolePermission.id_role == role_id
@@ -749,6 +758,169 @@ async def remove_role_permission(
             },
         )
 
+    # Wygeneruj jednorazowy token JWT
+    settings = get_settings()
+    ttl = 60
+    jti = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    token_payload = {
+        "scope":         "revoke_permission",
+        "role_id":       role_id,
+        "permission_id": permission_id,
+        "initiated_by":  current_user.id_user,
+        "jti":           jti,
+        "iat":           int(now.timestamp()),
+        "exp":           int((now + timedelta(seconds=ttl)).timestamp()),
+    }
+    token = jose_jwt.encode(
+        token_payload,
+        settings.secret_key.get_secret_value(),
+        algorithm="HS256",
+    )
+
+    # Zapisz JTI w Redis — jednorazowość gwarantowana przez TTL
+    await redis.setex(f"revoke_perm_jti:{jti}", ttl, "1")
+
+    logger.warning(
+        orjson.dumps({
+            "event":         "api_role_permission_revoke_initiated",
+            "role_id":       role_id,
+            "permission_id": permission_id,
+            "initiated_by":  current_user.id_user,
+            "jti":           jti,
+            "ttl_seconds":   ttl,
+            "request_id":    request_id,
+            "ip":            client_ip,
+            "ts":            now.isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data={
+            "delete_token":  token,
+            "expires_in":    ttl,
+            "role_id":       role_id,
+            "permission_id": permission_id,
+            "message":       (
+                f"Token ważny {ttl}s. "
+                f"Użyj w DELETE /roles/{role_id}/permissions/{permission_id}/confirm."
+            ),
+        },
+        app_code="roles_permissions.revoke_initiated",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 8: DELETE /roles/{role_id}/permissions/{permission_id}/confirm
+#             Krok 2/2 — potwierdź odebranie uprawnienia roli
+# ─────────────────────────────────────────────────────────────────────────────
+
+@roles_router.delete(
+    "/{role_id}/permissions/{permission_id}/confirm",
+    summary="Krok 2/2 — Potwierdź odebranie uprawnienia roli",
+    description=(
+        "Drugi krok dwuetapowego odbierania uprawnienia od roli. "
+        "Wymaga `delete_token` z kroku 1 w body JSON: `{\"delete_token\": \"eyJ...\"}`. "
+        "Token jednorazowy — po użyciu wygasa natychmiast (JTI blacklista Redis). "
+        "Po operacji: inwalidacja cache Redis + AuditLog. "
+        "**Wymaga uprawnienia:** `permissions.revoke_from_role`"
+    ),
+    response_description="Potwierdzenie odebrania uprawnienia",
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_permission("permissions.revoke_from_role")],
+    responses={
+        400: {"description": "Token nieprawidłowy, wygasły lub już użyty"},
+        404: {"description": "Uprawnienie nie jest przypisane do roli"},
+    },
+)
+async def confirm_remove_role_permission(
+    request: Request,
+    role_id: int = Path(..., ge=1, description="ID roli."),
+    permission_id: int = Path(..., ge=1, description="ID uprawnienia."),
+    current_user: CurrentUser = None,
+    db: DB = None,
+    redis: RedisClient = None,
+    client_ip: ClientIP = None,
+    request_id: RequestID = None,
+):
+    from app.services import role_service
+    from sqlalchemy import select
+    from app.db.models.role_permission import RolePermission
+
+    # Pobierz token z body JSON
+    try:
+        raw_body = await request.body()
+        body_data = orjson.loads(raw_body) if raw_body else {}
+        delete_token = (body_data.get("delete_token") or "").strip()
+    except Exception:
+        delete_token = ""
+
+    if not delete_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code":    "roles_permissions.missing_token",
+                "message": "Wymagane pole 'delete_token' w body JSON.",
+                "errors":  [{"field": "delete_token", "message": "Pole wymagane."}],
+            },
+        )
+
+    # Zweryfikuj podpis i expiry tokenu
+    settings = get_settings()
+    try:
+        token_payload = jose_jwt.decode(
+            delete_token,
+            settings.secret_key.get_secret_value(),
+            algorithms=["HS256"],
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code":    "roles_permissions.invalid_token",
+                "message": "Token nieprawidłowy lub wygasł.",
+                "errors":  [{"field": "delete_token", "message": "Token nieprawidłowy lub wygasł."}],
+            },
+        )
+
+    # Sprawdź scope i zgodność z URL
+    if (
+        token_payload.get("scope")         != "revoke_permission"
+        or token_payload.get("role_id")       != role_id
+        or token_payload.get("permission_id") != permission_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code":    "roles_permissions.token_mismatch",
+                "message": "Token nie dotyczy tej operacji.",
+                "errors":  [{"field": "delete_token", "message": "Niezgodność role_id lub permission_id w tokenie."}],
+            },
+        )
+
+    # Sprawdź jednorazowość — JTI musi istnieć w Redis
+    jti = token_payload.get("jti", "")
+    jti_key = f"revoke_perm_jti:{jti}"
+    if not await redis.exists(jti_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code":    "roles_permissions.token_used",
+                "message": "Token już został użyty lub wygasł.",
+                "errors":  [{"field": "delete_token", "message": "Token jednorazowy — już wykorzystany."}],
+            },
+        )
+
+    # Unieważnij JTI natychmiast (przed operacją — fail-safe)
+    await redis.delete(jti_key)
+
+    # Wykonaj odebranie uprawnienia
+    result = await db.execute(
+        select(RolePermission.id_permission).where(
+            RolePermission.id_role == role_id
+        )
+    )
+    current_ids: set[int] = {row[0] for row in result.fetchall()}
     new_ids = sorted(current_ids - {permission_id})
 
     try:
@@ -763,23 +935,24 @@ async def remove_role_permission(
     except Exception as exc:
         _raise_from_role_error(exc)
 
-    logger.info(
+    logger.warning(
         orjson.dumps({
-            "event": "api_role_permission_removed",
-            "role_id": role_id,
+            "event":         "api_role_permission_revoked",
+            "role_id":       role_id,
             "permission_id": permission_id,
-            "updated_by": current_user.id_user,
-            "request_id": request_id,
-            "ip": client_ip,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "confirmed_by":  current_user.id_user,
+            "jti":           jti,
+            "request_id":    request_id,
+            "ip":            client_ip,
+            "ts":            datetime.now(timezone.utc).isoformat(),
         }).decode()
     )
 
     return BaseResponse.ok(
         data={
-            "role_id": role_id,
+            "role_id":       role_id,
             "permission_id": permission_id,
-            "message": f"Uprawnienie ID={permission_id} odebrane roli ID={role_id}.",
+            "message":       f"Uprawnienie ID={permission_id} odebrane roli ID={role_id}.",
         },
-        app_code="roles_permissions.removed",
+        app_code="roles_permissions.revoked",
     )
