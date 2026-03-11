@@ -216,12 +216,19 @@ BEGIN TRY
             [CreatedAt]           DATETIME       NOT NULL CONSTRAINT [DF_skw_Users_CreatedAt]            DEFAULT (GETDATE()),
             [UpdatedAt]           DATETIME                         NULL,
             CONSTRAINT [PK_skw_Users]                   PRIMARY KEY CLUSTERED ([ID_USER] ASC),
-            CONSTRAINT [UQ_skw_Users_Username]           UNIQUE ([Username]),
-            CONSTRAINT [UQ_skw_Users_Email]              UNIQUE ([Email]),
+            -- CONSTRAINT [UQ_skw_Users_Username]           UNIQUE ([Username]),
+            -- CONSTRAINT [UQ_skw_Users_Email]              UNIQUE ([Email]),
             CONSTRAINT [CK_skw_Users_FailedLoginAttempts] CHECK ([FailedLoginAttempts] >= 0),
             CONSTRAINT [FK_skw_Users_RoleID]             FOREIGN KEY ([RoleID])
                 REFERENCES [dbo_ext].[skw_Roles] ([ID_ROLE]) ON DELETE NO ACTION ON UPDATE NO ACTION
         );
+        CREATE UNIQUE NONCLUSTERED INDEX [UQ_skw_Users_Email_Active]
+            ON dbo_ext.skw_Users (Email)
+            WHERE IsActive = 1;
+
+        CREATE UNIQUE NONCLUSTERED INDEX [UQ_skw_Users_Username_Active]
+            ON dbo_ext.skw_Users (Username)
+            WHERE IsActive = 1;
         CREATE NONCLUSTERED INDEX [IX_skw_Users_RoleID]    ON [dbo_ext].[skw_Users] ([RoleID] ASC);
         CREATE NONCLUSTERED INDEX [IX_skw_Users_IsActive]  ON [dbo_ext].[skw_Users] ([IsActive] ASC);
         CREATE NONCLUSTERED INDEX [IX_skw_Users_LockedUntil] ON [dbo_ext].[skw_Users] ([LockedUntil] ASC) WHERE [LockedUntil] IS NOT NULL;

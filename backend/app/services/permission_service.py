@@ -882,3 +882,235 @@ async def count_users_with_permission(
         )
     )
     return result.scalar_one() or 0
+
+# ===========================================================================
+# Dwuetapowe usunięcie uprawnienia
+# ===========================================================================
+
+class PermissionDeleteTokenError(Exception):
+    """Token potwierdzający wygasł lub został już użyty."""
+
+class PermissionHasRolesError(Exception):
+    """Uprawnienie jest przypisane do aktywnych ról."""
+
+
+_REDIS_KEY_PERM_DELETE = "perm_delete_jti:{jti}"
+_DEFAULT_PERM_DELETE_TTL = 60
+
+
+async def initiate_delete(
+    db: AsyncSession,
+    redis: Redis,
+    permission_id: int,
+    initiated_by_id: int,
+    ip_address: Optional[str] = None,
+) -> dict:
+    """
+    Krok 1 dwuetapowego usunięcia uprawnienia.
+
+    Sprawdza czy uprawnienie istnieje i nie jest przypisane do ról.
+    Generuje jednorazowy token JWT i zapisuje JTI w Redis.
+    """
+    import secrets as _secrets
+    from datetime import timedelta
+    from jose import jwt as _jwt
+    from app.core.config import settings as _settings
+
+    # Pobierz uprawnienie
+    result = await db.execute(
+        select(Permission).where(
+            and_(Permission.id_permission == permission_id, Permission.is_active == True)  # noqa: E712
+        )
+    )
+    perm = result.scalar_one_or_none()
+    if perm is None:
+        raise PermissionNotFoundError(f"Uprawnienie ID={permission_id} nie istnieje.")
+
+    # Sprawdź przypisania do ról
+    role_count_result = await db.execute(
+        select(func.count(RolePermission.id_role)).where(
+            RolePermission.id_permission == permission_id
+        )
+    )
+    role_count = role_count_result.scalar_one() or 0
+
+    warning = None
+    if role_count > 0:
+        warning = (
+            f"Uprawnienie '{perm.permission_name}' jest przypisane do {role_count} ról — "
+            f"zostanie z nich usunięte po potwierdzeniu."
+        )
+
+    # Generuj token
+    ttl = _DEFAULT_PERM_DELETE_TTL
+    jti = _secrets.token_hex(16)
+    now = datetime.now(timezone.utc)
+    token_payload = {
+        "sub":           str(permission_id),
+        "scope":         "delete_permission",
+        "permission_id": permission_id,
+        "initiated_by":  initiated_by_id,
+        "jti":           jti,
+        "iat":           int(now.timestamp()),
+        "exp":           int((now + timedelta(seconds=ttl)).timestamp()),
+    }
+    secret = (
+        _settings.secret_key.get_secret_value()
+        if hasattr(_settings.secret_key, "get_secret_value")
+        else str(_settings.secret_key)
+    )
+    token = _jwt.encode(token_payload, secret, algorithm=_settings.algorithm)
+
+    # Zapisz JTI w Redis
+    await redis.set(_REDIS_KEY_PERM_DELETE.format(jti=jti), str(permission_id), ex=ttl)
+
+    logger.warning(
+        "Inicjacja usunięcia uprawnienia — krok 1",
+        extra={
+            "permission_id":   permission_id,
+            "permission_name": perm.permission_name,
+            "role_count":      role_count,
+            "initiated_by":    initiated_by_id,
+            "ip_address":      ip_address,
+        }
+    )
+
+    _append_to_file(
+        _get_perm_log_file(),
+        _build_log_record(
+            action="permission_delete_initiated",
+            permission_id=permission_id,
+            permission_name=perm.permission_name,
+            role_count=role_count,
+            initiated_by=initiated_by_id,
+            ip_address=ip_address,
+        )
+    )
+
+    return {
+        "token":           token,
+        "expires_in":      ttl,
+        "permission_id":   permission_id,
+        "permission_name": perm.permission_name,
+        "warning":         warning,
+    }
+
+
+async def confirm_delete(
+    db: AsyncSession,
+    redis: Redis,
+    permission_id: int,
+    confirm_token: str,
+    confirmed_by_id: int,
+    ip_address: Optional[str] = None,
+) -> dict:
+    """
+    Krok 2 dwuetapowego usunięcia uprawnienia.
+
+    Weryfikuje token, unieważnia JTI, wykonuje soft-delete,
+    inwaliduje cache i zapisuje AuditLog.
+    """
+    from jose import jwt as _jwt, JWTError as _JWTError
+    from app.core.config import settings as _settings
+    from sqlalchemy import delete as sa_delete
+
+    # Zweryfikuj token
+    secret = (
+        _settings.secret_key.get_secret_value()
+        if hasattr(_settings.secret_key, "get_secret_value")
+        else str(_settings.secret_key)
+    )
+    try:
+        payload = _jwt.decode(confirm_token, secret, algorithms=[_settings.algorithm])
+    except _JWTError:
+        raise PermissionDeleteTokenError(
+            "Token potwierdzający wygasł lub jest nieprawidłowy."
+        )
+
+    if (
+        payload.get("scope") != "delete_permission"
+        or payload.get("permission_id") != permission_id
+    ):
+        raise PermissionDeleteTokenError("Token nie dotyczy tej operacji.")
+
+    # Sprawdź jednorazowość JTI
+    jti = payload.get("jti", "")
+    jti_key = _REDIS_KEY_PERM_DELETE.format(jti=jti)
+    if not await redis.exists(jti_key):
+        raise PermissionDeleteTokenError(
+            "Token potwierdzający wygasł lub został już użyty."
+        )
+    await redis.delete(jti_key)
+
+    # Pobierz uprawnienie
+    result = await db.execute(
+        select(Permission).where(
+            and_(Permission.id_permission == permission_id, Permission.is_active == True)  # noqa: E712
+        )
+    )
+    perm = result.scalar_one_or_none()
+    if perm is None:
+        raise PermissionNotFoundError(f"Uprawnienie ID={permission_id} nie istnieje.")
+
+    old_value = {
+        "id_permission":   perm.id_permission,
+        "permission_name": perm.permission_name,
+        "description":     perm.description,
+        "category":        perm.category,
+        "is_active":       True,
+    }
+
+    # Usuń przypisania do ról (fizycznie — RolePermission nie ma soft-delete)
+    await db.execute(
+        sa_delete(RolePermission).where(RolePermission.id_permission == permission_id)
+    )
+
+    # Soft-delete
+    perm.is_active = False
+    await db.flush()
+    await db.commit()
+
+    # Inwalidacja cache
+    await invalidate_permissions_list_cache(redis)
+
+    logger.warning(
+        "Uprawnienie usunięte (soft-delete) — RolePermissions fizycznie usunięte",
+        extra={
+            "permission_id":   permission_id,
+            "permission_name": perm.permission_name,
+            "confirmed_by":    confirmed_by_id,
+            "ip_address":      ip_address,
+        }
+    )
+
+    _append_to_file(
+        _get_perm_log_file(),
+        _build_log_record(
+            action="permission_deleted",
+            permission_id=permission_id,
+            permission_name=perm.permission_name,
+            confirmed_by=confirmed_by_id,
+            ip_address=ip_address,
+        )
+    )
+
+    from app.services import audit_service
+    audit_service.log_crud(
+        db=db,
+        action="permission_deleted",
+        entity_type="Permission",
+        entity_id=permission_id,
+        old_value=old_value,
+        new_value={"is_active": False},
+        details={
+            "permission_name": perm.permission_name,
+            "confirmed_by":    confirmed_by_id,
+        },
+        success=True,
+    )
+
+    return {
+        "permission_id":   permission_id,
+        "permission_name": perm.permission_name,
+        "message":         f"Uprawnienie '{perm.permission_name}' zostało trwale dezaktywowane.",
+    }    

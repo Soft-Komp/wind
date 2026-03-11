@@ -74,11 +74,11 @@ BEGIN TRY
             CONSTRAINT [PK_skw_Users]
                 PRIMARY KEY CLUSTERED ([ID_USER] ASC),
 
-            CONSTRAINT [UQ_skw_Users_Username]
-                UNIQUE ([Username]),
+            -- CONSTRAINT [UQ_skw_Users_Username]
+            --    UNIQUE ([Username]),
 
-            CONSTRAINT [UQ_skw_Users_Email]
-                UNIQUE ([Email]),
+            -- CONSTRAINT [UQ_skw_Users_Email]
+            --    UNIQUE ([Email]),
 
             -- FailedLoginAttempts nie może być ujemna
             CONSTRAINT [CK_skw_Users_FailedLoginAttempts]
@@ -91,6 +91,14 @@ BEGIN TRY
                 ON DELETE NO ACTION
                 ON UPDATE NO ACTION
         );
+
+        CREATE UNIQUE NONCLUSTERED INDEX [UQ_skw_Users_Email_Active]
+        ON dbo_ext.skw_Users (Email)
+        WHERE IsActive = 1;
+
+        CREATE UNIQUE NONCLUSTERED INDEX [UQ_skw_Users_Username_Active]
+        ON dbo_ext.skw_Users (Username)
+        WHERE IsActive = 1;
 
         PRINT '[003] Tabela dbo_ext.skw_Users utworzona.';
     END

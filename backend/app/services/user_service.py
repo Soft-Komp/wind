@@ -583,7 +583,8 @@ async def _check_unique_username(db: AsyncSession, username: str, exclude_id: Op
     Raises:
         UserAlreadyExistsError: Gdy username jest zajęty.
     """
-    conditions = [User.username == username]
+    # IsActive = 1 — soft-deleted userzy NIE blokują ponownego użycia username
+    conditions = [User.username == username, User.is_active == True]
     if exclude_id:
         from sqlalchemy import not_
         conditions.append(not_(User.id_user == exclude_id))
@@ -594,7 +595,6 @@ async def _check_unique_username(db: AsyncSession, username: str, exclude_id: Op
     count = result.scalar_one()
     if count > 0:
         raise UserAlreadyExistsError("username", username)
-
 
 async def _check_unique_email(db: AsyncSession, email: str, exclude_id: Optional[int] = None) -> None:
     """
@@ -608,7 +608,8 @@ async def _check_unique_email(db: AsyncSession, email: str, exclude_id: Optional
     Raises:
         UserAlreadyExistsError: Gdy email jest zajęty.
     """
-    conditions = [User.email == email]
+    # IsActive = 1 — soft-deleted userzy NIE blokują ponownego użycia emaila
+    conditions = [User.email == email, User.is_active == True]
     if exclude_id:
         from sqlalchemy import not_
         conditions.append(not_(User.id_user == exclude_id))

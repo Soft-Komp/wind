@@ -951,7 +951,7 @@ async def update_comment(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.delete(
-    "/{debtor_id}/comments/{comment_id:int}",
+    "/{debtor_id}/comments/{comment_id:int}/initiate",
     summary="Inicjuj usunięcie komentarza (krok 1/2)",
     description=(
         "Krok 1 dwuetapowego usunięcia komentarza. "

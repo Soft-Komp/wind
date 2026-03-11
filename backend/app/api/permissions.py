@@ -26,6 +26,8 @@ Data: 2026-02-20
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import orjson
@@ -41,6 +43,8 @@ from app.core.dependencies import (
     _get_role_permissions,
 )
 from app.schemas.common import BaseResponse
+from app.core.config import get_settings
+from jose import jwt as jose_jwt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -347,6 +351,155 @@ async def get_permission(
 
     return BaseResponse.ok(data=perm, app_code="permissions.detail")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 7: DELETE /permissions/{id}/initiate  — krok 1/2
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/{permission_id}/initiate",
+    summary="Krok 1/2 — Inicjuj usunięcie uprawnienia",
+    description=(
+        "Pierwszy krok dwuetapowego soft-delete uprawnienia. "
+        "Sprawdza czy uprawnienie istnieje i czy nie jest przypisane do żadnej aktywnej roli. "
+        "Zwraca jednorazowy token JWT ważny 60 sekund. "
+        "Token wymagany w DELETE /permissions/{id}/confirm. "
+        "**Wymaga uprawnienia:** `permissions.delete`"
+    ),
+    response_description="Token potwierdzający usunięcie",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permission("permissions.delete")],
+    responses={
+        404: {"description": "Uprawnienie nie istnieje"},
+        409: {"description": "Uprawnienie jest przypisane do aktywnych ról"},
+    },
+)
+async def initiate_delete_permission(
+    permission_id: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import permission_service
+
+    try:
+        result = await permission_service.initiate_delete(
+            db=db,
+            redis=redis,
+            permission_id=permission_id,
+            initiated_by_id=current_user.id_user,
+            ip_address=client_ip,
+        )
+    except Exception as exc:
+        _raise_from_perm_error(exc)
+
+    logger.warning(
+        orjson.dumps({
+            "event":         "api_permission_delete_initiated",
+            "permission_id": permission_id,
+            "initiated_by":  current_user.id_user,
+            "request_id":    request_id,
+            "ip":            client_ip,
+            "ts":            datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data={
+            "delete_token":    result["token"],
+            "expires_in":      result["expires_in"],
+            "permission_id":   permission_id,
+            "permission_name": result["permission_name"],
+            "warning":         result.get("warning"),
+            "message": (
+                f"Token ważny {result['expires_in']}s. "
+                f"Użyj w DELETE /permissions/{permission_id}/confirm."
+            ),
+        },
+        app_code="permissions.delete_initiated",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 8: DELETE /permissions/{id}/confirm  — krok 2/2
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/{permission_id}/confirm",
+    summary="Krok 2/2 — Potwierdź usunięcie uprawnienia",
+    description=(
+        "Drugi krok dwuetapowego soft-delete uprawnienia. "
+        "Wymaga `delete_token` z kroku 1 w body JSON: `{\"delete_token\": \"eyJ...\"}`. "
+        "Token jednorazowy — po użyciu wygasa natychmiast (JTI blacklista Redis). "
+        "Akcje: soft-delete (is_active=False) + inwalidacja cache + AuditLog. "
+        "**Wymaga uprawnienia:** `permissions.delete`"
+    ),
+    response_description="Potwierdzenie usunięcia uprawnienia",
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_permission("permissions.delete")],
+    responses={
+        400: {"description": "Token nieprawidłowy, wygasły lub już użyty"},
+        404: {"description": "Uprawnienie nie istnieje"},
+        409: {"description": "Uprawnienie zyskało przypisania od czasu initiate"},
+    },
+)
+async def confirm_delete_permission(
+    request: Request,
+    permission_id: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import permission_service
+
+    # Pobierz token z body JSON
+    try:
+        raw_body = await request.body()
+        body_data = orjson.loads(raw_body) if raw_body else {}
+        delete_token = (body_data.get("delete_token") or "").strip()
+    except Exception:
+        delete_token = ""
+
+    if not delete_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code":    "permissions.missing_token",
+                "message": "Wymagane pole 'delete_token' w body JSON.",
+                "errors":  [{"field": "delete_token", "message": "Pole wymagane."}],
+            },
+        )
+
+    try:
+        result = await permission_service.confirm_delete(
+            db=db,
+            redis=redis,
+            permission_id=permission_id,
+            confirm_token=delete_token,
+            confirmed_by_id=current_user.id_user,
+            ip_address=client_ip,
+        )
+    except Exception as exc:
+        _raise_from_perm_error(exc)
+
+    logger.warning(
+        orjson.dumps({
+            "event":         "api_permission_deleted",
+            "permission_id": permission_id,
+            "confirmed_by":  current_user.id_user,
+            "request_id":    request_id,
+            "ip":            client_ip,
+            "ts":            datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    return BaseResponse.ok(
+        data=result,
+        app_code="permissions.deleted",
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POMOCNICZE
@@ -357,8 +510,9 @@ def _raise_from_perm_error(exc: Exception) -> None:
     exc_type = type(exc).__name__
 
     _MAP: dict[str, tuple[int, str, str]] = {
-        "PermissionNotFoundError": (404, "permissions.not_found", "Uprawnienie nie istnieje"),
-        "PermissionServiceError":  (400, "permissions.service_error", "Błąd operacji na uprawnieniu"),
+        "PermissionNotFoundError":    (404, "permissions.not_found",    "Uprawnienie nie istnieje"),
+        "PermissionServiceError":     (400, "permissions.service_error", "Błąd operacji na uprawnieniu"),
+        "PermissionDeleteTokenError": (400, "permissions.invalid_token", "Token nieprawidłowy, wygasły lub już użyty"),
     }
 
     if exc_type in _MAP:
