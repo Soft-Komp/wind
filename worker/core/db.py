@@ -45,7 +45,7 @@ class Base(DeclarativeBase):
 class MonitHistory(Base):
     """skw_MonitHistory — aktualizacja statusu po wysyłce."""
     __tablename__ = "skw_MonitHistory"
-    __table_args__ = {"schema": "dbo"}
+    __table_args__ = {"schema": "dbo_ext"}
 
     id_monit: Mapped[int] = mapped_column("ID_MONIT", BigInteger, primary_key=True)
     id_kontrahenta: Mapped[Optional[int]] = mapped_column("ID_KONTRAHENTA", Integer, nullable=True)
@@ -70,13 +70,13 @@ class MonitHistory(Base):
 class AuditLog(Base):
     """skw_AuditLog — zapis akcji workera do audit trail."""
     __tablename__ = "skw_AuditLog"
-    __table_args__ = {"schema": "dbo"}
+    __table_args__ = {"schema": "dbo_ext"}
 
     id_log: Mapped[int] = mapped_column("ID_LOG", BigInteger, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(
         "Timestamp", DateTime, default=lambda: datetime.now(timezone.utc)
     )
-    user_id: Mapped[Optional[int]] = mapped_column("UserID", Integer, nullable=True)
+    user_id: Mapped[Optional[int]] = mapped_column("ID_USER", Integer, nullable=True)
     action: Mapped[str] = mapped_column("Action", String(100))
     entity_type: Mapped[Optional[str]] = mapped_column("EntityType", String(50), nullable=True)
     entity_id: Mapped[Optional[str]] = mapped_column("EntityID", String(50), nullable=True)
@@ -86,7 +86,12 @@ class AuditLog(Base):
     user_agent: Mapped[Optional[str]] = mapped_column("UserAgent", String(255), nullable=True)
     success: Mapped[bool] = mapped_column("Success", Boolean, default=True)
     error_message: Mapped[Optional[str]] = mapped_column("ErrorMessage", String(500), nullable=True)
-    extra_data: Mapped[Optional[str]] = mapped_column("ExtraData", Text, nullable=True)
+    username: Mapped[Optional[str]] = mapped_column("Username", String(255), nullable=True)
+    action_category: Mapped[Optional[str]] = mapped_column("ActionCategory", String(100), nullable=True)
+    details: Mapped[Optional[str]] = mapped_column("Details", Text, nullable=True)
+    request_url: Mapped[Optional[str]] = mapped_column("RequestURL", String(500), nullable=True)
+    request_method: Mapped[Optional[str]] = mapped_column("RequestMethod", String(10), nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column("RequestID", String(100), nullable=True)
 
 
 # =============================================================================

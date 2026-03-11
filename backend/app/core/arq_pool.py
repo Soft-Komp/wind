@@ -19,13 +19,17 @@ _arq_pool: Optional[ArqRedis] = None
 
 
 def _get_redis_settings() -> RedisSettings:
-    """Buduje RedisSettings z app settings."""
+    """Buduje RedisSettings z app settings (parsuje redis_url)."""
     from app.core.config import settings
+    from urllib.parse import urlparse
+    url = urlparse(settings.redis_url)
+    password = url.password or None
+    db = int(url.path.lstrip("/") or 0)
     return RedisSettings(
-        host=settings.REDIS_HOST,
-        port=settings.REDIS_PORT,
-        password=settings.REDIS_PASSWORD or None,
-        database=settings.REDIS_DB,
+        host=url.hostname or "redis",
+        port=url.port or 6379,
+        password=password,
+        database=db,
         conn_timeout=10,
         conn_retries=5,
         conn_retry_delay=2,

@@ -477,20 +477,42 @@ async def send_bulk(
     if request.template_id is not None:
         template = await _get_template(db, request.template_id)
         template_subject = template.subject
-
+    # Krok 2b: Pobranie emaili / telefonów dłużników z WAPRO
+    from app.db.wapro import get_debtor_by_id as _wapro_get_debtor
+    debtor_contacts: dict[int, str] = {}
+    debtor_contacts_raw: dict[int, dict] = {}
+    for debtor_id in valid_ids:
+        try:
+            wapro_result = await _wapro_get_debtor(debtor_id)
+            if wapro_result.rows:
+                    row = wapro_result.rows[0]
+                    debtor_contacts_raw[debtor_id] = row
+                    email = row.get("Email") or ""
+                    phone = row.get("Telefon") or ""
+                    if request.monit_type == "email":
+                        debtor_contacts[debtor_id] = email.strip()
+                    elif request.monit_type == "sms":
+                        debtor_contacts[debtor_id] = phone.strip()
+                    else:
+                        debtor_contacts[debtor_id] = ""
+        except Exception as exc:
+            logger.warning(
+                "Nie udało się pobrać danych kontaktowych dłużnika",
+                extra={"debtor_id": debtor_id, "error": str(exc)}
+            )
+            debtor_contacts[debtor_id] = ""
     # Krok 3: INSERT pending records do MonitHistory
     now = datetime.now(timezone.utc)
     monit_ids: list[int] = []
-
     for debtor_id in valid_ids:
         subject = request.custom_subject or template_subject
-
         new_monit = MonitHistory(
             id_kontrahenta=debtor_id,
             id_user=triggered_by_user_id,
             monit_type=request.monit_type,
             template_id=request.template_id,
             status="pending",
+            recipient=debtor_contacts.get(debtor_id, ""),
             subject=subject,
             scheduled_at=request.scheduled_at,
             retry_count=0,
@@ -514,17 +536,36 @@ async def send_bulk(
 
     # Krok 4: Enqueue do ARQ worker
     arq_payload = {
-        "monit_ids":     monit_ids,
-        "debtor_ids":    valid_ids,
-        "monit_type":    request.monit_type,
-        "template_id":   request.template_id,
-        "scheduled_at":  request.scheduled_at.isoformat() if request.scheduled_at else None,
-        "triggered_by":  triggered_by_user_id,
+        "monit_ids":            monit_ids,
+        "triggered_by_user_id": triggered_by_user_id,
     }
 
-    task_name = f"send_{request.monit_type}_task"
+    _task_map = {"email": "send_bulk_emails", "sms": "send_bulk_sms", "print": "generate_pdf_task"}
+    task_name = _task_map.get(request.monit_type, f"send_{request.monit_type}_task")
+    task_id = None
     try:
-        task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
+        if request.monit_type == "print":
+            # generate_pdf_task przyjmuje pojedynczy monit_id — enqueue per dłużnik
+            for idx, debtor_id in enumerate(valid_ids):
+                debtor_info = debtor_contacts_raw.get(debtor_id, {})
+                arq_payload = {
+                    "monit_id":             monit_ids[idx],
+                    "debtor_name":          debtor_info.get("NazwaKontrahenta") or f"Dłużnik {debtor_id}",
+                    "debtor_nip":           None,
+                    "debtor_address":       None,
+                    "invoices":             None,
+                    "total_debt":           float(debtor_info.get("SumaDlugu") or 0.0),
+                    "payment_deadline":     None,
+                    "payment_account":      None,
+                    "triggered_by_user_id": triggered_by_user_id,
+                }
+                task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
+        else:
+            arq_payload = {
+                "monit_ids":            monit_ids,
+                "triggered_by_user_id": triggered_by_user_id,
+            }
+            task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
     except MonitError as exc:
         logger.error(
             "Błąd kolejkowania — rekordy pending pozostają w DB",
@@ -1092,15 +1133,13 @@ async def retry(
     await db.commit()
 
     # Enqueue
-    task_name = f"send_{monit.monit_type}_task"
+
+    _task_map = {"email": "send_bulk_emails", "sms": "send_bulk_sms", "print": "generate_pdf_task"}
+    task_name = _task_map.get(monit.monit_type, f"send_{monit.monit_type}_task")
+    
     arq_payload = {
-        "monit_ids":     [monit_id],
-        "debtor_ids":    [monit.id_kontrahenta],
-        "monit_type":    monit.monit_type,
-        "template_id":   monit.template_id,
-        "is_retry":      True,
-        "retry_number":  monit.retry_count,
-        "triggered_by":  triggered_by_user_id,
+        "monit_ids":            [monit_id],
+        "triggered_by_user_id": triggered_by_user_id,
     }
     try:
         task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
