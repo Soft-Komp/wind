@@ -19,6 +19,7 @@ from typing import Any, Optional
 from arq import Retry
 from sqlalchemy import select, update
 
+from worker.core import db
 from worker.core.db import AuditLog, MonitHistory, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
@@ -182,6 +183,7 @@ async def send_bulk_emails(
                     retry_count=retry_count,
                 )
             )
+            await db.commit()
 
             # AuditLog
             db.add(AuditLog(
@@ -199,9 +201,9 @@ async def send_bulk_emails(
                 }, default=str),
                 success=result.success,
                 error_message=error_msg,
-                extra_data=json.dumps({"job_id": effective_job_id}),
+                details=json.dumps({"job_id": effective_job_id}),
             ))
-
+            await db.commit()
         if result.success:
             success_ids.append(monit.id_monit)
             logger.info(

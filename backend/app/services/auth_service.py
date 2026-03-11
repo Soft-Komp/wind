@@ -1440,20 +1440,59 @@ async def forgot_password(
         ip_address=ip_clean,
     )
     db.add(new_otp)
+    await db.flush()       # pobierz id_otp przed commit
+    otp_id = new_otp.id_otp
     await db.commit()
 
     logger.info(
-        "OTP code wygenerowany: user_id=%d, expires_at=%s",
-        user.id_user, expires_at.isoformat(),
-        extra={"user_id": user.id_user, "expires_at": expires_at.isoformat()},
+        "OTP code wygenerowany: user_id=%d, otp_id=%d, expires_at=%s",
+        user.id_user, otp_id, expires_at.isoformat(),
+        extra={
+            "user_id":    user.id_user,
+            "otp_id":     otp_id,
+            "expires_at": expires_at.isoformat(),
+        },
     )
 
-    # STUB: W Fazie 6 → arq_queue.enqueue("send_otp_email", user.email, otp_code)
-    logger.info(
-        "[STUB] OTP email do wysłania: user_id=%d — Worker ARQ nie zaimplementowany (Faza 6)",
-        user.id_user,
-        extra={"user_id": user.id_user, "stub": True},
-    )
+    # ARQ enqueue — wysyłka emaila przez worker
+    try:
+        from app.core.arq_pool import get_arq_pool
+        arq = get_arq_pool()
+        job = await arq.enqueue_job(
+            "send_otp",
+            otp_id=otp_id,
+            user_id=user.id_user,
+            username=user.username,
+            email=user.email,
+            phone=getattr(user, "phone", None),
+            full_name=user.full_name,
+            otp_code=otp_code,
+            purpose="password_reset",
+            expires_at=expires_at.isoformat(),
+            channel="email",
+            ip_address=ip_clean,
+        )
+        arq_job_id = str(job.job_id) if job else None
+        logger.info(
+            "OTP task enqueued do ARQ: job_id=%s",
+            arq_job_id,
+            extra={
+                "user_id":    user.id_user,
+                "otp_id":     otp_id,
+                "arq_job_id": arq_job_id,
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            "Błąd enqueue OTP do ARQ — email NIE zostanie wysłany: %s",
+            str(exc),
+            extra={
+                "user_id": user.id_user,
+                "otp_id":  otp_id,
+                "error":   str(exc),
+            },
+            exc_info=True,
+        )
 
     audit_service.log_auth(
         db,

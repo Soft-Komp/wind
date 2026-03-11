@@ -106,7 +106,7 @@ async def send_bulk_sms(
                 }, default=str),
                 success=result_sms.success,
                 error_message=result_sms.error[:500] if result_sms.error else None,
-                extra_data=json.dumps({"job_id": effective_job_id}),
+                details=json.dumps({"job_id": effective_job_id}),
             ))
 
         (success_ids if result_sms.success else failed_ids).append(monit.id_monit)

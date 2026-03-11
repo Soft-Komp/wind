@@ -174,7 +174,7 @@ class WorkerSettings:
     max_tries: int = _settings.TASK_MAX_RETRIES
     health_check_interval: int = _settings.ARQ_HEALTH_CHECK_INTERVAL
     health_check_key: str = "arq:health-check"
-    queue_name: str = "arq:queue:default"
+    queue_name: str = "arq:queue"
 
     # Jak długo trzymać wyniki zakończonych tasków w Redis
     keep_result: int = 3600        # 1h

@@ -131,6 +131,7 @@ async def _try_send(
             use_tls=config.use_ssl,   # SSL (port 465)
             start_tls=config.use_tls, # STARTTLS (port 587)
             timeout=config.timeout,
+            validate_certs=False,     # Hostname mismatch (cert na *.cyber-folks.pl)
         )
 
         async with smtp:

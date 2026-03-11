@@ -90,7 +90,7 @@ async def generate_pdf_task(
                 entity_id=str(monit_id),
                 new_value=json.dumps({"pdf_path": pdf_path, "size_kb": round(len(pdf_bytes)/1024, 1)}),
                 success=True,
-                extra_data=json.dumps({"job_id": effective_job_id}),
+                details=json.dumps({"job_id": effective_job_id}),
             ))
 
         get_event_logger(settings.LOG_DIR).log(

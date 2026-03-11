@@ -190,8 +190,8 @@ async def validate_bulk_debtors(
     template_id = body.get("template_id")
 
     _errors = _validate_debtor_ids(debtor_ids)
-    if channel not in ("email", "sms", "letter"):
-        _errors.append({"field": "channel", "message": "Dozwolone wartości: email, sms, letter"})
+    if channel not in ("email", "sms", "print"):
+        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, print"})
     if _errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -236,7 +236,7 @@ async def validate_bulk_debtors(
     ),
     response_description="Potwierdzenie kolejkowania (ARQ job IDs)",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[require_permission("monits.send_bulk")],
+    dependencies=[require_permission("monits.send_email_bulk")],
 )
 async def send_bulk_monits(
     request: Request,
@@ -255,8 +255,8 @@ async def send_bulk_monits(
     template_id = body.get("template_id")
 
     _errors = _validate_debtor_ids(debtor_ids)
-    if channel not in ("email", "sms", "letter"):
-        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, letter"})
+    if channel not in ("email", "sms", "print"):
+        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, print"})
     if not template_id:
         _errors.append({"field": "template_id", "message": "Pole wymagane"})
     if _errors:
@@ -544,7 +544,7 @@ async def preview_monit_pdf(
     ),
     response_description="Potwierdzenie kolejkowania (ARQ job ID)",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[require_permission("monits.send")],
+    dependencies=[require_permission("monits.send_email_single")],
     responses={202: {"description": "Monit w kolejce ARQ"}},
 )
 async def send_monit(
@@ -567,8 +567,8 @@ async def send_monit(
     _errors = []
     if not template_id:
         _errors.append({"field": "template_id", "message": "Pole wymagane"})
-    if channel not in ("email", "sms", "letter"):
-        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, letter"})
+    if channel not in ("email", "sms", "print"):
+        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, print"})
     if _errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -576,17 +576,23 @@ async def send_monit(
         )
 
     try:
-        result = await monit_service.send_single(
+        from app.services.monit_service import MonitBulkRequest
+        result_bulk = await monit_service.send_bulk(
             db=db,
             wapro=wapro,
             redis=redis,
-            debtor_id=debtor_id,
-            template_id=template_id,
-            channel=channel,
-            note=note,
-            sent_by_id=current_user.id_user,
-            ip=client_ip,
+            request=MonitBulkRequest(
+                debtor_ids=[debtor_id],
+                monit_type=channel,
+                template_id=template_id,
+            ),
+            triggered_by_user_id=current_user.id_user,
+            ip_address=client_ip,
         )
+        result = {
+            "job_id": result_bulk.task_id if result_bulk else None,
+            "monit_id": result_bulk.monit_ids[0] if result_bulk and result_bulk.monit_ids else None,
+        }
     except Exception as exc:
         _raise_from_monit_error(exc)
 
