@@ -152,10 +152,14 @@ async def send_bulk_emails(
             monit=monit, settings=settings
         )
 
+        # Renderuj subject przez Jinja2 — monit.subject może zawierać {{ company_name }} itp.
+        raw_subject = monit.subject or "Wezwanie do zapłaty"
+        rendered_email_subject = _render_template(raw_subject, monit, settings)
+
         email_msg = EmailMessage(
             to_email=monit.recipient,
             to_name="",
-            subject=monit.subject or "Wezwanie do zapłaty",
+            subject=rendered_email_subject,
             html_body=html_body,
             text_body=_html_to_plain(html_body),
             attachments=[pdf_attachment] if pdf_attachment else [],
