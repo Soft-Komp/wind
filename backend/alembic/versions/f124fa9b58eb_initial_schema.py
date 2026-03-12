@@ -79,6 +79,9 @@ def upgrade() -> None:
     _create_skw_monit_history()
     _create_skw_master_access_log()
     _create_skw_comments()
+    _create_view_kontrahenci()
+    _create_view_rozrachunki_faktur()
+    _create_wapro_indexes()
 
 
 def downgrade() -> None:
@@ -490,5 +493,141 @@ def _create_skw_comments() -> None:
                 ON [{SCHEMA}].[skw_Comments] ([ID_KONTRAHENTA] ASC, [IsActive] ASC, [CreatedAt] DESC);
             CREATE NONCLUSTERED INDEX [IX_skw_Comments_UserID]
                 ON [{SCHEMA}].[skw_Comments] ([ID_USER] ASC, [CreatedAt] DESC);
+        END
+    """)
+def _create_view_kontrahenci() -> None:
+    op.execute("""
+        CREATE OR ALTER VIEW [dbo].[skw_kontrahenci] AS
+        WITH cte_rozrachunki AS (
+            SELECT
+                r.id_platnika,
+                SUM(ABS(r.pozostalo))                                        AS SumaDlugu,
+                COUNT(CASE WHEN r.typ_dok = 'h' THEN 1 END)                  AS LiczbaFaktur,
+                CAST(
+                    dbo.RM_Func_ClarionDateToDateTime(
+                        MIN(CASE WHEN r.typ_dok = 'h' THEN r.data_wystawienia END)
+                    )
+                AS DATE)                                                      AS NajstarszaFaktura,
+                MAX(
+                    CASE
+                        WHEN r.termin_platnosci IS NOT NULL AND r.termin_platnosci > 0
+                        THEN DATEDIFF(
+                            DAY,
+                            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
+                            CAST(GETDATE() AS DATE)
+                        )
+                        ELSE 0
+                    END
+                )                                                             AS DniPrzeterminowania
+            FROM ROZRACHUNEK_V AS r
+            WHERE r.id_platnika IS NOT NULL
+              AND r.rozliczony  = 0
+              AND r.pozostalo   < 0
+            GROUP BY r.id_platnika
+        ),
+        cte_monity_ranked AS (
+            SELECT
+                m.ID_KONTRAHENTA,
+                m.SentAt,
+                m.MonitType,
+                COUNT(*) OVER (PARTITION BY m.ID_KONTRAHENTA)     AS LiczbaMonitow,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.ID_KONTRAHENTA
+                    ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
+                )                                                  AS rn
+            FROM dbo_ext.skw_MonitHistory AS m
+        ),
+        cte_monity AS (
+            SELECT
+                ID_KONTRAHENTA,
+                SentAt      AS OstatniMonitData,
+                MonitType   AS OstatniMonitTyp,
+                LiczbaMonitow
+            FROM cte_monity_ranked
+            WHERE rn = 1
+        )
+        SELECT
+            k.ID_KONTRAHENTA,
+            ISNULL(k.NAZWA_PELNA, k.NAZWA)          AS NazwaKontrahenta,
+            k.ADRES_EMAIL                            AS Email,
+            k.TELEFON_FIRMOWY                        AS Telefon,
+            ISNULL(roz.SumaDlugu,          0)        AS SumaDlugu,
+            ISNULL(roz.LiczbaFaktur,       0)        AS LiczbaFaktur,
+            roz.NajstarszaFaktura,
+            ISNULL(roz.DniPrzeterminowania, 0)       AS DniPrzeterminowania,
+            mon.OstatniMonitData,
+            mon.OstatniMonitTyp,
+            ISNULL(mon.LiczbaMonitow,      0)        AS LiczbaMonitow
+        FROM      dbo.KONTRAHENT     AS k
+        LEFT JOIN cte_rozrachunki    AS roz ON roz.id_platnika = CAST(k.ID_KONTRAHENTA AS INT)
+        LEFT JOIN cte_monity         AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT);
+    """)
+
+
+def _create_view_rozrachunki_faktur() -> None:
+    op.execute("""
+        CREATE OR ALTER VIEW [dbo].[skw_rozrachunki_faktur] AS
+        WITH cte_kontrahenci_aktywni AS (
+            SELECT
+                k.ID_KONTRAHENTA,
+                k.NAZWA     AS NazwaKontrahenta,
+                k.NIP       AS NIP
+            FROM dbo.KONTRAHENT AS k
+            WHERE k.RODO_ZANONIMIZOWANY = 0
+              AND k.ZABLOKOWANY = 0
+        )
+        SELECT
+            r.id_platnika                                         AS ID_KONTRAHENTA,
+            ka.NazwaKontrahenta,
+            ka.NIP,
+            r.nr_dok                                              AS NumerFaktury,
+            CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia)  AS DATE) AS DataWystawienia,
+            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci)  AS DATE) AS TerminPlatnosci,
+            ABS(r.wartosc)                                        AS KwotaBrutto,
+            ABS(r.pozostalo)                                      AS KwotaPozostala,
+            ABS(r.wartosc) - ABS(r.pozostalo)                    AS KwotaZaplacona,
+            CASE WHEN r.rozliczony = 1 THEN 1 ELSE 0 END         AS CzyZaplacona,
+            DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
+                CAST(GETDATE() AS DATE)
+            )                                                     AS DniPrzeterminowania,
+            r.forma_platnosci                                     AS FormaPlatnosci
+        FROM ROZRACHUNEK_V AS r
+        JOIN cte_kontrahenci_aktywni AS ka ON ka.ID_KONTRAHENTA = CAST(r.id_platnika AS INT)
+        WHERE r.typ_dok = 'h'
+          AND r.pozostalo < 0;
+    """)
+
+
+def _create_wapro_indexes() -> None:
+    op.execute("""
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE name = N'IX_Mon_Kontrahent_Historia'
+              AND object_id = OBJECT_ID(N'[dbo_ext].[skw_MonitHistory]')
+        )
+        CREATE NONCLUSTERED INDEX [IX_Mon_Kontrahent_Historia]
+            ON [dbo_ext].[skw_MonitHistory] ([ID_KONTRAHENTA] ASC, [IsActive] ASC)
+            INCLUDE ([SentAt], [MonitType], [CreatedAt]);
+    """)
+    op.execute("""
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE name = N'IX_Roz_Kontrahent_Dlugi'
+              AND object_id = OBJECT_ID(N'dbo.ROZRACHUNEK_V')
+        )
+        BEGIN
+            PRINT 'IX_Roz_Kontrahent_Dlugi: ROZRACHUNEK_V jest widokiem — indeks pominięty';
+        END
+    """)
+    op.execute("""
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE name = N'IX_Roz_Faktura_Kontrahent'
+              AND object_id = OBJECT_ID(N'dbo.ROZRACHUNEK_V')
+        )
+        BEGIN
+            PRINT 'IX_Roz_Faktura_Kontrahent: ROZRACHUNEK_V jest widokiem — indeks pominięty';
         END
     """)
