@@ -20,7 +20,7 @@
 -- │ users (11)                      │  ALL  │   2/11  │ 2/11 │   2/11  │
 -- │ roles (7)                       │  ALL  │   2/7   │  0   │   0     │
 -- │ permissions (9)                 │  ALL  │   2/9   │  0   │   0     │
--- │ debtors (8)                     │  ALL  │   8/8   │  5/8 │   5/8   │
+-- │ debtors (9)                     │  ALL  │   9/9   │  6/9 │   5/9   │
 -- │ comments (6)                    │  ALL  │   5/6   │  3/6 │   1/6   │
 -- │ monits (12)                     │  ALL  │  10/12  │  3/12│   0     │
 -- │ pdf (4)                         │  ALL  │   3/4   │  2/4 │   0     │
@@ -98,7 +98,8 @@ BEGIN TRY
             N'permissions.view_list',
             N'permissions.view_matrix',
 
-            -- DEBTORS (8/8) — pełny dostęp
+            -- DEBTORS (9/9) — pełny dostęp
+            N'debtors.stats',
             N'debtors.view_list',
             N'debtors.view_details',
             N'debtors.view_invoices',
@@ -186,7 +187,8 @@ BEGIN TRY
             N'users.view_own_profile',
             N'users.edit_own_profile',
 
-            -- DEBTORS (5/8) — bez export, filter_advanced, view_monit_history
+            -- DEBTORS (6/9) — bez export, filter_advanced, view_monit_history
+            N'debtors.stats',
             N'debtors.view_list',
             N'debtors.view_details',
             N'debtors.view_invoices',
@@ -250,7 +252,7 @@ BEGIN TRY
             -- USERS — tylko własny profil (bez edycji)
             N'users.view_own_profile',
 
-            -- DEBTORS (5/8) — tylko widok
+            -- DEBTORS (5/9) — tylko widok, bez stats
             N'debtors.view_list',
             N'debtors.view_details',
             N'debtors.view_invoices',

@@ -1,0 +1,156 @@
+2026-03-11T08:08:09+0000 | DEBUG    | 92 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T08:08:09+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T08:08:09+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T08:08:09+0000 | DEBUG    | 92 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T08:08:14+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T08:08:14+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T08:08:14+0000 | INFO     | 92 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T08:08:14+0000 | INFO     | 92 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T08:08:14+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T08:08:15+0000 | INFO     | 92 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T08:08:15+0000 | DEBUG    | 92 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T08:08:19+0000 | DEBUG    | 114 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T08:08:19+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T08:08:22+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T08:08:22+0000 | DEBUG    | 114 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T08:08:23+0000 | INFO     | 114 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T08:08:23+0000 | DEBUG    | 114 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T09:25:34+0000 | DEBUG    | 85 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T09:25:34+0000 | DEBUG    | 85 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T09:25:34+0000 | INFO     | 85 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T09:25:34+0000 | DEBUG    | 85 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T09:25:36+0000 | DEBUG    | 94 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T09:25:36+0000 | DEBUG    | 94 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T09:25:36+0000 | INFO     | 94 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T09:25:36+0000 | DEBUG    | 94 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T12:19:46+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T12:19:46+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T12:19:46+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T12:19:46+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T12:19:50+0000 | DEBUG    | 100 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T12:19:50+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T12:19:50+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T12:19:50+0000 | DEBUG    | 100 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T12:19:51+0000 | INFO     | 100 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T12:19:51+0000 | DEBUG    | 100 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T12:44:29+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T12:44:29+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T12:44:29+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T12:44:29+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T12:44:31+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T12:44:31+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T12:44:31+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T12:44:31+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T12:44:32+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T12:44:32+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T14:05:20+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T14:05:20+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T14:05:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T14:05:20+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T14:05:22+0000 | DEBUG    | 95 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T14:05:22+0000 | DEBUG    | 95 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T14:05:22+0000 | INFO     | 95 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T14:05:22+0000 | DEBUG    | 95 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T14:16:20+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T14:16:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T14:16:20+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T14:16:20+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T14:16:22+0000 | INFO     | 86 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T14:16:22+0000 | DEBUG    | 86 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.
+2026-03-11T14:16:24+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:515 | Alembic env.py załadowany | offline_mode=False | models_count=13
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:525 | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:450 | Tryb ONLINE | target_schema=dbo_ext | version_table_schema=dbo
+2026-03-11T14:16:24+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:198 | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59421;DATABASE=GPGKJASLO;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:385 | Połączenie z bazą OK | db=GPGKJASLO | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+	Oct  8 2022 05:58:25 
+	Cop
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:393 | Schemat 'dbo_ext' ISTNIEJE w bazie 'GPGKJASLO' (schema_id=5) — migracje będą aktualizować istniejące tabele.
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:207 | Context impl MSSQLImpl.
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.runtime.migration | /usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:210 | Will assume transactional DDL.
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:479 | Uruchamianie migracji...
+2026-03-11T14:16:24+0000 | INFO     | 101 | alembic.env | /app/alembic/env.py:485 | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-03-11T14:16:24+0000 | DEBUG    | 101 | alembic.env | /app/alembic/env.py:499 | Engine zamknięty.

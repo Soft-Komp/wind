@@ -73,7 +73,15 @@ class Settings(BaseSettings):
     SMSAPI_SENDER: str = Field(default="Windykacja", max_length=11)
     SMSAPI_URL: str = Field(default="https://api.smsapi.pl/sms.do")
     SMSAPI_TEST_MODE: bool = Field(default=False, description="True = nie wysyła SMS")
-
+    SMSAPI_FALLBACK_PHONE: str = Field(
+        default="",
+        description=(
+            "Numer testowy — używany gdy Recipient jest pusty. "
+            "Format: 48XXXXXXXXX lub XXXXXXXXX. "
+            "Pusty = brak fallbacku, monit z pustym numerem trafia do failed."
+        ),
+    )
+    
     # ── Paths ─────────────────────────────────────────────────────────────────
     LOG_DIR: str = Field(default="/app/logs")
     SNAPSHOT_DIR: str = Field(default="/app/snapshots")

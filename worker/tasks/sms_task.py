@@ -71,8 +71,36 @@ async def send_bulk_sms(
             errors.append({"monit_id": monit.id_monit, "error": "Brak numeru telefonu"})
             continue
 
+        # Fallback phone — gdy kontrahent nie ma numeru w WAPRO
+        effective_phone = monit.recipient
+        if not effective_phone:
+            if settings.SMSAPI_FALLBACK_PHONE:
+                effective_phone = settings.SMSAPI_FALLBACK_PHONE
+                logger.warning(
+                    "SMS: brak numeru odbiorcy — użyto FALLBACK",
+                    extra={
+                        "monit_id": monit.id_monit,
+                        "fallback_phone": settings.SMSAPI_FALLBACK_PHONE,
+                        "id_kontrahenta": monit.id_kontrahenta,
+                    },
+                )
+            else:
+                logger.warning(
+                    "SMS: brak numeru odbiorcy i brak FALLBACK — pomijam monit",
+                    extra={
+                        "monit_id": monit.id_monit,
+                        "id_kontrahenta": monit.id_kontrahenta,
+                    },
+                )
+                failed_ids.append(monit.id_monit)
+                errors.append({
+                    "monit_id": monit.id_monit,
+                    "error": "Brak numeru telefonu i brak SMSAPI_FALLBACK_PHONE",
+                })
+                continue
+
         sms_msg = SmsMessage(
-            phone_number=monit.recipient,
+            phone_number=effective_phone,
             message=monit.message_body or _default_sms_body(monit, settings),
             monit_id=monit.id_monit,
             user_id=triggered_by_user_id,
