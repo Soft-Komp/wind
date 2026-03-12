@@ -89,6 +89,39 @@ def _normalize_phone(phone: str) -> str:
     return phone
 
 
+# Mapa transliteracji polskich znaków → ASCII
+# SMS w GSM-7 (160 znaków) — polskie litery zużywają 2 bajty (UCS-2, limit = 70 znaków)
+# Transliteracja pozwala zmieścić 160 znaków zamiast 70 i unika problemów z kodowaniem
+_PL_TRANSLITERATION: dict[int, str] = str.maketrans(
+    "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ",
+    "acelnoszzACELNOSZZ",
+)
+
+
+def _transliterate_pl(text: str) -> str:
+    """
+    Zamienia polskie znaki diakrytyczne na ich ASCII odpowiedniki.
+
+    Powód: SMS w standardzie GSM-7 = 160 znaków.
+    Polskie litery wymagają UCS-2 = limit spada do 70 znaków i rosną koszty.
+    Transliteracja: ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź/ż→z (i wielkie litery).
+
+    Wywoływane ZAWSZE przed wysyłką SMS — nawet jeśli frontend już to zrobił
+    (defense in depth).
+    """
+    transliterated = text.translate(_PL_TRANSLITERATION)
+    if transliterated != text:
+        logger.debug(
+            "Transliteracja polskich znaków w SMS",
+            extra={
+                "original_len": len(text),
+                "transliterated_len": len(transliterated),
+                "changed": True,
+            },
+        )
+    return transliterated
+
+
 def _truncate_message(text: str, max_len: int = SMS_MAX_LENGTH) -> str:
     """Skróć wiadomość jeśli za długa + dodaj info o skróceniu."""
     if len(text) <= max_len:
@@ -112,7 +145,8 @@ async def send_sms(message: SmsMessage) -> SmsSendResult:
     start = time.monotonic()
 
     normalized_phone = _normalize_phone(message.phone_number)
-    truncated_message = _truncate_message(message.message)
+    transliterated_message = _transliterate_pl(message.message)
+    truncated_message = _truncate_message(transliterated_message)
 
     log_base = {
         "ts": datetime.now(timezone.utc).isoformat(),

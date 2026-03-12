@@ -1012,7 +1012,10 @@ async def update(
 
     user.updated_at = datetime.now(timezone.utc)
     await db.flush()
-
+    await db.commit()
+    # Odśwież relację role po zmianie role_id (ORM nie robi tego automatycznie)
+    if "role_id" in changed_fields:
+        await db.refresh(user, ["role"])
     # Inwalidacja cache
     await _invalidate_user_cache(redis, user_id)
     try:

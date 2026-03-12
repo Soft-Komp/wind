@@ -158,7 +158,7 @@ BEGIN TRY
              N'permissions'),
 
             -- =================================================================
-            -- DEBTORS (8) — dłużnicy z WAPRO (read-only)
+            -- DEBTORS (9) — dłużnicy z WAPRO (read-only)
             -- =================================================================
             (N'debtors.view_list',
              N'Lista dłużników z filtrami',
@@ -180,6 +180,9 @@ BEGIN TRY
              N'debtors'),
             (N'debtors.export',
              N'Eksport listy dłużników do pliku',
+             N'debtors'),
+            (N'debtors.stats',
+             N'Statystyki zbiorcze dłużników (dashboard)',
              N'debtors'),
             (N'debtors.view_monit_history',
              N'Historia monitów wysłanych do dłużnika',
