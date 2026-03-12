@@ -144,9 +144,9 @@ def _create_skw_permissions() -> None:
                     UNIQUE ([PermissionName]),
                 CONSTRAINT [CK_skw_Permissions_Category]
                     CHECK ([Category] IN (
-                        N'auth', N'users', N'roles', N'permissions', N'debtors',
-                        N'monits', N'comments', N'pdf', N'reports',
-                        N'snapshots', N'audit', N'system'
+                        N'system', N'audit', N'snapshots', N'reports', N'pdf',
+                        N'comments', N'monits', N'debtors', N'permissions',
+                        N'roles', N'users', N'auth', N'templates'
                     ))
             );
             CREATE NONCLUSTERED INDEX [IX_skw_Permissions_Category]
@@ -560,7 +560,7 @@ def _create_view_kontrahenci() -> None:
             ISNULL(mon.LiczbaMonitow,      0)        AS LiczbaMonitow
         FROM      dbo.KONTRAHENT     AS k
         LEFT JOIN cte_rozrachunki    AS roz ON roz.id_platnika = CAST(k.ID_KONTRAHENTA AS INT)
-        LEFT JOIN cte_monity         AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT);
+        LEFT JOIN cte_monity         AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT)
     """)
 
 
@@ -570,33 +570,29 @@ def _create_view_rozrachunki_faktur() -> None:
         WITH cte_kontrahenci_aktywni AS (
             SELECT
                 k.ID_KONTRAHENTA,
-                k.NAZWA     AS NazwaKontrahenta,
-                k.NIP       AS NIP
+                ISNULL(k.NAZWA_PELNA, k.NAZWA) AS NazwaKontrahenta,
+                k.NIP                          AS NIP
             FROM dbo.KONTRAHENT AS k
             WHERE k.RODO_ZANONIMIZOWANY = 0
               AND k.ZABLOKOWANY = 0
         )
         SELECT
-            r.id_platnika                                         AS ID_KONTRAHENTA,
+            r.id_platnika                                              AS ID_KONTRAHENTA,
             ka.NazwaKontrahenta,
             ka.NIP,
-            r.nr_dok                                              AS NumerFaktury,
-            CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia)  AS DATE) AS DataWystawienia,
-            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci)  AS DATE) AS TerminPlatnosci,
-            ABS(r.wartosc)                                        AS KwotaBrutto,
-            ABS(r.pozostalo)                                      AS KwotaPozostala,
-            ABS(r.wartosc) - ABS(r.pozostalo)                    AS KwotaZaplacona,
-            CASE WHEN r.rozliczony = 1 THEN 1 ELSE 0 END         AS CzyZaplacona,
-            DATEDIFF(
-                DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                CAST(GETDATE() AS DATE)
-            )                                                     AS DniPrzeterminowania,
-            r.forma_platnosci                                     AS FormaPlatnosci
+            r.numer                                                    AS NumerFaktury,
+            CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia) AS DATE) AS DataWystawienia,
+            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE) AS TerminPlatnosci,
+            ABS(r.wartosc_brutto)                                      AS KwotaBrutto,
+            ABS(r.pozostalo)                                           AS KwotaPozostala,
+            ABS(r.wartosc_brutto) - ABS(r.pozostalo)                  AS KwotaZaplacona,
+            CASE WHEN r.rozliczony = 1 THEN 1 ELSE 0 END              AS CzyZaplacona,
+            ISNULL(r.dni_przeterminowania, 0)                         AS DniPrzeterminowania,
+            r.forma_platnosci                                          AS FormaPlatnosci
         FROM ROZRACHUNEK_V AS r
         JOIN cte_kontrahenci_aktywni AS ka ON ka.ID_KONTRAHENTA = CAST(r.id_platnika AS INT)
         WHERE r.typ_dok = 'h'
-          AND r.pozostalo < 0;
+          AND r.pozostalo < 0
     """)
 
 

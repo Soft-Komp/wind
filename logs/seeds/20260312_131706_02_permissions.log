@@ -1,0 +1,28 @@
+================================================================
+ SEED LOG: 02_permissions.sql
+================================================================
+ Czas:      2026-03-12T13:17:06+0000
+ Plik:      /app/database/seeds/02_permissions.sql
+ Serwer:    tcp:192.168.0.50,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT ---
+Category                                           Ilosc       Aktywne    
+-------------------------------------------------- ----------- -----------
+audit                                                        4           4
+auth                                                         8           8
+comments                                                     6           6
+debtors                                                      9           9
+monits                                                      12          12
+pdf                                                          4           4
+permissions                                                  9           9
+reports                                                      5           5
+roles                                                        7           7
+snapshots                                                    4           4
+system                                                       6           6
+users                                                       11          11
+
+--- WYNIK: OK ---
+Czas zakonczenia: 2026-03-12T13:17:07+0000

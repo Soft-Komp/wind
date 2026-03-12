@@ -1,0 +1,28 @@
+================================================================
+ SEED LOG: 06_templates_permissions.sql
+================================================================
+ Czas:      2026-03-12T13:59:07+0000
+ Plik:      /app/database/seeds/06_templates_permissions.sql
+ Serwer:    tcp:192.168.0.50,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT ---
+RoleName                                           PermissionName                                                                                      
+-------------------------------------------------- ----------------------------------------------------------------------------------------------------
+Admin                                              templates.create                                                                                    
+Admin                                              templates.delete                                                                                    
+Admin                                              templates.edit                                                                                      
+Admin                                              templates.view_details                                                                              
+Admin                                              templates.view_list                                                                                 
+Manager                                            templates.create                                                                                    
+Manager                                            templates.edit                                                                                      
+Manager                                            templates.view_details                                                                              
+Manager                                            templates.view_list                                                                                 
+ReadOnly                                           templates.view_list                                                                                 
+User                                               templates.view_details                                                                              
+User                                               templates.view_list                                                                                 
+
+--- WYNIK: OK ---
+Czas zakonczenia: 2026-03-12T13:59:07+0000

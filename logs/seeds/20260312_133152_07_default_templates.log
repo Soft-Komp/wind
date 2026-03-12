@@ -1,0 +1,19 @@
+================================================================
+ SEED LOG: 07_default_templates.sql
+================================================================
+ Czas:      2026-03-12T13:31:53+0000
+ Plik:      /app/database/seeds/07_default_templates.sql
+ Serwer:    tcp:192.168.0.50,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT ---
+ID_TEMPLATE TemplateName                                                                                         TemplateType         IsActive
+----------- ---------------------------------------------------------------------------------------------------- -------------------- --------
+          1 Wezwanie do zapłaty - Email                                                                          email                       1
+          2 Wezwanie do zapłaty - SMS                                                                            sms                         1
+          3 Wezwanie do zapłaty - Druk                                                                           print                       1
+
+--- WYNIK: OK ---
+Czas zakonczenia: 2026-03-12T13:31:54+0000

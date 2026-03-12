@@ -1456,6 +1456,8 @@ async def generate_pdf_preview(
     """
     from io import BytesIO
     from sqlalchemy import select as sa_select
+    from app.core.config import get_settings
+    settings = get_settings()
 
     # 1. Pobierz szablon z dbo_ext
     from app.db.models.monit_history import MonitHistory  # noqa (reuse session)
@@ -1562,9 +1564,31 @@ async def generate_pdf_preview(
 
     # Treść szablonu
     body_text = tmpl_row.get("Body") or "(brak treści szablonu)"
-    # Zamień \n na <br/> dla ReportLab
-    # Obsługa zarówno dosłownych \n (z bazy) jak i prawdziwych newline
-    body_text = body_text.replace("\\n", "<br/>").replace("\n", "<br/>")
+    # Renderuj zmienne Jinja2
+    try:
+        from jinja2 import Environment, BaseLoader, Undefined
+        class _Silent(Undefined):
+            def __str__(self): return ""
+        _env = Environment(loader=BaseLoader(), undefined=_Silent)
+        logger.debug("Jinja2 render context", extra={"debtor_keys": list(debtor.keys()), "debtor_sample": {k: debtor.get(k) for k in ["NazwaKontrahenta", "nazwa_kontrahenta", "SumaDlugu"]}})
+        body_text = _env.from_string(body_text).render(
+            debtor_name=debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or "",
+            total_debt=f"{float(debtor.get('SumaDlugu') or 0):.2f}",
+            invoice_list=debtor.get("invoice_numbers") or "—",
+            due_date=_calc_preview_deadline(),
+            company_name=settings.COMPANY_NAME,
+        )
+        # Renderuj też Subject
+        if tmpl_row.get("Subject"):
+            _subj = _env.from_string(tmpl_row["Subject"]).render(
+                company_name=settings.COMPANY_NAME,
+                debtor_name=debtor.get("NazwaKontrahenta") or "",
+            )
+    except Exception as _jinja_exc:
+        import traceback
+        logger.error("Błąd Jinja2 w podglądzie PDF", extra={"error": str(_jinja_exc), "traceback": traceback.format_exc()})
+    # Usuń pełny HTML — ReportLab obsługuje tylko prosty tekst + <b><i><br/>
+    body_text = _strip_html_for_reportlab(body_text)
     story.append(Paragraph(body_text, style_normal))
 
     story.append(Spacer(1, 1 * cm))
@@ -1588,3 +1612,45 @@ async def generate_pdf_preview(
     )
 
     return pdf_bytes
+
+def _calc_preview_deadline(days: int = 7) -> str:
+    """Termin płatności dla podglądu PDF (dziś + N dni)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    dt = datetime.now(ZoneInfo("Europe/Warsaw")) + timedelta(days=days)
+    return dt.strftime("%d.%m.%Y")
+
+def _strip_html_for_reportlab(html: str) -> str:
+    """
+    Konwertuje HTML na tekst akceptowany przez ReportLab Paragraph.
+    ReportLab obsługuje tylko: <b>, <i>, <u>, <br/>, <para> — reszta musi być usunięta.
+    """
+    import re
+
+    # Zamień blokowe tagi na nowe linie
+    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"</p>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"</tr>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"</div>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"</h[1-6]>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"<li[^>]*>", "• ", html, flags=re.IGNORECASE)
+
+    # Zachowaj <b> i <i> — ReportLab je obsługuje
+    html = re.sub(r"<strong[^>]*>", "<b>", html, flags=re.IGNORECASE)
+    html = re.sub(r"</strong>", "</b>", html, flags=re.IGNORECASE)
+    html = re.sub(r"<em[^>]*>", "<i>", html, flags=re.IGNORECASE)
+    html = re.sub(r"</em>", "</i>", html, flags=re.IGNORECASE)
+
+    # Usuń wszystkie pozostałe tagi HTML
+    html = re.sub(r"<(?!b>|/b>|i>|/i>|u>|/u>)[^>]+>", "", html)
+
+    # Zamień wielokrotne puste linie na jedną
+    html = re.sub(r"\n{3,}", "\n\n", html)
+
+    # Zamień newline na <br/> dla ReportLab
+    html = html.replace("\n", "<br/>")
+
+    # Usuń nadmiarowe spacje
+    html = re.sub(r"[ \t]+", " ", html).strip()
+
+    return html or "(brak treści szablonu)"

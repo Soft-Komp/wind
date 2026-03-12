@@ -459,6 +459,8 @@ SEED_FILES="
 03_role_permissions.sql
 04_admin_user.sql
 05_system_config.sql
+06_templates_permissions.sql
+07_default_templates.sql
 "
 
 _should_run_seeds=false

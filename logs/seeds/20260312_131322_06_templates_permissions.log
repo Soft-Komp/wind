@@ -1,0 +1,19 @@
+================================================================
+ SEED LOG: 06_templates_permissions.sql
+================================================================
+ Czas:      2026-03-12T13:13:23+0000
+ Plik:      /app/database/seeds/06_templates_permissions.sql
+ Serwer:    tcp:192.168.0.50,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT (przed bledem) ---
+
+--- STDERR (bledy SQL) ---
+BŁĄD: The MERGE statement conflicted with the CHECK constraint "CK_skw_Permissions_Category". The conflict occurred in database "GPGKJASLO", table "dbo_ext.skw_Permissions", column 'Category'.
+Msg 547, Level 16, State 1, Server sv2016\SLQ2022, Line 5
+The MERGE statement conflicted with the CHECK constraint "CK_skw_Permissions_Category". The conflict occurred in database "GPGKJASLO", table "dbo_ext.skw_Permissions", column 'Category'.
+
+--- WYNIK: ERROR (exit_code=1) ---
+Czas zakonczenia: 2026-03-12T13:13:23+0000
