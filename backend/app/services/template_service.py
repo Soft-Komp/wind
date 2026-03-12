@@ -444,8 +444,8 @@ async def get_list(
     filters = []
     if template_type and template_type in TEMPLATE_TYPES:
         filters.append(Template.template_type == template_type)
-    if is_active is not None:
-        filters.append(Template.is_active == is_active)
+    effective_is_active = is_active if is_active is not None else True
+    filters.append(Template.is_active == effective_is_active)
     if search:
         search_clean = _sanitize(search, 100) or ""
         if search_clean:
@@ -524,12 +524,17 @@ async def get_by_id(
         return cached
 
     result = await db.execute(
-        select(Template).where(Template.id_template == template_id)
+        select(Template).where(
+            and_(
+                Template.id_template == template_id,
+                Template.is_active == True,  # noqa: E712
+            )
+        )
     )
     template = result.scalar_one_or_none()
 
     if template is None:
-        raise TemplateNotFoundError(f"Szablon ID={template_id} nie istnieje.")
+        raise TemplateNotFoundError(f"Szablon ID={template_id} nie istnieje lub jest nieaktywny.")
 
     data = _template_to_dict(template)
     await _cache_set(redis, cache_key, data, _CACHE_TEMPLATE_TTL)
