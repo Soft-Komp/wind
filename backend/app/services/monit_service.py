@@ -1550,43 +1550,143 @@ async def generate_pdf_preview(
         leading=13,
     )
 
+    # Inicjalizacja rendered_subject PRZED story — fallback na surowy Subject
+    # jeśli Jinja2 jeszcze nie renderował (Python wymaga przypisania przed użyciem)
+    rendered_subject = tmpl_row.get("Subject") or ""
+
     story = []
     # Nagłówek — nazwa firmy dłużnika
     nazwa = debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or f"ID {debtor_id}"
     story.append(Paragraph(f"<b>Podgląd monitu — {nazwa}</b>", style_title))
     story.append(Spacer(1, 0.5 * cm))
-    # Metadane
+    # Metadane — temat renderowany po Jinja2, wstawiony niżej
     story.append(Paragraph(f"Szablon: {tmpl_row['TemplateName']}", style_normal))
     story.append(Paragraph(f"Kanał: {channel}", style_normal))
-    if tmpl_row.get("Subject"):
-        story.append(Paragraph(f"Temat: {tmpl_row['Subject']}", style_normal))
     story.append(Spacer(1, 0.5 * cm))
 
-    # Treść szablonu
+    # ── Krok 2.5: Pobierz numery faktur z WAPRO dla invoice_list ─────────────
+    # Klucz "invoice_numbers" NIE istnieje w dict z VIEW_kontrahenci —
+    # trzeba osobno odpytać VIEW_rozrachunki_faktur.
+    invoice_list_str = "—"
+    try:
+        from app.db.wapro import get_invoices_for_debtor, InvoiceFilterParams
+        _inv_params = InvoiceFilterParams(
+            kontrahent_id=debtor_id,
+            include_paid=False,
+            limit=20,
+            offset=0,
+        )
+        _inv_result = await get_invoices_for_debtor(_inv_params)
+        if _inv_result.rows:
+            _numbers = [
+                str(row.get("NumerFaktury") or row.get("NR_DOK") or "").strip()
+                for row in _inv_result.rows
+                if row.get("NumerFaktury") or row.get("NR_DOK")
+            ]
+            if _numbers:
+                invoice_list_str = ", ".join(_numbers)
+        logger.debug(
+            "Faktury pobrane dla podglądu PDF",
+            extra={
+                "debtor_id": debtor_id,
+                "invoice_count": len(_inv_result.rows),
+                "invoice_list_str": invoice_list_str,
+            },
+        )
+    except Exception as _inv_exc:
+        import traceback as _tb_inv
+        logger.warning(
+            "Nie udało się pobrać faktur dla podglądu PDF — używam myślnika",
+            extra={
+                "debtor_id": debtor_id,
+                "error": str(_inv_exc),
+                "traceback": _tb_inv.format_exc(),
+            },
+        )
+
+    # ── Krok 3: Zbuduj kontekst Jinja2 i renderuj ────────────────────────────
     body_text = tmpl_row.get("Body") or "(brak treści szablonu)"
-    # Renderuj zmienne Jinja2
+    rendered_subject = tmpl_row.get("Subject") or ""  # inicjalizacja przed try — fallback na surowy Subject
+    rendered_subject = tmpl_row.get("Subject") or ""
+
+    _jinja_context = {
+        "debtor_name":  debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or "",
+        "total_debt":   f"{float(debtor.get('SumaDlugu') or 0):.2f}",
+        "invoice_list": invoice_list_str,
+        "due_date":     _calc_preview_deadline(),
+        "company_name": settings.COMPANY_NAME,
+    }
+
+    logger.debug(
+        "Jinja2 render context",
+        extra={
+            "debtor_id":   debtor_id,
+            "template_id": template_id,
+            "debtor_keys": list(debtor.keys()),
+            "context": {
+                "debtor_name":  _jinja_context["debtor_name"],
+                "total_debt":   _jinja_context["total_debt"],
+                "invoice_list": _jinja_context["invoice_list"],
+                "due_date":     _jinja_context["due_date"],
+                "company_name": _jinja_context["company_name"],
+            },
+        },
+    )
+
     try:
         from jinja2 import Environment, BaseLoader, Undefined
-        class _Silent(Undefined):
-            def __str__(self): return ""
-        _env = Environment(loader=BaseLoader(), undefined=_Silent)
-        logger.debug("Jinja2 render context", extra={"debtor_keys": list(debtor.keys()), "debtor_sample": {k: debtor.get(k) for k in ["NazwaKontrahenta", "nazwa_kontrahenta", "SumaDlugu"]}})
-        body_text = _env.from_string(body_text).render(
-            debtor_name=debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or "",
-            total_debt=f"{float(debtor.get('SumaDlugu') or 0):.2f}",
-            invoice_list=debtor.get("invoice_numbers") or "—",
-            due_date=_calc_preview_deadline(),
-            company_name=settings.COMPANY_NAME,
-        )
-        # Renderuj też Subject
+
+        class _SilentUndefined(Undefined):
+            """Pusta wartość dla niezdefiniowanych zmiennych — nie rzuca wyjątku."""
+            def __str__(self) -> str:
+                return ""
+            def __iter__(self):
+                return iter([])
+            def __bool__(self) -> bool:
+                return False
+
+        _env = Environment(loader=BaseLoader(), undefined=_SilentUndefined)
+
+        # Renderuj body
+        body_text = _env.from_string(body_text).render(**_jinja_context)
+
+        # Renderuj subject (BUG FIX #2: poprzednio _subj był obliczany ale nigdy
+        # trafiał do PDF — zamiast niego szło surowe tmpl_row['Subject'])
         if tmpl_row.get("Subject"):
-            _subj = _env.from_string(tmpl_row["Subject"]).render(
-                company_name=settings.COMPANY_NAME,
-                debtor_name=debtor.get("NazwaKontrahenta") or "",
-            )
+            rendered_subject = _env.from_string(tmpl_row["Subject"]).render(**_jinja_context)
+
+        logger.info(
+            "Jinja2 render OK",
+            extra={
+                "debtor_id":         debtor_id,
+                "template_id":       template_id,
+                "body_len_before":   len(tmpl_row.get("Body") or ""),
+                "body_len_after":    len(body_text),
+                "subject_rendered":  rendered_subject[:120] if rendered_subject else None,
+                "context_keys":      list(_jinja_context.keys()),
+            },
+        )
+
     except Exception as _jinja_exc:
-        import traceback
-        logger.error("Błąd Jinja2 w podglądzie PDF", extra={"error": str(_jinja_exc), "traceback": traceback.format_exc()})
+        import traceback as _tb_j
+        logger.error(
+            "Błąd Jinja2 w podglądzie PDF — używam surowej treści bez podstawień",
+            extra={
+                "debtor_id":    debtor_id,
+                "template_id":  template_id,
+                "error":        str(_jinja_exc),
+                "error_type":   type(_jinja_exc).__name__,
+                "traceback":    _tb_j.format_exc(),
+                "context_keys": list(_jinja_context.keys()),
+            },
+        )
+        # NIE przerywamy — surowa treść trafi do PDF bez podstawień
+
+    # Wstaw Temat PO renderowaniu Jinja2 — rendered_subject ma już podstawione zmienne
+    if rendered_subject:
+        story.append(Paragraph(f"Temat: {rendered_subject}", style_normal))
+        story.append(Spacer(1, 0.2 * cm))
+
     # Usuń pełny HTML — ReportLab obsługuje tylko prosty tekst + <b><i><br/>
     body_text = _strip_html_for_reportlab(body_text)
     story.append(Paragraph(body_text, style_normal))

@@ -83,6 +83,36 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+# -----------------------------------------------------------------------
+    # Sekcja: DANE FIRMY (PDF / szablony Jinja2)
+    # Wczytywane z .env — używane w monit_service i worker/pdf_service.
+    # -----------------------------------------------------------------------
+
+    COMPANY_NAME: str = Field(
+        default="Twoja Firma Sp. z o.o.",
+        description="Nazwa firmy — używana w szablonach Jinja2 i PDF.",
+    )
+    COMPANY_NIP: str = Field(
+        default="",
+        description="NIP firmy (do stopki PDF).",
+    )
+    COMPANY_REGON: str = Field(
+        default="",
+        description="REGON firmy (do stopki PDF).",
+    )
+    COMPANY_ADDRESS: str = Field(
+        default="",
+        description="Adres firmy (do stopki PDF).",
+    )
+    COMPANY_PHONE: str = Field(
+        default="",
+        description="Telefon firmy (do stopki PDF).",
+    )
+    COMPANY_EMAIL: str = Field(
+        default="",
+        description="Email firmy (do stopki PDF).",
+    )
+
     # -----------------------------------------------------------------------
     # Sekcja: BAZA DANYCH (MSSQL)
     # -----------------------------------------------------------------------
