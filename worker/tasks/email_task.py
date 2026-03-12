@@ -347,6 +347,36 @@ def _default_email_body(monit: MonitHistory, settings) -> str:
     </body></html>
     """
 
+def _render_template(template_str: str, monit: MonitHistory, settings) -> str:
+    """Renderuje szablon Jinja2 zastępując zmienne danymi monitu."""
+    from jinja2 import Environment, BaseLoader, Undefined
+
+    class SilentUndefined(Undefined):
+        """Zwraca pusty string dla niezdefiniowanych zmiennych zamiast błędu."""
+        def __str__(self) -> str:
+            return ""
+        def __iter__(self):
+            return iter([])
+        def __bool__(self) -> bool:
+            return False
+
+    try:
+        env = Environment(loader=BaseLoader(), undefined=SilentUndefined)
+        tmpl = env.from_string(template_str)
+        rendered = tmpl.render(
+            debtor_name=monit.recipient or "",
+            total_debt=f"{float(monit.total_debt or 0):.2f}",
+            invoice_list=monit.invoice_numbers or "—",
+            due_date=_calc_payment_deadline(),
+            company_name=settings.COMPANY_NAME,
+        )
+        return rendered
+    except Exception as exc:
+        logger.warning(
+            "Błąd renderowania szablonu Jinja2 — używam surowej treści",
+            extra={"error": str(exc), "monit_id": monit.id_monit},
+        )
+        return template_str
 
 def _html_to_plain(html: str) -> str:
     """Prosta konwersja HTML → plain text (usunięcie tagów)."""

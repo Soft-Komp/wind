@@ -1,0 +1,20 @@
+================================================================
+ SEED LOG: 01_roles.sql
+================================================================
+ Czas:      2026-03-12T13:17:06+0000
+ Plik:      /app/database/seeds/01_roles.sql
+ Serwer:    tcp:192.168.0.50,59421 / GPGKJASLO
+ User:      sa
+================================================================
+
+
+--- STDOUT ---
+ID_ROLE     RoleName                                           Description                                                                                                                                                                                              IsActive CreatedAt                     
+----------- -------------------------------------------------- -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- -------- ------------------------------
+          1 Admin                                              Pełne uprawnienia administracyjne do całego systemu                                                                                                                                                             1 2026-03-12 14:17:06           
+          2 Manager                                            Zarządzanie windykacją — widzi wszystko, wysyła monity, nie modyfikuje konfiguracji systemu                                                                                                                     1 2026-03-12 14:17:06           
+          3 User                                               Podstawowy pracownik biurowy — widok dłużników, wysyłka pojedynczych monitów                                                                                                                                    1 2026-03-12 14:17:06           
+          4 ReadOnly                                           Tylko podgląd — brak możliwości wysyłki lub modyfikacji danych                                                                                                                                                  1 2026-03-12 14:17:06           
+
+--- WYNIK: OK ---
+Czas zakonczenia: 2026-03-12T13:17:06+0000
