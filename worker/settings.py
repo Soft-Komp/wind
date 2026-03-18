@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     SMSAPI_SENDER: str = Field(default="Windykacja", max_length=11)
     SMSAPI_URL: str = Field(default="https://api.smsapi.pl/sms.do")
     SMSAPI_TEST_MODE: bool = Field(default=False, description="True = nie wysyła SMS")
+
+    # ── Tryb demonstracyjny ───────────────────────────────────────────────────
+    DEMO_MODE: bool = Field(
+        default=True,
+        description=(
+            "Tryb demonstracyjny — blokuje wysyłkę email/SMS/PDF na poziomie workera. "
+            "Druga warstwa ochrony po monit_service. "
+            "Domyślnie True — bezpieczna wartość."
+        ),
+    )
     SMSAPI_FALLBACK_PHONE: str = Field(
         default="",
         description=(

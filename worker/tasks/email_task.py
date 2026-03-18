@@ -63,6 +63,27 @@ async def send_bulk_emails(
     effective_job_id = job_id or str(ctx.get("job_id", uuid.uuid4()))
     retry_count = ctx.get("job_try", 1) - 1
 
+    # ── BLOKADA L2: Tryb demonstracyjny ──────────────────────────────────────
+    if settings.DEMO_MODE:
+        logger.warning(
+            "send_bulk_emails: ZABLOKOWANO przez DEMO_MODE=true",
+            extra={
+                "job_id":       effective_job_id,
+                "monit_ids":    monit_ids,
+                "triggered_by": triggered_by_user_id,
+                "demo_mode":    True,
+            },
+        )
+        return {
+            "status":     "blocked_demo_mode",
+            "job_id":     effective_job_id,
+            "message":    "Wysyłka zablokowana — DEMO_MODE=true",
+            "success":    0,
+            "failed":     0,
+            "monit_ids":  monit_ids,
+        }
+    # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
+
     logger.info(
         "Rozpoczynam send_bulk_emails",
         extra={
@@ -152,10 +173,14 @@ async def send_bulk_emails(
             monit=monit, settings=settings
         )
 
+        # Renderuj subject przez Jinja2 — monit.subject może zawierać {{ company_name }} itp.
+        raw_subject = monit.subject or "Wezwanie do zapłaty"
+        rendered_email_subject = _render_template(raw_subject, monit, settings)
+
         email_msg = EmailMessage(
             to_email=monit.recipient,
             to_name="",
-            subject=monit.subject or "Wezwanie do zapłaty",
+            subject=rendered_email_subject,
             html_body=html_body,
             text_body=_html_to_plain(html_body),
             attachments=[pdf_attachment] if pdf_attachment else [],

@@ -47,6 +47,26 @@ async def generate_pdf_task(
     task_start = time.monotonic()
     effective_job_id = job_id or str(ctx.get("job_id", uuid.uuid4()))
 
+    # ── BLOKADA L2: Tryb demonstracyjny ──────────────────────────────────────
+    if settings.DEMO_MODE:
+        logger.warning(
+            "generate_pdf_task: ZABLOKOWANO przez DEMO_MODE=true",
+            extra={
+                "job_id":       effective_job_id,
+                "monit_id":     monit_id,
+                "triggered_by": triggered_by_user_id,
+                "demo_mode":    True,
+            },
+        )
+        return {
+            "status":    "blocked_demo_mode",
+            "job_id":    effective_job_id,
+            "message":   "Wysyłka zablokowana — DEMO_MODE=true",
+            "success":   False,
+            "monit_id":  monit_id,
+        }
+    # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
+
     logger.info(
         "Generuję PDF monitu",
         extra={

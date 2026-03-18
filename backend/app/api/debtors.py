@@ -668,12 +668,25 @@ def _raise_from_debtor_error(exc: Exception) -> None:
 def _raise_from_monit_error(exc: Exception) -> None:
     exc_type = type(exc).__name__
     _MAP: dict[str, tuple[int, str, str]] = {
-        "DebtorNotFoundError":   (404, "debtors.not_found",       "Dłużnik nie istnieje w WAPRO"),
-        "TemplateNotFoundError": (404, "monits.template_not_found","Szablon monitu nie istnieje"),
-        "MonitCooldownError":    (429, "monits.cooldown",          "Dłużnik był monitorowany zbyt niedawno"),
-        "MissingContactError":   (422, "monits.missing_contact",   "Brak danych kontaktowych dla wybranego kanału"),
-        "WaproConnectionError":  (503, "wapro.unavailable",        "Baza WAPRO niedostępna"),
-        "MonitServiceError":     (400, "monits.service_error",     "Błąd operacji wysyłki"),
+        # ── monit_service — rzeczywiste klasy ────────────────────────────
+        "MonitError":                (403, "monits.blocked",            "Operacja wysyłki zablokowana"),
+        "MonitValidationError":      (422, "monits.validation_error",   "Błąd walidacji danych monitu"),
+        "MonitNotFoundError":        (404, "monits.not_found",          "Monit nie istnieje"),
+        "MonitTemplateNotFoundError":(404, "monits.template_not_found", "Szablon monitu nie istnieje"),
+        "MonitStatusTransitionError":(409, "monits.invalid_status",     "Niedozwolona zmiana statusu monitu"),
+        "MonitRetryError":           (422, "monits.retry_error",        "Nie można ponowić wysyłki monitu"),
+        # ── debtor_service — rzeczywiste klasy ───────────────────────────
+        "DebtorError":               (400, "debtors.error",             "Błąd operacji na dłużniku"),
+        "DebtorValidationError":     (422, "debtors.validation_error",  "Nieprawidłowe dane dłużnika"),
+        "DebtorNotFoundError":       (404, "debtors.not_found",         "Dłużnik nie istnieje w WAPRO"),
+        "DebtorWaproError":          (503, "wapro.unavailable",         "Baza WAPRO niedostępna"),
+        "DebtorBatchValidationError":(422, "debtors.batch_invalid",     "Część podanych ID dłużników jest nieprawidłowa"),
+        # ── stare wpisy zachowane dla kompatybilności ────────────────────
+        "TemplateNotFoundError":     (404, "monits.template_not_found", "Szablon monitu nie istnieje"),
+        "MonitCooldownError":        (429, "monits.cooldown",           "Dłużnik był monitorowany zbyt niedawno"),
+        "MissingContactError":       (422, "monits.missing_contact",    "Brak danych kontaktowych dla wybranego kanału"),
+        "WaproConnectionError":      (503, "wapro.unavailable",         "Baza WAPRO niedostępna"),
+        "MonitServiceError":         (400, "monits.service_error",      "Błąd operacji wysyłki"),
     }
     if exc_type in _MAP:
         http_status, code, msg = _MAP[exc_type]
