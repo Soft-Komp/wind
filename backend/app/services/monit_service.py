@@ -80,6 +80,7 @@ from app.services.debtor_service import (
     DebtorWaproError,
 )
 from app.db.wapro import get_kontrahent_names_batch
+from app.core.config import get_settings as _get_app_settings
 
 # ---------------------------------------------------------------------------
 # Logger własny modułu
@@ -394,7 +395,7 @@ async def _enqueue_to_arq(
 async def send_bulk(
     db: AsyncSession,
     redis: Redis,
-    wapro,                      # WaproConnectionPool — bez importu circular
+    wapro,
     request: MonitBulkRequest,
     triggered_by_user_id: int,
     ip_address: Optional[str] = None,
@@ -429,6 +430,28 @@ async def send_bulk(
         MonitTemplateNotFoundError: Gdy template_id nie istnieje.
         MonitValidationError:       Gdy żaden z debtor_ids nie jest prawidłowy.
     """
+
+    # ── BLOKADA L1: Tryb demonstracyjny ──────────────────────────────────────
+    # Sprawdzenie na najwcześniejszym możliwym etapie — przed jakimkolwiek
+    # zapisem do DB czy kolejkowaniem do ARQ.
+    _app_settings = _get_app_settings()
+    if _app_settings.DEMO_MODE:
+        logger.warning(
+            "Wysyłka zablokowana — DEMO_MODE=true",
+            extra={
+                "triggered_by_user_id": triggered_by_user_id,
+                "monit_type":           request.monit_type,
+                "debtor_count":         len(request.debtor_ids),
+                "ip_address":           ip_address,
+                "demo_mode":            True,
+            },
+        )
+        raise MonitError(
+            "DEMO_MODE: Wysyłka monitów jest zablokowana w trybie demonstracyjnym. "
+            "Skontaktuj się z administratorem systemu."
+        )
+    # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
+    
     op_start = datetime.now(timezone.utc)
 
     logger.info(

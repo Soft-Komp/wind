@@ -38,6 +38,27 @@ async def send_bulk_sms(
     effective_job_id = job_id or str(ctx.get("job_id", uuid.uuid4()))
     retry_count = ctx.get("job_try", 1) - 1
 
+    # ── BLOKADA L2: Tryb demonstracyjny ──────────────────────────────────────
+    if settings.DEMO_MODE:
+        logger.warning(
+            "send_bulk_sms: ZABLOKOWANO przez DEMO_MODE=true",
+            extra={
+                "job_id":       effective_job_id,
+                "monit_ids":    monit_ids,
+                "triggered_by": triggered_by_user_id,
+                "demo_mode":    True,
+            },
+        )
+        return {
+            "status":    "blocked_demo_mode",
+            "job_id":    effective_job_id,
+            "message":   "Wysyłka zablokowana — DEMO_MODE=true",
+            "success":   0,
+            "failed":    0,
+            "monit_ids": monit_ids,
+        }
+    # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
+
     logger.info(
         "Rozpoczynam send_bulk_sms",
         extra={

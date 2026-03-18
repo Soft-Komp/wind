@@ -422,6 +422,15 @@ class Settings(BaseSettings):
             "w trybie debug stack trace trafia do response."
         ),
     )
+    demo_mode: bool = Field(
+        default=True,
+        description=(
+            "Tryb demonstracyjny — blokuje wysyłkę email/SMS/PDF. "
+            "True = klient ogląda system, wysyłka zablokowana. "
+            "False = tryb produkcyjny, wysyłka aktywna. "
+            "Domyślnie True — bezpieczna wartość dla nowych wdrożeń."
+        ),
+    )
     app_name: str = Field(
         default="System Windykacja",
         description="Nazwa aplikacji — widoczna w Swagger UI.",

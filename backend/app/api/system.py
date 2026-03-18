@@ -561,6 +561,42 @@ async def get_audit_log(
         app_code="system.audit_log",
     )
 
+@router.get(
+    "/demo-mode",
+    summary="Status trybu demonstracyjnego",
+    description="Zwraca czy system działa w trybie demo (wysyłka zablokowana).",
+    tags=["System"],
+)
+async def get_demo_mode_status(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> JSONResponse:
+    """
+    Informuje frontend czy DEMO_MODE jest aktywny.
+    Frontend powinien wyświetlić banner/komunikat gdy demo_mode=true.
+    """
+    from app.core.config import get_settings as _gs
+    settings = _gs()
+    request_id = getattr(request.state, "request_id", None)
+
+    return JSONResponse(
+        content={
+            "success": True,
+            "code": "ok",
+            "data": {
+                "demo_mode": settings.DEMO_MODE,
+                "message": (
+                    "Tryb demonstracyjny aktywny — wysyłka email/SMS/PDF jest zablokowana."
+                    if settings.DEMO_MODE
+                    else "System w trybie produkcyjnym — wysyłka aktywna."
+                ),
+            },
+            "meta": {
+                "request_id": request_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POMOCNICZE

@@ -97,9 +97,9 @@ _COLS_ROZRACHUNKI = """
     KwotaBrutto,
     KwotaZaplacona,
     KwotaPozostala,
-    MetodaPlatnosci,
-    DniPo,
-    rozliczony
+    FormaPlatnosci,
+    DniPrzeterminowania,
+    CzyZaplacona
 """
 
 
@@ -1046,7 +1046,7 @@ def _build_invoices_query(
     query_params: list[Any] = [params.kontrahent_id]
 
     if not params.include_paid:
-            conditions.append("rozliczony = 0")
+        conditions.append("CzyZaplacona = 0")
 
     where_clause = "WHERE " + " AND ".join(conditions)
     order_clause = f"ORDER BY {params.order_by} {params.order_dir}"
@@ -1099,8 +1099,8 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
             SELECT COUNT(*) AS TotalCount
             FROM {VIEW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
-            {' AND rozliczony = 0' if not params.include_paid else ''}
-        """
+            {' AND CzyZaplacona = 0' if not params.include_paid else ''}
+            """
 
         rows_task = _run_in_executor(
             _execute_query_sync,
