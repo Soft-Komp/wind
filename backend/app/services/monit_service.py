@@ -435,9 +435,9 @@ async def send_bulk(
     # Sprawdzenie na najwcześniejszym możliwym etapie — przed jakimkolwiek
     # zapisem do DB czy kolejkowaniem do ARQ.
     _app_settings = _get_app_settings()
-    if _app_settings.DEMO_MODE:
+    if _app_settings.demo_mode:
         logger.warning(
-            "Wysyłka zablokowana — DEMO_MODE=true",
+            "Wysyłka zablokowana — demo_mode=true",
             extra={
                 "triggered_by_user_id": triggered_by_user_id,
                 "monit_type":           request.monit_type,

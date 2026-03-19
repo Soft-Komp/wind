@@ -78,9 +78,51 @@ class Settings(BaseSettings):
     DEMO_MODE: bool = Field(
         default=True,
         description=(
-            "Tryb demonstracyjny — blokuje wysyłkę email/SMS/PDF na poziomie workera. "
-            "Druga warstwa ochrony po monit_service. "
-            "Domyślnie True — bezpieczna wartość."
+            "Tryb demonstracyjny — blokuje wysyłkę email/SMS/PDF. "
+            "True = klient ogląda system, wysyłka zablokowana. "
+            "False = tryb produkcyjny, wysyłka aktywna. "
+            "Domyślnie True — bezpieczna wartość dla nowych wdrożeń."
+        ),
+    )
+
+    # ── Tryb testowy wysyłki (fallback — baza ma pierwszeństwo) ──────────────
+    # Wartości z skw_SystemConfig nadpisują te zmienne przy każdym tasku.
+    # Te wartości używane tylko gdy DB niedostępna lub klucz nie istnieje w DB.
+    TEST_MODE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Fallback: czy przekierowywać wysyłkę na adresy testowe. "
+            "Nadpisywane przez skw_SystemConfig['test_mode.enabled']."
+        ),
+    )
+    TEST_MODE_EMAIL: str = Field(
+        default="",
+        description=(
+            "Fallback: testowy adres email. "
+            "Nadpisywany przez skw_SystemConfig['test_mode.email']."
+        ),
+    )
+    TEST_MODE_PHONE: str = Field(
+        default="",
+        description=(
+            "Fallback: testowy numer telefonu. "
+            "Nadpisywany przez skw_SystemConfig['test_mode.phone']."
+        ),
+    )
+
+    # ── UDW / BCC (fallback — baza ma pierwszeństwo) ──────────────────────────
+    BCC_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Fallback: czy dodawać UDW do emaili. "
+            "Nadpisywany przez skw_SystemConfig['bcc.enabled']."
+        ),
+    )
+    BCC_EMAILS: str = Field(
+        default="",
+        description=(
+            "Fallback: lista adresów UDW oddzielona przecinkami. "
+            "Nadpisywana przez skw_SystemConfig['bcc.emails']."
         ),
     )
     SMSAPI_FALLBACK_PHONE: str = Field(
