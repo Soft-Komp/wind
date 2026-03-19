@@ -159,3 +159,40 @@ BEGIN CATCH
     RAISERROR(@msg, @sev, 1);
 END CATCH
 GO
+
+INSERT INTO [dbo_ext].[skw_SystemConfig] 
+    ([ConfigKey], [ConfigValue], [Description], [IsActive])
+VALUES
+    (
+        'test_mode.enabled',
+        'false',
+        'Tryb testowy wysyłki — true = wszystkie email/SMS lecą na adresy testowe zamiast do dłużników.',
+        1
+    ),
+    (
+        'test_mode.email',
+        '',
+        'Testowy adres email — gdy test_mode.enabled=true, wszystkie maile lecą tutaj. Fallback z .env: TEST_MODE_EMAIL.',
+        1
+    ),
+    (
+        'test_mode.phone',
+        '',
+        'Testowy numer telefonu — gdy test_mode.enabled=true, wszystkie SMS lecą tutaj. Fallback z .env: TEST_MODE_PHONE.',
+        1
+    );
+INSERT INTO [dbo_ext].[skw_SystemConfig]
+    ([ConfigKey], [ConfigValue], [Description], [IsActive])
+VALUES
+    (
+        'bcc.enabled',
+        'false',
+        'UDW — przełącznik (true/false). Gdy false — BCC nie jest dodawany niezależnie od bcc.emails.',
+        1
+    ),
+    (
+        'bcc.emails',
+        '',
+        'UDW — lista adresów email oddzielona przecinkami. Przykład: szef@firma.pl,archiwum@firma.pl. Fallback z .env: BCC_EMAILS.',
+        1
+    );

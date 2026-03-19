@@ -57,6 +57,9 @@ class EmailMessage:
     # attachments format: [{"filename": "...", "data": bytes, "mime_type": "application/pdf"}]
     monit_id: Optional[int] = None
     user_id: Optional[int] = None
+    # UDW — adresy BCC. NIE trafiają do nagłówków wiadomości (odbiorca nie widzi).
+    # Trafiają do SMTP envelope jako dodatkowi odbiorcy RCPT TO.
+    bcc: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,7 +118,6 @@ async def _try_send(
     else:
         final_msg = msg
 
-    # Logowanie próby
     log_entry_base = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "attempt": attempt_num,
@@ -127,6 +129,7 @@ async def _try_send(
         "monit_id": message.monit_id,
         "user_id": message.user_id,
         "has_attachments": bool(message.attachments),
+        "bcc_count": len(message.bcc),
     }
 
     try:
@@ -141,7 +144,27 @@ async def _try_send(
 
         async with smtp:
             await smtp.login(config.user, config.password)
-            response = await smtp.send_message(final_msg)
+
+            # ── BCC: dodaj do SMTP envelope ale NIE do nagłówków ─────────────
+            # Odbiorca widzi tylko To: — adresy BCC są niewidoczne w nagłówkach.
+            # aiosmtplib.send_message(recipients=...) nadpisuje envelope recipients.
+            if message.bcc:
+                # Envelope recipients = oryginalny odbiorca + adresy BCC
+                envelope_recipients = [message.to_email] + message.bcc
+                response = await smtp.send_message(
+                    final_msg,
+                    recipients=envelope_recipients,
+                )
+                logger.debug(
+                    "Email wysłany z BCC",
+                    extra={
+                        "to":        message.to_email,
+                        "bcc_count": len(message.bcc),
+                        "monit_id":  message.monit_id,
+                    },
+                )
+            else:
+                response = await smtp.send_message(final_msg)
 
         duration_ms = (time.monotonic() - start) * 1000
         message_id = str(response) if response else None

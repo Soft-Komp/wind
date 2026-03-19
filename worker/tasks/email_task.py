@@ -24,6 +24,8 @@ from worker.core.db import AuditLog, MonitHistory, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
 from worker.services.smtp_service import EmailMessage, send_email
+from worker.services.test_recipient_service import get_test_recipient_config
+from worker.services.bcc_service import get_bcc_config
 from worker.services.pdf_service import generate_pdf, save_pdf_to_disk
 from worker.settings import get_settings
 from worker.core.logging_setup import get_event_logger
@@ -83,6 +85,47 @@ async def send_bulk_emails(
             "monit_ids":  monit_ids,
         }
     # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
+
+    # ── Tryb testowy wysyłki — odczyt z DB (Redis cache) lub .env ────────────
+    redis_client = ctx.get("worker_redis")
+    test_cfg = await get_test_recipient_config(redis_client)
+    bcc_cfg = await get_bcc_config(redis_client)
+
+    if bcc_cfg.is_active:
+        logger.info(
+            "BCC aktywne — kopie emaili będą wysyłane na dodatkowe adresy",
+            extra={
+                "job_id":      effective_job_id,
+                "bcc_count":   len(bcc_cfg.emails),
+                "source":      bcc_cfg.source,
+            },
+        )
+
+    if test_cfg.enabled:
+        if not test_cfg.test_email:
+            logger.error(
+                "send_bulk_emails: test_mode.enabled=true ale test_email jest pusty — BLOKUJĘ",
+                extra={"job_id": effective_job_id, "source": test_cfg.source},
+            )
+            return {
+                "status":    "blocked_test_mode_no_email",
+                "job_id":    effective_job_id,
+                "message":   "test_mode.enabled=true ale test_mode.email jest pusty",
+                "success":   0,
+                "failed":    0,
+                "monit_ids": monit_ids,
+            }
+        logger.warning(
+            "send_bulk_emails: TRYB TESTOWY — wszystkie maile → test_email",
+            extra={
+                "job_id":      effective_job_id,
+                "test_email":  test_cfg.test_email,
+                "source":      test_cfg.source,
+                "monit_count": len(monit_ids),
+            },
+        )
+    # ── koniec konfiguracji trybu testowego ───────────────────────────────────
+
 
     logger.info(
         "Rozpoczynam send_bulk_emails",
@@ -177,8 +220,21 @@ async def send_bulk_emails(
         raw_subject = monit.subject or "Wezwanie do zapłaty"
         rendered_email_subject = _render_template(raw_subject, monit, settings)
 
+        # ── Override adresu gdy tryb testowy aktywny ──────────────────────
+        effective_email = test_cfg.test_email if test_cfg.enabled else monit.recipient
+        if test_cfg.enabled:
+            logger.info(
+                "Test mode: przekierowuję email",
+                extra={
+                    "monit_id":       monit.id_monit,
+                    "original_email": monit.recipient,
+                    "test_email":     test_cfg.test_email,
+                },
+            )
+        # ─────────────────────────────────────────────────────────────────
+
         email_msg = EmailMessage(
-            to_email=monit.recipient,
+            to_email=effective_email,
             to_name="",
             subject=rendered_email_subject,
             html_body=html_body,
@@ -186,6 +242,7 @@ async def send_bulk_emails(
             attachments=[pdf_attachment] if pdf_attachment else [],
             monit_id=monit.id_monit,
             user_id=triggered_by_user_id,
+            bcc=list(bcc_cfg.emails) if bcc_cfg.is_active else [],
         )
 
         result = await send_email(email_msg)

@@ -18,6 +18,7 @@ from worker.core.db import AuditLog, MonitHistory, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
 from worker.services.sms_service import SmsMessage, send_sms
+from worker.services.test_recipient_service import get_test_recipient_config
 from worker.settings import get_settings
 from worker.core.logging_setup import get_event_logger
 
@@ -59,6 +60,34 @@ async def send_bulk_sms(
         }
     # ── koniec blokady DEMO_MODE ──────────────────────────────────────────────
 
+    # ── Tryb testowy wysyłki ──────────────────────────────────────────────────
+    redis_client = ctx.get("worker_redis")
+    test_cfg = await get_test_recipient_config(redis_client)
+    if test_cfg.enabled:
+        if not test_cfg.test_phone:
+            logger.error(
+                "send_bulk_sms: test_mode.enabled=true ale test_phone jest pusty — BLOKUJĘ",
+                extra={"job_id": effective_job_id, "source": test_cfg.source},
+            )
+            return {
+                "status":    "blocked_test_mode_no_phone",
+                "job_id":    effective_job_id,
+                "message":   "test_mode.enabled=true ale test_mode.phone jest pusty",
+                "success":   0,
+                "failed":    0,
+                "monit_ids": monit_ids,
+            }
+        logger.warning(
+            "send_bulk_sms: TRYB TESTOWY — wszystkie SMS → test_phone",
+            extra={
+                "job_id":      effective_job_id,
+                "test_phone":  test_cfg.test_phone,
+                "source":      test_cfg.source,
+                "monit_count": len(monit_ids),
+            },
+        )
+    # ── koniec konfiguracji trybu testowego ───────────────────────────────────
+
     logger.info(
         "Rozpoczynam send_bulk_sms",
         extra={
@@ -93,7 +122,16 @@ async def send_bulk_sms(
             continue
 
         # Fallback phone — gdy kontrahent nie ma numeru w WAPRO
-        effective_phone = monit.recipient
+        effective_phone = test_cfg.test_phone if test_cfg.enabled else monit.recipient
+        if test_cfg.enabled:
+            logger.info(
+                "Test mode: przekierowuję SMS",
+                extra={
+                    "monit_id":       monit.id_monit,
+                    "original_phone": monit.recipient,
+                    "test_phone":     test_cfg.test_phone,
+                },
+            )
         if not effective_phone:
             if settings.SMSAPI_FALLBACK_PHONE:
                 effective_phone = settings.SMSAPI_FALLBACK_PHONE
