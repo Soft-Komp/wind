@@ -72,10 +72,13 @@ WHERE (
     SCHEMA_NAME(o.schema_id) = 'dbo_ext'
 )
 OR (
-    /* dbo: tylko nasze widoki VIEW_* — wyklucza setki procedur WAPRO */
+    /* dbo: nasze widoki VIEW_* i skw_* — wyklucza setki procedur WAPRO */
     SCHEMA_NAME(o.schema_id) = 'dbo'
     AND o.type_desc = 'VIEW'
-    AND o.name LIKE 'VIEW[_]%'
+    AND (
+        o.name LIKE 'VIEW[_]%'
+        OR o.name LIKE 'skw[_]%'
+    )
 )
 ORDER BY schema_name, object_name
 """
