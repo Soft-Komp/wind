@@ -566,10 +566,11 @@ async def get_audit_log(
     summary="Status trybu demonstracyjnego",
     description="Zwraca czy system działa w trybie demo (wysyłka zablokowana).",
     tags=["System"],
+    response_model=None,
 )
 async def get_demo_mode_status(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: CurrentUser,
 ) -> JSONResponse:
     """
     Informuje frontend czy DEMO_MODE jest aktywny.

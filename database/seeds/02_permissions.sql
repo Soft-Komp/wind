@@ -211,7 +211,7 @@ BEGIN TRY
              N'comments'),
 
             -- =================================================================
-            -- MONITS (12) — wysyłka monitów
+            -- MONITS (16) — wysyłka monitów
             -- =================================================================
             (N'monits.send_email_single',
              N'Wysłanie emaila do jednego dłużnika',
@@ -249,6 +249,18 @@ BEGIN TRY
             (N'monits.retry',
              N'Ponowna próba wysyłki po błędzie (status: failed)',
              N'monits'),
+            (N'monits.list',
+            N'Przeglądanie listy wszystkich monitów (historia z filtrami)',
+            N'monits'),
+            (N'monits.view',
+            N'Podgląd szczegółów pojedynczego monitu',
+            N'monits'),
+            (N'monits.stats',
+            N'Zagregowane statystyki wysyłek per kanał/status',
+            N'monits'),
+            (N'monits.view_queue',
+            N'Podgląd statusu kolejki ARQ',
+            N'monits'),
 
             -- =================================================================
             -- PDF (4) — generowanie i szablony PDF
