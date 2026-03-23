@@ -88,6 +88,8 @@ async def list_debtors(
     overdue_only: bool = Query(False, description="Tylko przeterminowani dłużnicy"),
     sort_by: str = Query("total_debt", description="Pole sortowania: total_debt | name | overdue_days"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="Kierunek: asc | desc"),
+    min_days_overdue: Optional[int] = Query(None, ge=0, le=3650, description="Minimalna liczba dni po terminie (DniPrzeterminowania >= N)"),
+    max_last_monit_days_ago: Optional[int] = Query(None, ge=1, le=3650, description="Ostatni monit do rozrachunku starszy niż N dni (OstatniMonitRozrachunku)"),
 ):
     from app.services import debtor_service
     from app.services.debtor_service import DebtorListParams
@@ -103,6 +105,8 @@ async def list_debtors(
             overdue_min_days=None,
             overdue_max_days=None,
             has_active_monit=None,
+            min_days_overdue=min_days_overdue,
+            max_last_monit_days_ago=max_last_monit_days_ago,
             page=pagination.page,
             page_size=pagination.per_page,
             sort_by=sort_by,
@@ -266,40 +270,60 @@ async def send_bulk_monits(
         )
 
     try:
+        bulk_request = monit_service.MonitBulkRequest(
+            debtor_ids=debtor_ids,
+            monit_type=channel,
+            template_id=template_id,
+            invoice_ids_per_debtor=body.get("invoice_ids_per_debtor") or None,
+        )
         result = await monit_service.send_bulk(
             db=db,
             wapro=wapro,
             redis=redis,
-            debtor_ids=debtor_ids,
-            channel=channel,
-            template_id=template_id,
-            sent_by_id=current_user.id_user,
-            ip=client_ip,
+            request=bulk_request,
+            triggered_by_user_id=current_user.id_user,
+            ip_address=client_ip,
+        )
+    except monit_service.MonitIntervalBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code":                "monit.interval_blocked",
+                "message":             "Wysylka zablokowana — naruszenie interwalu monitow",
+                "blocked_invoice_ids": exc.blocked_invoice_ids,
+                "blocked_debtor_ids":  exc.blocked_debtor_ids,
+                "interval_days":       exc.interval_days,
+                "details":             exc.details,
+            },
         )
     except Exception as exc:
         _raise_from_monit_error(exc)
 
     logger.warning(
         orjson.dumps({
-            "event": "api_monit_bulk_queued",
+            "event":        "api_monit_bulk_queued",
             "debtor_count": len(debtor_ids),
-            "channel": channel,
-            "template_id": template_id,
-            "sent_by": current_user.id_user,
-            "job_count": result.get("job_count", 0),
-            "request_id": request_id,
-            "ip": client_ip,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "channel":      channel,
+            "template_id":  template_id,
+            "sent_by":      current_user.id_user,
+            "queued_count": result.queued_count,
+            "task_id":      result.task_id,
+            "request_id":   request_id,
+            "ip":           client_ip,
+            "ts":           datetime.now(timezone.utc).isoformat(),
         }).decode()
     )
 
     return BaseResponse.ok(
         data={
-            "message": "Zlecenia wysyłki dodane do kolejki ARQ.",
-            "job_count": result.get("job_count", 0),
-            "job_ids": result.get("job_ids", []),
-            "debtor_count": len(debtor_ids),
-            "channel": channel,
+            "message":            "Zlecenia wysylki dodane do kolejki ARQ.",
+            "queued_count":       result.queued_count,
+            "monit_ids":          result.monit_ids,
+            "task_id":            result.task_id,
+            "valid_debtor_count": result.valid_debtor_count,
+            "invalid_debtor_ids": result.invalid_debtor_ids,
+            "debtor_count":       len(debtor_ids),
+            "channel":            channel,
         },
         app_code="debtors.send_bulk_queued",
     )
@@ -370,6 +394,7 @@ async def get_debtor_invoices(
     redis: RedisClient,
     db: DB,
     request_id: RequestID,
+    min_days_overdue: int = Query(0, ge=0, le=3650, description="Tylko faktury >= N dni po terminie. 0 = wszystkie."),
 ):
     from app.services import debtor_service
 
@@ -379,6 +404,7 @@ async def get_debtor_invoices(
             redis=redis,
             db=db,
             debtor_id=debtor_id,
+            min_days_overdue=min_days_overdue,
         )
     except Exception as exc:
         _raise_from_debtor_error(exc)
@@ -563,6 +589,17 @@ async def send_monit(
     template_id = body.get("template_id")
     channel = (body.get("channel") or "email").strip().lower()
     note = str(body.get("note") or "")[:500]
+    invoice_ids_raw = body.get("invoice_ids") or []
+    # Walidacja i sanityzacja invoice_ids
+    invoice_ids: list[int] = []
+    for _iv in invoice_ids_raw:
+        try:
+            _iv_int = int(_iv)
+            if _iv_int > 0:
+                invoice_ids.append(_iv_int)
+        except (TypeError, ValueError):
+            pass
+    invoice_ids = list(dict.fromkeys(invoice_ids))  # deduplikacja z zachowaniem kolejności
 
     _errors = []
     if not template_id:
@@ -576,7 +613,7 @@ async def send_monit(
         )
 
     try:
-        from app.services.monit_service import MonitBulkRequest
+        from app.services.monit_service import MonitBulkRequest, MonitIntervalBlockedError
         result_bulk = await monit_service.send_bulk(
             db=db,
             wapro=wapro,
@@ -585,6 +622,7 @@ async def send_monit(
                 debtor_ids=[debtor_id],
                 monit_type=channel,
                 template_id=template_id,
+                invoice_ids_per_debtor={debtor_id: invoice_ids} if invoice_ids else None,
             ),
             triggered_by_user_id=current_user.id_user,
             ip_address=client_ip,
@@ -593,6 +631,18 @@ async def send_monit(
             "job_id": result_bulk.task_id if result_bulk else None,
             "monit_id": result_bulk.monit_ids[0] if result_bulk and result_bulk.monit_ids else None,
         }
+    except monit_service.MonitIntervalBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code":                "monit.interval_blocked",
+                "message":             "Wysylka zablokowana — naruszenie interwalu monitow",
+                "blocked_invoice_ids": exc.blocked_invoice_ids,
+                "blocked_debtor_ids":  exc.blocked_debtor_ids,
+                "interval_days":       exc.interval_days,
+                "details":             exc.details,
+            },
+        )
     except Exception as exc:
         _raise_from_monit_error(exc)
 

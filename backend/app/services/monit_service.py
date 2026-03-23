@@ -81,6 +81,7 @@ from app.services.debtor_service import (
 )
 from app.db.wapro import get_kontrahent_names_batch
 from app.core.config import get_settings as _get_app_settings
+from sqlalchemy import text as sa_text
 
 # ---------------------------------------------------------------------------
 # Logger własny modułu
@@ -134,17 +135,20 @@ class MonitBulkRequest:
     Parametry masowej wysyłki monitów.
 
     Attributes:
-        debtor_ids:   Lista ID kontrahentów WAPRO.
-        monit_type:   Kanał wysyłki: "email", "sms", "print".
-        template_id:  ID szablonu (z tabeli Templates). None = brak szablonu (surowa treść).
-        scheduled_at: Zaplanowany czas wysyłki. None = natychmiast.
-        custom_subject: Override tematu emaila (opcjonalne).
+        debtor_ids:             Lista ID kontrahentów WAPRO.
+        monit_type:             Kanał wysyłki: "email", "sms", "print".
+        template_id:            ID szablonu (z tabeli Templates).
+        scheduled_at:           Zaplanowany czas wysyłki. None = natychmiast.
+        custom_subject:         Override tematu emaila (opcjonalne).
+        invoice_ids_per_debtor: Mapa {debtor_id: [invoice_id, ...]} — tylko przeterminowane.
+                                None = brak filtra per rozrachunek (tryb legacy).
     """
-    debtor_ids:     list[int]
-    monit_type:     str
-    template_id:    Optional[int] = None
-    scheduled_at:   Optional[datetime] = None
-    custom_subject:  Optional[str] = None
+    debtor_ids:              list[int]
+    monit_type:              str
+    template_id:             Optional[int] = None
+    scheduled_at:            Optional[datetime] = None
+    custom_subject:          Optional[str] = None
+    invoice_ids_per_debtor:  Optional[dict[int, list[int]]] = None  # NOWE
 
     def __post_init__(self) -> None:
         if not self.debtor_ids:
@@ -231,6 +235,59 @@ class MonitStatusTransitionError(MonitError):
 
 class MonitRetryError(MonitError):
     """Nie można ponowić wysyłki — limit prób lub zły status."""
+
+
+class MonitIntervalBlockedError(MonitError):
+    """
+    Wysyłka zablokowana — naruszenie interwału monitów.
+
+    Attributes:
+        blocked_invoice_ids:  ID rozrachunków naruszających interwał.
+        blocked_debtor_ids:   ID kontrahentów naruszających interwał.
+        interval_days:        Skonfigurowany interwał w dniach.
+        details:              Lista szczegółów per rozrachunek/kontrahent.
+    """
+    def __init__(
+        self,
+        blocked_invoice_ids: list[int],
+        blocked_debtor_ids: list[int],
+        interval_days: int,
+        details: list[dict],
+    ) -> None:
+        self.blocked_invoice_ids = blocked_invoice_ids
+        self.blocked_debtor_ids  = blocked_debtor_ids
+        self.interval_days       = interval_days
+        self.details             = details
+        super().__init__(
+            f"Wysylka zablokowana — naruszenie interwalu monitow. "
+            f"Zablokowane rozrachunki: {blocked_invoice_ids}, "
+            f"kontrahenci: {blocked_debtor_ids}"
+        )
+
+
+@dataclass
+class IntervalCheckResult:
+    """
+    Wynik sprawdzenia interwału monitów przed wysyłką.
+
+    Attributes:
+        allowed:             True = można wysłać (lub warn mode z częściowym wysłaniem).
+        block_mode:          'block' | 'warn' — z SystemConfig.
+        interval_days:       Skonfigurowany interwał.
+        blocked_invoice_ids: ID rozrachunków naruszających interwał.
+        blocked_debtor_ids:  ID kontrahentów naruszających interwał.
+        allowed_invoice_ids: ID rozrachunków które można wysłać (warn mode).
+        skipped:             Lista pominiętych z powodem [{invoice_id, reason, ...}].
+        details:             Szczegóły per blokada.
+    """
+    allowed:             bool
+    block_mode:          str
+    interval_days:       int
+    blocked_invoice_ids: list[int] = field(default_factory=list)
+    blocked_debtor_ids:  list[int] = field(default_factory=list)
+    allowed_invoice_ids: list[int] = field(default_factory=list)
+    skipped:             list[dict] = field(default_factory=list)
+    details:             list[dict] = field(default_factory=list)
 
 
 # ===========================================================================
@@ -389,8 +446,344 @@ async def _enqueue_to_arq(
         raise MonitError(f"Błąd kolejkowania zadania '{task_name}': {exc}") from exc
     
 # ===========================================================================
-# Publiczne API serwisu — SEND
+# Sprawdzenie interwału monitów — pre-flight check przed enqueue
 # ===========================================================================
+
+_INTERVAL_LOG_FILE_PATTERN = "logs/monit_interval_{date}.jsonl"
+_CONFIG_CACHE_TTL = 300  # 5 minut — TTL cache konfiguracji interwału w Redis
+_CONFIG_CACHE_KEY = "cfg:monit_interval"
+
+
+async def _load_interval_config(db: AsyncSession, redis: Redis) -> dict:
+    """
+    Ładuje konfigurację interwału z Redis (cache) lub DB (fallback).
+
+    Cache key: cfg:monit_interval, TTL: 5 minut.
+
+    Returns:
+        {"interval_days": int, "block_mode": str, "min_days_overdue": int}
+    """
+    # Próba odczytu z cache Redis
+    try:
+        cached = await redis.get(_CONFIG_CACHE_KEY)
+        if cached:
+            parsed = orjson.loads(cached)
+            logger.debug(
+                "Konfiguracja interwalu z cache Redis",
+                extra={"config": parsed},
+            )
+            return parsed
+    except Exception as exc:
+        logger.warning(
+            "Blad odczytu cache interwalu z Redis — fallback do DB",
+            extra={"error": str(exc)},
+        )
+
+    # Fallback do DB
+    defaults = {
+        "interval_days":    14,
+        "block_mode":       "block",
+        "min_days_overdue": 1,
+    }
+    try:
+        result = await db.execute(
+            sa_text("""
+                SELECT [ConfigKey], [ConfigValue]
+                FROM [dbo_ext].[skw_SystemConfig]
+                WHERE [ConfigKey] IN (
+                    'monit.interval_days',
+                    'monit.block_mode',
+                    'monit.min_days_overdue'
+                )
+                AND [IsActive] = 1
+            """)
+        )
+        rows = result.fetchall()
+        config = dict(defaults)
+        for row in rows:
+            key, val = row[0], row[1]
+            if key == "monit.interval_days" and val:
+                try:
+                    config["interval_days"] = int(val)
+                except ValueError:
+                    pass
+            elif key == "monit.block_mode" and val in ("block", "warn"):
+                config["block_mode"] = val
+            elif key == "monit.min_days_overdue" and val:
+                try:
+                    config["min_days_overdue"] = int(val)
+                except ValueError:
+                    pass
+    except Exception as exc:
+        logger.error(
+            "Blad odczytu konfiguracji interwalu z DB — uzywam wartosci domyslnych",
+            extra={"error": str(exc), "defaults": defaults},
+        )
+        config = dict(defaults)
+
+    # Zapisz do cache Redis
+    try:
+        await redis.setex(
+            _CONFIG_CACHE_KEY,
+            _CONFIG_CACHE_TTL,
+            orjson.dumps(config),
+        )
+        logger.debug("Konfiguracja interwalu zapisana do cache Redis", extra={"config": config})
+    except Exception as exc:
+        logger.warning("Blad zapisu cache interwalu do Redis", extra={"error": str(exc)})
+
+    return config
+
+
+async def check_interval(
+    db: AsyncSession,
+    redis: Redis,
+    debtor_id: int,
+    invoice_ids: list[int],
+    triggered_by_user_id: Optional[int] = None,
+) -> IntervalCheckResult:
+    """
+    Sprawdza czy wysyłka monitu narusza skonfigurowany interwał.
+
+    Logika (oba warunki sprawdzane niezależnie — OR):
+        1. Per kontrahent: czy ostatni monit (skw_MonitHistory) był < interval_days temu
+        2. Per rozrachunek: czy ostatni monit (skw_MonitHistory_Invoices) był < interval_days temu
+
+    Tryby:
+        block: jeśli naruszenie → IntervalCheckResult.allowed=False
+               → caller powinien zwrócić HTTP 409
+        warn:  jeśli naruszenie → IntervalCheckResult.allowed=True ale:
+               - blocked_invoice_ids: lista naruszających
+               - allowed_invoice_ids: lista do wysłania
+               - skipped: lista z powodem
+
+    Logowanie:
+        Każde sprawdzenie → logs/monit_interval_YYYY-MM-DD.jsonl
+
+    Args:
+        db:                    Sesja SQLAlchemy.
+        redis:                 Klient Redis.
+        debtor_id:             ID kontrahenta WAPRO.
+        invoice_ids:           Lista ID rozrachunków do sprawdzenia.
+        triggered_by_user_id:  ID użytkownika (do logów).
+
+    Returns:
+        IntervalCheckResult z pełnymi informacjami o blokadzie.
+    """
+    # ── Krok 1: Załaduj konfigurację ────────────────────────────────────────
+    config = await _load_interval_config(db, redis)
+    interval_days: int = config["interval_days"]
+    block_mode:    str = config["block_mode"]
+
+    logger.info(
+        "check_interval START",
+        extra={
+            "debtor_id":    debtor_id,
+            "invoice_ids":  invoice_ids,
+            "interval_days": interval_days,
+            "block_mode":   block_mode,
+            "user_id":      triggered_by_user_id,
+        },
+    )
+
+    blocked_debtor_ids:  list[int] = []
+    blocked_invoice_ids: list[int] = []
+    details:             list[dict] = []
+    skipped:             list[dict] = []
+
+    # ── Krok 2: Sprawdź per kontrahent ──────────────────────────────────────
+    debtor_blocked = False
+    try:
+        debtor_result = await db.execute(
+            sa_text("""
+                SELECT TOP 1
+                    ISNULL(SentAt, CreatedAt)    AS OstatniMonit,
+                    DATEDIFF(
+                        DAY,
+                        ISNULL(SentAt, CreatedAt),
+                        GETDATE()
+                    )                            AS DniTemu
+                FROM [dbo_ext].[skw_MonitHistory]
+                WHERE [ID_KONTRAHENTA] = :debtor_id
+                  AND [IsActive] = 1
+                ORDER BY ISNULL([SentAt], [CreatedAt]) DESC
+            """).bindparams(debtor_id=debtor_id)
+        )
+        debtor_row = debtor_result.fetchone()
+
+        if debtor_row is not None:
+            dni_temu = debtor_row[1]  # DniTemu
+            ostatni  = debtor_row[0]  # OstatniMonit
+
+            if dni_temu is not None and dni_temu < interval_days:
+                debtor_blocked = True
+                blocked_debtor_ids.append(debtor_id)
+                next_allowed = (
+                    ostatni.isoformat()
+                    if hasattr(ostatni, "isoformat") else str(ostatni)
+                )
+                details.append({
+                    "type":               "debtor",
+                    "debtor_id":          debtor_id,
+                    "last_monit_date":    next_allowed,
+                    "days_since_monit":   int(dni_temu),
+                    "days_remaining":     interval_days - int(dni_temu),
+                    "reason":             "interval_violated_debtor",
+                })
+                logger.warning(
+                    "Interwał naruszony per kontrahent",
+                    extra={
+                        "debtor_id":        debtor_id,
+                        "days_since_monit": dni_temu,
+                        "interval_days":    interval_days,
+                        "days_remaining":   interval_days - int(dni_temu),
+                    },
+                )
+
+    except Exception as exc:
+        logger.error(
+            "Blad sprawdzenia interwalu per kontrahent",
+            extra={"debtor_id": debtor_id, "error": str(exc)},
+        )
+
+    # ── Krok 3: Sprawdź per rozrachunek ─────────────────────────────────────
+    allowed_invoice_ids: list[int] = []
+
+    for inv_id in invoice_ids:
+        invoice_blocked = False
+        try:
+            inv_result = await db.execute(
+                sa_text("""
+                    SELECT TOP 1
+                        [CreatedAt]                         AS OstatniMonit,
+                        DATEDIFF(DAY, [CreatedAt], GETDATE()) AS DniTemu
+                    FROM [dbo_ext].[skw_MonitHistory_Invoices]
+                    WHERE [ID_ROZRACHUNKU] = :inv_id
+                    ORDER BY [CreatedAt] DESC
+                """).bindparams(inv_id=inv_id)
+            )
+            inv_row = inv_result.fetchone()
+
+            if inv_row is not None:
+                dni_temu = inv_row[1]
+                ostatni  = inv_row[0]
+
+                if dni_temu is not None and dni_temu < interval_days:
+                    invoice_blocked = True
+                    blocked_invoice_ids.append(inv_id)
+                    next_date = (
+                        ostatni.isoformat()
+                        if hasattr(ostatni, "isoformat") else str(ostatni)
+                    )
+                    detail = {
+                        "type":             "invoice",
+                        "invoice_id":       inv_id,
+                        "last_monit_date":  next_date,
+                        "days_since_monit": int(dni_temu),
+                        "days_remaining":   interval_days - int(dni_temu),
+                        "reason":           "interval_violated_invoice",
+                    }
+                    details.append(detail)
+                    skipped.append({
+                        "invoice_id":      inv_id,
+                        "reason":          "interval_violated",
+                        "last_monit_date": next_date,
+                        "days_remaining":  interval_days - int(dni_temu),
+                    })
+                    logger.warning(
+                        "Interwał naruszony per rozrachunek",
+                        extra={
+                            "invoice_id":       inv_id,
+                            "days_since_monit": dni_temu,
+                            "interval_days":    interval_days,
+                        },
+                    )
+
+        except Exception as exc:
+            logger.error(
+                "Blad sprawdzenia interwalu per rozrachunek",
+                extra={"invoice_id": inv_id, "error": str(exc)},
+            )
+
+        if not invoice_blocked and not debtor_blocked:
+            allowed_invoice_ids.append(inv_id)
+
+    # Jeśli kontrahent zablokowany → żaden rozrachunek nie przechodzi
+    if debtor_blocked:
+        allowed_invoice_ids = []
+        for inv_id in invoice_ids:
+            if not any(s["invoice_id"] == inv_id for s in skipped):
+                debtor_detail = next(
+                    (d for d in details if d.get("type") == "debtor"), {}
+                )
+                skipped.append({
+                    "invoice_id":    inv_id,
+                    "reason":        "interval_violated_debtor",
+                    "last_monit_date": debtor_detail.get("last_monit_date"),
+                    "days_remaining": debtor_detail.get("days_remaining"),
+                })
+
+    # ── Krok 4: Wyznacz wynik ────────────────────────────────────────────────
+    has_any_block = bool(blocked_debtor_ids or blocked_invoice_ids)
+
+    if block_mode == "block":
+        allowed = not has_any_block
+    else:
+        # warn — dozwolone jeśli choć jeden invoice może przejść
+        allowed = len(allowed_invoice_ids) > 0 or not has_any_block
+
+    result = IntervalCheckResult(
+        allowed=allowed,
+        block_mode=block_mode,
+        interval_days=interval_days,
+        blocked_invoice_ids=blocked_invoice_ids,
+        blocked_debtor_ids=blocked_debtor_ids,
+        allowed_invoice_ids=allowed_invoice_ids if has_any_block else list(invoice_ids),
+        skipped=skipped,
+        details=details,
+    )
+
+    # ── Krok 5: Logowanie do JSONL ───────────────────────────────────────────
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_file = log_dir / f"monit_interval_{today}.jsonl"
+
+    _append_to_file(
+        log_file,
+        {
+            "ts":                  datetime.now(timezone.utc).isoformat(),
+            "service":             "monit_service.check_interval",
+            "debtor_id":           debtor_id,
+            "invoice_ids":         invoice_ids,
+            "interval_days":       interval_days,
+            "block_mode":          block_mode,
+            "allowed":             allowed,
+            "blocked_invoice_ids": blocked_invoice_ids,
+            "blocked_debtor_ids":  blocked_debtor_ids,
+            "allowed_invoice_ids": result.allowed_invoice_ids,
+            "skipped_count":       len(skipped),
+            "user_id":             triggered_by_user_id,
+        },
+    )
+
+    logger.info(
+        "check_interval WYNIK: allowed=%s, blocked_inv=%d, blocked_deb=%d, allowed_inv=%d",
+        allowed,
+        len(blocked_invoice_ids),
+        len(blocked_debtor_ids),
+        len(result.allowed_invoice_ids),
+        extra={
+            "debtor_id":           debtor_id,
+            "block_mode":          block_mode,
+            "interval_days":       interval_days,
+            "allowed":             allowed,
+            "blocked_invoice_ids": blocked_invoice_ids,
+            "allowed_invoice_ids": result.allowed_invoice_ids,
+        },
+    )
+
+    return result
 
 async def send_bulk(
     db: AsyncSession,
@@ -494,6 +887,87 @@ async def send_bulk(
             }
         )
 
+    # ── Krok 1b: Pre-flight check interwału monitów ──────────────────────────
+    # Sprawdzamy PRZED tworzeniem rekordów MonitHistory i enqueueing do ARQ.
+    # block_mode=block → zablokuj całą partię jeśli naruszenie (atomowo)
+    # block_mode=warn  → wyślij tylko dozwolone, skipped w response
+
+    _interval_skipped_all: list[dict] = []
+
+    if request.invoice_ids_per_debtor:
+        # Zbierz wyniki per kontrahent — atomowy check dla bulk
+        _all_blocked_invoices: list[int] = []
+        _all_blocked_debtors:  list[int] = []
+        _all_details:          list[dict] = []
+        _interval_config = await _load_interval_config(db, redis)
+
+        # Normalizuj klucze do int — JSON przesyła jako stringi ("6" zamiast 6)
+        _inv_map_check = {
+            int(k): v
+            for k, v in request.invoice_ids_per_debtor.items()
+        }
+        for _debtor_id in list(valid_ids):
+            _inv_ids = _inv_map_check.get(_debtor_id, [])
+            if not _inv_ids:
+                continue
+            _chk = await check_interval(
+                db=db,
+                redis=redis,
+                debtor_id=_debtor_id,
+                invoice_ids=_inv_ids,
+                triggered_by_user_id=triggered_by_user_id,
+            )
+            _all_blocked_invoices.extend(_chk.blocked_invoice_ids)
+            _all_blocked_debtors.extend(_chk.blocked_debtor_ids)
+            _all_details.extend(_chk.details)
+            _interval_skipped_all.extend(_chk.skipped)
+
+        _has_any_block = bool(_all_blocked_invoices or _all_blocked_debtors)
+        _block_mode = _interval_config.get("block_mode", "block")
+
+        if _has_any_block and _block_mode == "block":
+            # ATOMOWE ZABLOKOWANIE CAŁEJ PARTII
+            logger.warning(
+                "send_bulk ZABLOKOWANY — naruszenie interwalu (block_mode=block)",
+                extra={
+                    "debtor_count":          len(valid_ids),
+                    "blocked_invoices":      _all_blocked_invoices,
+                    "blocked_debtors":       _all_blocked_debtors,
+                    "triggered_by":          triggered_by_user_id,
+                },
+            )
+            raise MonitIntervalBlockedError(
+                blocked_invoice_ids=_all_blocked_invoices,
+                blocked_debtor_ids=_all_blocked_debtors,
+                interval_days=_interval_config.get("interval_days", 14),
+                details=_all_details,
+            )
+
+        elif _has_any_block and _block_mode == "warn":
+            # WARN — odfiltruj zablokowane debtor_ids
+            # (kontrahent zablokowany = usuń z valid_ids)
+            _blocked_debtor_set = set(_all_blocked_debtors)
+            valid_ids = [v for v in valid_ids if v not in _blocked_debtor_set]
+            logger.warning(
+                "send_bulk WARN — czesc kontrahentow pominieta (naruszenie interwalu)",
+                extra={
+                    "original_count":  len(request.debtor_ids),
+                    "skipped_debtors": list(_blocked_debtor_set),
+                    "remaining":       len(valid_ids),
+                },
+            )
+            if not valid_ids:
+                # Wszyscy zablokowania — zwróć pustą odpowiedź z info
+                return MonitBulkResult(
+                    total_requested=len(request.debtor_ids),
+                    valid_debtor_count=0,
+                    invalid_debtor_ids=invalid_debtor_ids,
+                    queued_count=0,
+                    monit_ids=[],
+                    task_id=None,
+                    scheduled_at=request.scheduled_at.isoformat() if request.scheduled_at else None,
+                )
+
     # Krok 2: Pobranie szablonu (opcjonalne)
     template = None
     template_subject = None
@@ -584,9 +1058,21 @@ async def send_bulk(
                 }
                 task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
         else:
+            # Spłaszcz invoice_ids do płaskiej listy
+            _all_invoice_ids: list[int] = []
+            if request.invoice_ids_per_debtor:
+                # Klucze z JSON przychodzą jako stringi — normalizuj do int
+                _inv_map = {
+                    int(k): v
+                    for k, v in request.invoice_ids_per_debtor.items()
+                }
+                for _did in valid_ids:
+                    _all_invoice_ids.extend(_inv_map.get(_did, []))
+
             arq_payload = {
                 "monit_ids":            monit_ids,
                 "triggered_by_user_id": triggered_by_user_id,
+                "invoice_ids":          _all_invoice_ids,
             }
             task_id = await _enqueue_to_arq(redis, task_name, arq_payload)
     except MonitError as exc:

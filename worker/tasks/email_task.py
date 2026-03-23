@@ -20,7 +20,7 @@ from arq import Retry
 from sqlalchemy import select, update
 
 from worker.core import db
-from worker.core.db import AuditLog, MonitHistory, get_session
+from worker.core.db import AuditLog, MonitHistory, MonitHistoryInvoice, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
 from worker.services.smtp_service import EmailMessage, send_email
@@ -43,6 +43,7 @@ async def send_bulk_emails(
     triggered_by_user_id: int,
     job_id: Optional[str] = None,
     include_pdf: bool = True,
+    invoice_ids: Optional[list[int]] = None,  # NOWE — ID rozrachunków do zapisu
 ) -> dict[str, Any]:
     """
     ARQ Task: Masowa wysyłka emaili.
@@ -298,6 +299,42 @@ async def send_bulk_emails(
                     "job_id": effective_job_id,
                 },
             )
+
+            # ── Zapis powiązań monit↔rozrachunek ─────────────────────────────
+            # Wykonywany tylko po pomyślnej wysyłce.
+            # Błąd zapisu NIE blokuje głównego wyniku — graceful degradation.
+            if invoice_ids:
+                try:
+                    async with get_session() as inv_db:
+                        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                        for inv_id in invoice_ids:
+                            inv_db.add(MonitHistoryInvoice(
+                                id_monit=monit.id_monit,
+                                id_rozrachunku=inv_id,
+                                created_at=now_naive,
+                            ))
+                        await inv_db.commit()
+
+                    logger.info(
+                        "MonitHistory_Invoices zapisane",
+                        extra={
+                            "monit_id":    monit.id_monit,
+                            "invoice_ids": invoice_ids,
+                            "count":       len(invoice_ids),
+                            "job_id":      effective_job_id,
+                        },
+                    )
+                except Exception as inv_exc:
+                    # Błąd zapisu NIE wpływa na status wysyłki
+                    logger.error(
+                        "BLAD zapisu MonitHistory_Invoices — email wysłany ale brak rekordu",
+                        extra={
+                            "monit_id":    monit.id_monit,
+                            "invoice_ids": invoice_ids,
+                            "error":       str(inv_exc),
+                            "job_id":      effective_job_id,
+                        },
+                    )
         else:
             failed_ids.append(monit.id_monit)
             errors.append({

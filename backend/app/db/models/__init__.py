@@ -47,6 +47,7 @@ from app.db.models.master_access_log import MasterAccessLog  # noqa: F401
 from app.db.models.role_permission import RolePermission  # noqa: F401
 from app.db.models.comment import Comment  # noqa: F401
 from app.db.models.monit_history import MonitHistory  # noqa: F401
+from app.db.models.monit_history_invoices import MonitHistoryInvoice    # noqa: F401
 
 
 # =============================================================================
