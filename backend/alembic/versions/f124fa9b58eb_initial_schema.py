@@ -79,8 +79,8 @@ def upgrade() -> None:
     _create_skw_monit_history()
     _create_skw_master_access_log()
     _create_skw_comments()
-    _create_view_kontrahenci()
-    _create_view_rozrachunki_faktur()
+    _create_skw_kontrahenci()
+    _create_skw_rozrachunki_faktur()
     _create_wapro_indexes()
 
 
@@ -495,7 +495,7 @@ def _create_skw_comments() -> None:
                 ON [{SCHEMA}].[skw_Comments] ([ID_USER] ASC, [CreatedAt] DESC);
         END
     """)
-def _create_view_kontrahenci() -> None:
+def _create_skw_kontrahenci() -> None:
     op.execute("""
         CREATE OR ALTER VIEW [dbo].[skw_kontrahenci] AS
         WITH cte_rozrachunki AS (
@@ -564,7 +564,7 @@ def _create_view_kontrahenci() -> None:
     """)
 
 
-def _create_view_rozrachunki_faktur() -> None:
+def _create_skw_rozrachunki_faktur() -> None:
     op.execute("""
         CREATE OR ALTER VIEW [dbo].[skw_rozrachunki_faktur] AS
         WITH cte_kontrahenci_aktywni AS (

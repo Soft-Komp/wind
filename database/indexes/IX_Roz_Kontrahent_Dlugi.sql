@@ -1,12 +1,8 @@
 -- =============================================================================
 -- INDEX: IX_Roz_Kontrahent_Dlugi
 -- =============================================================================
--- Plik:    database/indexes/IX_Roz_Kontrahent_Dlugi.sql
--- Wersja:  1.0.0
--- Data:    2026-02-18
--- Zgodny:  AUDIT_ZGODNOSCI.md §R9, USTALENIA_PROJEKTU v1.6
 --
--- Cel: Optymalizacja CTE cte_rozrachunki w VIEW_kontrahenci.
+-- Cel: Optymalizacja CTE cte_rozrachunki w skw_kontrahenci.
 -- Pokrywa: SUM(POZOSTALO) per ID_KONTRAHENTA dla faktur niezapłaconych.
 --
 -- Tabela docelowa: dbo.Rozrachunek (WAPRO — TYLKO ODCZYT)

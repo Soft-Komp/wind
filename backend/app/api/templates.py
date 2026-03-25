@@ -1,6 +1,4 @@
 """
-api/templates.py
-═══════════════════════════════════════════════════════════════════════════════
 Router szablonów monitów — System Windykacja
 
 Prefix: /api/v1/templates  (zarejestrowany w api/router.py)
@@ -34,9 +32,6 @@ Wzorce:
   - HTTP kody: 200 list/update/delete, 201 create, 404 not found,
                409 conflict (duplicate), 422 validation, 423 in-use
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data:   2026-03-11
 """
 
 from __future__ import annotations

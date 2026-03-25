@@ -10,8 +10,6 @@
 -- Powiązania:
 --   → skw_Roles.ID_ROLE               (FK CASCADE DELETE)
 --   → skw_Permissions.ID_PERMISSION   (FK CASCADE DELETE)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

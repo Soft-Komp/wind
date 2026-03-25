@@ -14,8 +14,6 @@
 --
 -- Powiązania:
 --   ← skw_MonitHistory.TemplateID (FK SET NULL)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

@@ -1,6 +1,4 @@
 """
-api/system.py
-═══════════════════════════════════════════════════════════════════════════════
 Router systemowy — System Windykacja.
 
 8 endpointów:
@@ -24,9 +22,6 @@ Serwisy:
   audit_service    — GET /system/audit-log
   db/wapro.py      — health check WAPRO
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

@@ -20,7 +20,6 @@ Middleware audytowy odpowiedzialny za:
 Zasada: jeśli coś się wydarzy, musi być możliwość odtworzenia
         co, kiedy, przez kogo i z jakim skutkiem.
 
-Wersja: 1.0.0 | Data: 2026-02-20 | Python: 3.12+
 """
 
 from __future__ import annotations
@@ -512,12 +511,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         query_string = str(request.url.query)
         full_url = str(request.url)
 
-        # ---- Wyciągnij user_id z JWT (tylko do logów) ----
         authorization = request.headers.get("authorization", "")
         jwt_user_id = _peek_jwt_user_id(authorization)
         jwt_username = _peek_jwt_username(authorization)
 
-        # ---- Ustaw contextvary ----
         ctx_tokens = set_request_context(
             request_id=request_id,
             user_id=jwt_user_id,
@@ -525,7 +522,6 @@ class AuditMiddleware(BaseHTTPMiddleware):
             username=jwt_username,
         )
 
-        # ---- Dodaj request_id do state (dostępny w endpointach) ----
         request.state.request_id = request_id
         request.state.client_ip = client_ip
 
@@ -663,15 +659,12 @@ class AuditMiddleware(BaseHTTPMiddleware):
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 3)
         ts_end = datetime.now(timezone.utc)
 
-        # ---- Wstrzyknij security headers ----
         if self._inject_security_headers:
             self._inject_headers(response)
 
-        # ---- Zawsze dodaj request_id do response ----
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
 
-        # ---- Logowanie odpowiedzi ----
         if not is_silent:
             response_record = self._build_response_log(
                 request_id=request_id,

@@ -1,6 +1,5 @@
 -- =============================================================================
 -- database/views/skw_rozrachunki_faktur.sql
--- Wersja: 2.0.0 | Data: 2026-03-19 | Migracja: 0002
 -- =============================================================================
 CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS

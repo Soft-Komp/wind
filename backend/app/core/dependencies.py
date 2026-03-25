@@ -1,6 +1,4 @@
 """
-core/dependencies.py
-═══════════════════════════════════════════════════════════════════════════════
 Fundament warstwy API — zależności FastAPI (Depends) używane przez wszystkie
 endpointy systemu Windykacja.
 
@@ -22,9 +20,6 @@ Wzorce:
   • Impersonacja: payload JWT zawiera `sub` (realny user) + `imp` (impersonowany)
   • Master Key: nagłówek X-Master-Key + X-Master-Pin (bcrypt verify)
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

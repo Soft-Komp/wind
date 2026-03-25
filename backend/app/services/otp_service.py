@@ -1,15 +1,13 @@
 """
 Serwis OTP (One-Time Password) — System Windykacja
 ====================================================
-Krok 6 / Faza 3 — services/otp_service.py
 
 Odpowiedzialność:
     - Generowanie 6-cyfrowych kodów OTP (password_reset / 2fa)
     - Bezpieczne przechowywanie (SHA-256 hash w tabeli OtpCodes)
     - Weryfikacja z constant-time compare
     - Blokada po 5 nieudanych próbach (Redis, 30 min)
-    - send_stub: zapis do kolejki JSONL + log diagnostyczny
-      (właściwy send realizowany przez ARQ worker w Fazie 6)
+    - Wysyłka OTP: enqueue do ARQ + zapis do kolejki JSONL jako backup
 
 Decyzje projektowe:
     - SHA-256 (nie argon2) — OTP jest jednorazowy, krótkotrwały (≤15 min),
@@ -23,11 +21,6 @@ Decyzje projektowe:
 Zależności:
     - services/audit_service.py
     - services/config_service.py
-
-Ścieżka docelowa: backend/app/services/otp_service.py
-Autor: System Windykacja — Faza 3 Krok 6
-Wersja: 1.0.0
-Data: 2026-02-18
 """
 
 from __future__ import annotations
@@ -801,7 +794,7 @@ async def send_stub(
         "expires_at": expires_at.isoformat(),
         "channel": "email",
         "ip_address": ip_address,
-        "stub": False,          # Faza 6 — właściwa wysyłka przez ARQ
+        "stub": False,         
         "arq_enqueued": False,  # Zaktualizowane poniżej po udanym enqueue
     }
 

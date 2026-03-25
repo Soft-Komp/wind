@@ -12,8 +12,6 @@
 -- Powiązania:
 --   → skw_Users.ID_USER          (FK SET NULL)
 --   → skw_Templates.ID_TEMPLATE  (FK SET NULL)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

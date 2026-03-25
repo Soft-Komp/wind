@@ -1380,12 +1380,6 @@ async def forgot_password(
 ) -> None:
     """
     Inicjuje reset hasła.
-
-    WAŻNE: ZAWSZE zwraca None niezależnie czy email istnieje.
-    Zapobiega user enumeration przez timing lub różne odpowiedzi.
-
-    W tej implementacji: generuje OTP code i zapisuje do Redis.
-    Faktyczne wysłanie emaila: stub (Faza 6 — Worker ARQ).
     """
     ip_clean = (ip or "unknown")[:45]
     email_clean = email.lower().strip()[:100]

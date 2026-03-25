@@ -1,6 +1,4 @@
 """
-backend/app/core/schema_integrity.py
-=====================================
 Weryfikacja integralności schematu bazy danych przy starcie aplikacji.
 
 Mechanizm:
@@ -17,9 +15,6 @@ Logowanie:
     - Każda niezgodność → log CRITICAL + osobny plik incidents/
     - Format: JSON Lines (parseable przez grep/jq/ELK)
 
-Wersja: 1.0.0
-Data:   2026-02-18
-Autor:  System Windykacja
 """
 from __future__ import annotations
 
@@ -1132,9 +1127,6 @@ __all__ = [
 ]
 
 """
-PATCH — dodaj ten kod na KOŃCU pliku:
-    backend/app/core/schema_integrity.py
-
 Klasa SchemaIntegrityChecker wrappuje istniejące wolne funkcje modułu
 i dostarcza interfejs wymagany przez:
   - main.py startup     → SchemaIntegrityChecker(db=db).verify_all()

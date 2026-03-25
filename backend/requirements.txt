@@ -1,10 +1,6 @@
 # =============================================================================
 # requirements.txt — System Windykacja / Backend
 # =============================================================================
-# Wersja:       1.0.0
-# Data:         2026-02-17
-# Python:       3.12
-# Zgodny z:     PLAN_PRAC.md v1.0.0 + AUDIT_ZGODNOSCI.md v1.0.0
 #
 # ZASADY:
 #   - Wersje pinowane (==) dla pełnej reprodukowalności build w Docker
@@ -12,13 +8,6 @@
 #   - Aktualizacje wersji TYLKO przez świadomą decyzję + re-test
 #   - Pakiety pogrupowane wg funkcji — nie mieszać
 #
-# ZMIANY:
-#   v1.0.0  2026-02-17  Pierwsza wersja kompletna (Faza 0 — naprawa B2)
-#                       Źródło: PLAN_PRAC.md §"Wymagane Zależności"
-#                       Dodatki vs plan:
-#                         + bcrypt==4.2.1      → AUDIT R6 (master_key.pin_hash)
-#                         + slowapi==0.5.7     → PLAN §"Rate limiting — do dodania"
-#                         + pytest stack       → sekcja [dev]
 # =============================================================================
 
 

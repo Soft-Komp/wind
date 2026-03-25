@@ -1,6 +1,4 @@
 ﻿"""
-api/permissions.py
-═══════════════════════════════════════════════════════════════════════════════
 Router uprawnień — System Windykacja.
 
 5 endpointów:
@@ -19,9 +17,6 @@ Uwagi:
 
 Serwis: services/permission_service.py
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

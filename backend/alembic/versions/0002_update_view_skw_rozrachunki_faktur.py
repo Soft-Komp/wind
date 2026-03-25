@@ -1,4 +1,4 @@
-"""Aktualizacja widoku dbo.skw_rozrachunki_faktur — wersja 2.0.
+"""Aktualizacja widoku dbo.skw_rozrachunki_faktur.
 
 Revision ID:  0002
 Revises:      f124fa9b58eb

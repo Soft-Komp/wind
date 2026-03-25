@@ -16,8 +16,6 @@
 --   master_key.pin_hash       → "" (wypełnić ręcznie — argon2 hash)
 --   schema_integrity.reaction → "BLOCK"   (WARN / ALERT / BLOCK)
 --   snapshot.retention_days   → "30"
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

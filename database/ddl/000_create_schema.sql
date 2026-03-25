@@ -9,8 +9,6 @@
 --
 -- Uruchomienie ręczne (Windows PowerShell, jedna linia):
 --   sqlcmd -S tcp:HOST,PORT -d DBNAME -U USER -P PASS -C -b -I -i database/ddl/000_create_schema.sql
---
--- Wersja: 2.1.0 | Data: 2026-03-03
 -- =============================================================================
 
 SET NOCOUNT ON;

@@ -16,7 +16,6 @@ Przykład rejestracji w main.py::
     app.add_middleware(DynamicCORSMiddleware)
     # Efekt: DynamicCORSMiddleware → AuditMiddleware → handler
 
-Wersja: 1.0.0 | Data: 2026-02-20
 """
 
 from app.middleware.audit_middleware import AuditMiddleware

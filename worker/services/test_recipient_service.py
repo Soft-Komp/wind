@@ -1,6 +1,4 @@
 # =============================================================================
-# worker/services/test_recipient_service.py
-# =============================================================================
 # Serwis odczytu konfiguracji trybu testowego wysyłki.
 #
 # Priorytet źródeł (od najwyższego):
@@ -13,8 +11,6 @@
 #   test_mode.phone    → numer telefonu
 #
 # WAŻNE: używa ctx["worker_redis"] — NIE ctx["redis"] (to ARQ's własny Redis)
-#
-# Wersja: 1.0.1 | Data: 2026-03-19
 # =============================================================================
 
 from __future__ import annotations

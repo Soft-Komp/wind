@@ -27,7 +27,6 @@
 #   po wykonaniu DDL uruchom: alembic stamp head
 #   Dzięki temu Alembic wie, że schema jest aktualna.
 #
-# Wersja: 2.0.0 | Data: 2026-03-02
 # =============================================================================
 
 from __future__ import annotations

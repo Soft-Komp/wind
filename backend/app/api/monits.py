@@ -1,7 +1,5 @@
 """
-api/monits.py
-═══════════════════════════════════════════════════════════════════════════════
-Router monitów — System Windykacja. ★ NOWY plik (AUDIT R7/R12)
+Router monitów — System Windykacja. 
 
 8 endpointów:
   GET    /monits              — historia monitów (paginacja, filtry)
@@ -17,10 +15,6 @@ Ważna kolejność ścieżek (FastAPI FIFO):
   /stats i /queue PRZED /{id}
 
 Serwis: services/monit_service.py
-
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

@@ -23,8 +23,6 @@
 #
 # Ten moduł NIE importuje z innych schemas/* — zerowe ryzyko circular import.
 # Inne schemas importują z tego modułu.
-#
-# Wersja: 1.0.0 | Data: 2026-02-17 | Faza: 1
 # =============================================================================
 
 from __future__ import annotations

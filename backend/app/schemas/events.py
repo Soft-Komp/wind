@@ -1,6 +1,3 @@
-# =============================================================================
-# backend/app/schemas/events.py
-# =============================================================================
 # Schematy Pydantic v2 dla Server-Sent Events (SSE).
 #
 # TYPY EVENTÓW (wg USTALENIA_PROJEKTU §13):
@@ -30,7 +27,6 @@
 #       console.log(`Task ${data.task}: ${data.success} sukces, ${data.failed} błędów`);
 #     });
 #
-# Wersja: 1.0.0 | Data: 2026-02-17 | Faza: 1
 # =============================================================================
 
 from __future__ import annotations
@@ -298,7 +294,7 @@ class NewInvoicesEvent(SSEEvent):
     Event: Synchronizacja WAPRO wykryła nowe faktury / dłużników.
 
     Kiedy:
-        - Cron task (np. co 15 min) sprawdza VIEW_kontrahenci
+        - Cron task (np. co 15 min) sprawdza skw_kontrahenci
         - Wykrywa nowych dłużników lub nowe faktury
         - Publikuje event do użytkowników którzy mają widok listy dłużników
 
@@ -306,7 +302,7 @@ class NewInvoicesEvent(SSEEvent):
         - Odświeża listę dłużników (GET /api/v1/debtors)
         - Wyświetla toast: "Wykryto 3 nowe faktury"
 
-    Użycie w worker/tasks/sync_wapro.py (hipotetyczny task):
+    Użycie w worker/tasks/sync_wapro.py:
         new_count = sync_invoices_from_wapro()
         if new_count > 0:
             await broadcast_to_admins(
@@ -405,9 +401,9 @@ class SystemNotificationEvent(SSEEvent):
         if checksum_mismatch:
             await broadcast_to_admins(
                 event=SystemNotificationEvent(
-                    message="SCHEMA TAMPER DETECTED: widok VIEW_kontrahenci został zmieniony poza Alembic",
+                    message="SCHEMA TAMPER DETECTED: widok skw_kontrahenci został zmieniony poza Alembic",
                     level=NotificationLevel.CRITICAL,
-                    details={"object": "VIEW_kontrahenci", "expected": 12345, "actual": 67890},
+                    details={"object": "skw_kontrahenci", "expected": 12345, "actual": 67890},
                 )
             )
             sys.exit(1)  # BLOCK
@@ -439,7 +435,7 @@ class SystemNotificationEvent(SSEEvent):
         default=None,
         description=(
             "Dodatkowe dane techniczne (dla adminów/logów). "
-            "Przykład: {'object': 'VIEW_kontrahenci', 'expected_checksum': 12345}"
+            "Przykład: {'object': 'skw_kontrahenci', 'expected_checksum': 12345}"
         ),
     )
 

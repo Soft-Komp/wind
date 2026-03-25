@@ -85,7 +85,7 @@ WHERE
     AND r.pozostalo < 0
 """
 
-_VIEW_KONTRAHENCI_NEW = """
+_SKW_KONTRAHENCI_NEW = """
 CREATE OR ALTER VIEW dbo.skw_kontrahenci
 AS
 WITH cte_rozrachunki AS
@@ -185,7 +185,7 @@ LEFT JOIN dbo.KONTRAHENT AS k ON CAST(k.ID_KONTRAHENTA AS INT) = r.id_platnika
 WHERE r.id_platnika IS NOT NULL AND r.pozostalo < 0
 """
 
-_VIEW_KONTRAHENCI_OLD = """
+_SKW_KONTRAHENCI_OLD = """
 CREATE OR ALTER VIEW dbo.skw_kontrahenci
 AS
 WITH cte_rozrachunki AS
@@ -247,10 +247,10 @@ LEFT JOIN cte_monity      AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA A
 def upgrade() -> None:
     logger.info("0004 upgrade: START — aktualizacja widoków SQL")
 
-    op.execute(sa.text(_VIEW_ROZRACHUNKI_NEW))
+    op.execute(sa.text(_SKW_ROZRACHUNKI_NEW))
     logger.info("0004: skw_rozrachunki_faktur OK")
 
-    op.execute(sa.text(_VIEW_KONTRAHENCI_NEW))
+    op.execute(sa.text(_SKW_KONTRAHENCI_NEW))
     logger.info("0004: skw_kontrahenci OK")
 
     # SchemaChecksums celowo pominiete — kolumna Checksum jest INT,
@@ -267,10 +267,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     logger.info("0004 downgrade: START — przywracam poprzednie widoki")
 
-    op.execute(_VIEW_ROZRACHUNKI_OLD)
+    op.execute(_SKW_ROZRACHUNKI_OLD)
     logger.info("0004 downgrade: skw_rozrachunki_faktur przywrócony")
 
-    op.execute(_VIEW_KONTRAHENCI_OLD)
+    op.execute(_SKW_KONTRAHENCI_OLD)
     logger.info("0004 downgrade: skw_kontrahenci przywrócony")
 
     logger.info("0004 downgrade: ZAKOŃCZONY POMYŚLNIE")
@@ -282,8 +282,8 @@ def downgrade() -> None:
 def _upsert_schema_checksums() -> None:
     """Checksums — calosc przez op.execute(), zero conn.execute()."""
     entries = [
-        ("dbo", "VIEW", "skw_rozrachunki_faktur", _VIEW_ROZRACHUNKI_NEW),
-        ("dbo", "VIEW", "skw_kontrahenci",        _VIEW_KONTRAHENCI_NEW),
+        ("dbo", "VIEW", "skw_rozrachunki_faktur", _SKW_ROZRACHUNKI_NEW),
+        ("dbo", "VIEW", "skw_kontrahenci",        _SKW_KONTRAHENCI_NEW),
     ]
     for schema_name, obj_type, obj_name, sql in entries:
         checksum = hashlib.md5(sql.strip().encode("utf-8")).hexdigest()

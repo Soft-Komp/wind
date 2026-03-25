@@ -1,19 +1,6 @@
 # =============================================================================
-# backend/app/db/models/user.py
-# =============================================================================
 # Model SQLAlchemy dla tabeli dbo_ext.Users
 #
-# NAPRAWY W TEJ WERSJI:
-#   [B1] KRYTYCZNY — relacja `comments` miała błędne wcięcie (była POZA klasą).
-#        Naprawiono: relacja jest teraz wewnątrz klasy User z prawidłowym wcięciem.
-#   [MODERNIZACJA] datetime.utcnow() → datetime.now(timezone.utc)
-#        Python 3.12 emituje DeprecationWarning dla utcnow().
-#        Usunięte w Python 3.14 — PLAN_PRAC.md §"Co WYMAGA UWAGI/MODERNIZACJI"
-#
-# Tabela wg: TABELE_REFERENCJA v1.0 §4 + USTALENIA_PROJEKTU v1.4 §5.4
-# Schemat: dbo_ext (custom, zarządzany przez Alembic)
-#
-# Wersja: 1.1.0 | Data: 2026-02-17 | Faza: 0 — naprawa B1
 # =============================================================================
 
 from __future__ import annotations
@@ -164,8 +151,7 @@ class User(Base):
     )
 
     # ── Timestamps ────────────────────────────────────────────────────────────
-    # MODERNIZACJA: datetime.now(timezone.utc) zamiast deprecated datetime.utcnow()
-    # Python 3.12 DeprecationWarning → usunięte w 3.14 (PLAN_PRAC.md §modernizacja)
+
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt",
         DateTime,
@@ -189,10 +175,6 @@ class User(Base):
 
     # =========================================================================
     # RELACJE SQLAlchemy
-    # =========================================================================
-    # UWAGA NA WCIĘCIE: WSZYSTKIE relacje MUSZĄ być wewnątrz klasy (4 spacje).
-    # Błąd B1 polegał na tym, że relacja `comments` była POZA klasą (0 spacji).
-    # SQLAlchemy cicho ignoruje atrybut poza klasą — model był niekompletny.
     # =========================================================================
 
     # ── Rola (Many-to-One) ────────────────────────────────────────────────────
@@ -226,7 +208,7 @@ class User(Base):
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog",
         back_populates="user",
-        foreign_keys="[AuditLog.id_user]",   # ← nazwa atrybutu Python (lowercase)
+        foreign_keys="[AuditLog.id_user]",  
     )
 
     # ── Historia monitów (One-to-Many) ────────────────────────────────────────
@@ -239,8 +221,6 @@ class User(Base):
     )
 
     # ── Komentarze (One-to-Many) ──────────────────────────────────────────────
-    # [B1] FIX: ta relacja była POZA klasą w poprzedniej wersji pliku.
-    # Poprawka: 4 spacje wcięcia — relacja jest teraz wewnątrz klasy User.
     # RESTRICT przy usunięciu — nie można usunąć usera który ma komentarze.
     comments: Mapped[list["Comment"]] = relationship(
         "Comment",

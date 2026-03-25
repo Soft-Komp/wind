@@ -1,6 +1,4 @@
 ﻿"""
-api/auth.py
-═══════════════════════════════════════════════════════════════════════════════
 Router uwierzytelniania — System Windykacja.
 
 12 endpointów:
@@ -32,9 +30,6 @@ Powiązane serwisy:
   services/impersonation_service.py — start, stop
   core/cookie_manager.py            — set/clear/read HttpOnly cookie
 
-Autor: System Windykacja
-Wersja: 2.0.0
-Data: 2026-02-27
 """
 from __future__ import annotations
 

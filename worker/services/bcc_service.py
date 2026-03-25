@@ -1,6 +1,4 @@
 # =============================================================================
-# worker/services/bcc_service.py
-# =============================================================================
 # Serwis konfiguracji UDW (BCC) dla wysyłki email.
 #
 # Priorytet źródeł:
@@ -14,8 +12,6 @@
 #
 # Format listy: adresy oddzielone przecinkami, białe znaki ignorowane.
 # Max adresów: 10 (ochrona przed błędną konfiguracją).
-#
-# Wersja: 1.0.0 | Data: 2026-03-19
 # =============================================================================
 
 from __future__ import annotations

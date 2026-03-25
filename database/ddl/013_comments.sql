@@ -11,8 +11,6 @@
 --
 -- Powiązania:
 --   → skw_Users.ID_USER jako UzytkownikID (FK RESTRICT)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

@@ -3,9 +3,9 @@
 # =============================================================================
 # Schematy Pydantic v2 dla dłużników z WAPRO — read-only przez widoki pyodbc.
 #
-# WIDOKI ŹRÓDŁOWE (Faza 0):
-#   dbo.VIEW_kontrahenci          — lista dłużników z agregacją długu
-#   dbo.VIEW_rozrachunki_faktur   — szczegóły faktur dla dłużnika
+# WIDOKI ŹRÓDŁOWE:
+#   dbo.skw_kontrahenci          — lista dłużników z agregacją długu
+#   dbo.skw_rozrachunki_faktur   — szczegóły faktur dla dłużnika
 #
 # ENDPOINTY UŻYWAJĄCE:
 #   GET  /api/v1/debtors                    → DebtorFilterRequest → DebtorListResponse
@@ -14,15 +14,6 @@
 #   POST /api/v1/debtors/validate-bulk      → BulkDebtorValidateRequest
 #   POST /api/v1/debtors/{id}/preview-pdf   → PDF blob (używa DebtorDetail)
 #
-# ZASADY (wg PLAN_PRAC.md §1.1 + AUDIT R3):
-#   - Nazwy pól zgodne z VIEW_kontrahenci.sql i VIEW_rozrachunki_faktur.sql
-#   - extra='forbid' na wszystkich INPUT schemas
-#   - Sanityzacja NFC dla stringów wejściowych
-#   - Limity paginacji: max 200 rekordów/stronę, default 50
-#   - Decimal dla kwot (precyzja 18,2 z WAPRO)
-#   - Date dla dat (skonwertowane z INT w widokach)
-#
-# Wersja: 1.0.0 | Data: 2026-02-17 | Faza: 1
 # =============================================================================
 
 from __future__ import annotations
@@ -47,9 +38,9 @@ logger = logging.getLogger(__name__)
 
 class AgeCategory(str, Enum):
     """
-    Kategoria wiekowa długu — mapuje KategoriaWieku z VIEW_kontrahenci.
+    Kategoria wiekowa długu — mapuje KategoriaWieku z skw_kontrahenci.
 
-    Wartości DOKŁADNIE jak w widoku SQL (CASE w VIEW_kontrahenci.sql:216-226):
+    Wartości DOKŁADNIE jak w widoku SQL (CASE w skw_kontrahenci.sql:216-226):
         biezace         — nie przeterminowane
         do_30_dni       — 1-30 dni po terminie
         dni_31_60       — 31-60 dni po terminie
@@ -81,9 +72,9 @@ class AgeCategory(str, Enum):
 
 class InvoiceAgeCategory(str, Enum):
     """
-    Kategoria wiekowa faktury — mapuje KategoriaWieku z VIEW_rozrachunki_faktur.
+    Kategoria wiekowa faktury — mapuje KategoriaWieku z skw_rozrachunki_faktur.
 
-    Wartości z widoku SQL (VIEW_rozrachunki_faktur.sql:139-164):
+    Wartości z widoku SQL (skw_rozrachunki_faktur.sql:139-164):
         zaplacona       — faktura zapłacona (CZY_ROZLICZONY=1)
         biezace         — nie przeterminowana
         do_30_dni       — 1-30 dni po terminie
@@ -154,7 +145,7 @@ class DebtorFilterRequest(PaginationParams):
     age_category: AgeCategory | None = Field(
         default=None,
         description=(
-            "Filtr po kategorii wiekowej długu (KategoriaWieku z VIEW_kontrahenci). "
+            "Filtr po kategorii wiekowej długu (KategoriaWieku z skw_kontrahenci). "
             "NULL = wszystkie kategorie."
         ),
     )
@@ -252,11 +243,10 @@ class DebtorFilterRequest(PaginationParams):
 
 class DebtorListItem(BaseModel):
     """
-    Pojedynczy dłużnik na liście — skrócone dane z VIEW_kontrahenci.
+    Pojedynczy dłużnik na liście — skrócone dane z skw_kontrahenci.
 
     Używany w DebtorListResponse = BaseResponse[PaginatedData[DebtorListItem]].
 
-    Mapuje kolumny z dbo.VIEW_kontrahenci (Faza 0, VIEW_kontrahenci.sql:186-226).
     Nazwy pól DOKŁADNIE jak w widoku SQL (alias AS) — snake_case z SQL → snake_case w Pythonie.
     """
 
@@ -265,7 +255,7 @@ class DebtorListItem(BaseModel):
         from_attributes=True,  # Pydantic v2: pozwala na .from_orm() z pyodbc Row
     )
 
-    # ── Identyfikacja (z VIEW_kontrahenci.sql:188-191) ───────────────────────
+    # ── Identyfikacja (z skw_kontrahenci.sql:188-191) ───────────────────────
     id_kontrahenta: int = Field(
         alias="IdKontrahenta",
         description="ID kontrahenta z WAPRO (klucz główny).",
@@ -288,7 +278,7 @@ class DebtorListItem(BaseModel):
         max_length=20,
     )
 
-    # ── Dane kontaktowe (VIEW_kontrahenci.sql:195-196) ───────────────────────
+    # ── Dane kontaktowe (skw_kontrahenci.sql:195-196) ───────────────────────
     email: str | None = Field(
         default=None,
         alias="Email",
@@ -313,7 +303,7 @@ class DebtorListItem(BaseModel):
         alias="SumaDlugu",
         description=(
             "Łączna suma długu (wszystkie niezapłacone faktury). "
-            "Obliczone w CTE widoku (VIEW_kontrahenci.sql:49-53)."
+            "Obliczone w CTE widoku (skw_kontrahenci.sql:49-53)."
         ),
         ge=0,
         decimal_places=2,
@@ -323,7 +313,7 @@ class DebtorListItem(BaseModel):
         alias="SumaDlinguPrzeterminowanego",
         description=(
             "Suma długu przeterminowanego (po terminie płatności). "
-            "Obliczone w CTE widoku (VIEW_kontrahenci.sql:56-67)."
+            "Obliczone w CTE widoku (skw_kontrahenci.sql:56-67)."
         ),
         ge=0,
         decimal_places=2,
@@ -343,7 +333,7 @@ class DebtorListItem(BaseModel):
         ),
     )
 
-    # ── Daty (VIEW_kontrahenci.sql:210-212) ──────────────────────────────────
+    # ── Daty (skw_kontrahenci.sql:210-212) ──────────────────────────────────
     najstarszy_termin_platnosci: date | None = Field(
         default=None,
         alias="NajstarszyTerminPlatnosci",
@@ -368,17 +358,17 @@ class DebtorListItem(BaseModel):
         description=(
             "Liczba dni od najstarszego terminu płatności do dzisiaj. "
             "NULL jeśli nie ma przeterminowanych. "
-            "Obliczone w CTE (VIEW_kontrahenci.sql:81-91)."
+            "Obliczone w CTE (skw_kontrahenci.sql:81-91)."
         ),
         ge=0,
     )
 
-    # ── Kategoria wieku (VIEW_kontrahenci.sql:216-226) ───────────────────────
+    # ── Kategoria wieku (skw_kontrahenci.sql:216-226) ───────────────────────
     kategoria_wieku: AgeCategory = Field(
         alias="KategoriaWieku",
         description=(
             "Kategoria wiekowa długu — do sortowania i kolorowania w UI. "
-            "Obliczone w widoku przez CASE (VIEW_kontrahenci.sql:216-226)."
+            "Obliczone w widoku przez CASE (skw_kontrahenci.sql:216-226)."
         ),
     )
 
@@ -389,12 +379,12 @@ class DebtorListItem(BaseModel):
 
 class InvoiceItem(BaseModel):
     """
-    Pojedyncza faktura dłużnika — mapuje VIEW_rozrachunki_faktur.
+    Pojedyncza faktura dłużnika — mapuje skw_rozrachunki_faktur.
 
     Używany w InvoiceListResponse = BaseResponse[PaginatedData[InvoiceItem]]
     oraz w DebtorDetail.invoices (lista ostatnich 10 faktur).
 
-    Mapuje kolumny z dbo.VIEW_rozrachunki_faktur (VIEW_rozrachunki_faktur.sql:64-164).
+    Mapuje kolumny z dbo.skw_rozrachunki_faktur (skw_rozrachunki_faktur.sql:64-164).
     """
 
     model_config = ConfigDict(
@@ -402,7 +392,7 @@ class InvoiceItem(BaseModel):
         from_attributes=True,
     )
 
-    # ── Dane faktury (VIEW_rozrachunki_faktur.sql:72-84) ─────────────────────
+    # ── Dane faktury (skw_rozrachunki_faktur.sql:72-84) ─────────────────────
     numer_faktury: str = Field(
         alias="NumerFaktury",
         description="Numer faktury z WAPRO (NR_DOK). Przykład: 'FV/2024/01/0001'.",
@@ -412,18 +402,18 @@ class InvoiceItem(BaseModel):
         alias="DataWystawienia",
         description=(
             "Data wystawienia faktury. "
-            "Skonwertowane z INT w widoku (DATEADD, VIEW_rozrachunki_faktur.sql:77-79)."
+            "Skonwertowane z INT w widoku (DATEADD, skw_rozrachunki_faktur.sql:77-79)."
         ),
     )
     termin_platnosci: date = Field(
         alias="TerminPlatnosci",
         description=(
             "Termin płatności faktury. "
-            "Skonwertowane z INT w widoku (VIEW_rozrachunki_faktur.sql:82-84)."
+            "Skonwertowane z INT w widoku (skw_rozrachunki_faktur.sql:82-84)."
         ),
     )
 
-    # ── Kwoty (VIEW_rozrachunki_faktur.sql:88-95) ────────────────────────────
+    # ── Kwoty (skw_rozrachunki_faktur.sql:88-95) ────────────────────────────
     kwota_brutto: Decimal = Field(
         alias="KwotaBrutto",
         description="Kwota brutto faktury (pełna wartość z WAPRO.KWOTA).",
@@ -445,14 +435,14 @@ class InvoiceItem(BaseModel):
         alias="KwotaZaplacona",
         description=(
             "Kwota już zapłacona. "
-            "Obliczone w widoku: KWOTA - POZOSTALO (VIEW_rozrachunki_faktur.sql:95)."
+            "Obliczone w widoku: KWOTA - POZOSTALO (skw_rozrachunki_faktur.sql:95)."
         ),
         ge=0,
         decimal_places=2,
         examples=[0.00, 500.00],
     )
 
-    # ── Status (VIEW_rozrachunki_faktur.sql:99-124) ──────────────────────────
+    # ── Status (skw_rozrachunki_faktur.sql:99-124) ──────────────────────────
     czy_zaplacona: bool = Field(
         alias="CzyZaplacona",
         description="Czy faktura zapłacona (CZY_ROZLICZONY BIT z WAPRO). True=zapłacona.",
@@ -461,7 +451,7 @@ class InvoiceItem(BaseModel):
         alias="CzyPrzeterminowana",
         description=(
             "Czy faktura przeterminowana (termin < dzisiaj AND nie zapłacona). "
-            "Obliczone w widoku (VIEW_rozrachunki_faktur.sql:103-111)."
+            "Obliczone w widoku (skw_rozrachunki_faktur.sql:103-111)."
         ),
     )
     dni_przeterminowania: int | None = Field(
@@ -470,12 +460,12 @@ class InvoiceItem(BaseModel):
         description=(
             "Liczba dni przeterminowania. "
             "NULL jeśli nie przeterminowana lub zapłacona. "
-            "Obliczone w widoku (VIEW_rozrachunki_faktur.sql:114-124)."
+            "Obliczone w widoku (skw_rozrachunki_faktur.sql:114-124)."
         ),
         ge=0,
     )
 
-    # ── Metadane (VIEW_rozrachunki_faktur.sql:128-135) ───────────────────────
+    # ── Metadane (skw_rozrachunki_faktur.sql:128-135) ───────────────────────
     forma_platnosci: str | None = Field(
         default=None,
         alias="FormaPlatnosci",
@@ -487,12 +477,12 @@ class InvoiceItem(BaseModel):
         max_length=50,
     )
 
-    # ── Kategoria wieku (VIEW_rozrachunki_faktur.sql:139-164) ────────────────
+    # ── Kategoria wieku (skw_rozrachunki_faktur.sql:139-164) ────────────────
     kategoria_wieku: InvoiceAgeCategory = Field(
         alias="KategoriaWieku",
         description=(
             "Kategoria wiekowa faktury — do sortowania i kolorowania. "
-            "Obliczone w widoku przez CASE (VIEW_rozrachunki_faktur.sql:139-164). "
+            "Obliczone w widoku przez CASE (skw_rozrachunki_faktur.sql:139-164). "
             "Wartość 'zaplacona' jeśli CZY_ROZLICZONY=1."
         ),
     )
@@ -504,7 +494,7 @@ class InvoiceItem(BaseModel):
 
 class DebtorDetail(BaseModel):
     """
-    Pełne dane dłużnika — wszystkie pola z VIEW_kontrahenci + lista ostatnich faktur.
+    Pełne dane dłużnika — wszystkie pola z skw_kontrahenci + lista ostatnich faktur.
 
     Używany w DebtorDetailResponse = BaseResponse[DebtorDetail].
 
@@ -543,7 +533,7 @@ class DebtorDetail(BaseModel):
     )
     kategoria_wieku: AgeCategory = Field(alias="KategoriaWieku")
 
-    # ── Adres (VIEW_kontrahenci.sql:199-201) ─────────────────────────────────
+    # ── Adres (skw_kontrahenci.sql:199-201) ─────────────────────────────────
     ulica: str | None = Field(
         default=None,
         alias="Ulica",
@@ -563,12 +553,12 @@ class DebtorDetail(BaseModel):
         max_length=100,
     )
 
-    # ── Dane dodatkowe (z innych źródeł, nie z VIEW_kontrahenci) ─────────────
+    # ── Dane dodatkowe (z innych źródeł, nie z skw_kontrahenci) ─────────────
     invoices: list[InvoiceItem] = Field(
         default_factory=list,
         description=(
             "Lista ostatnich faktur dłużnika (max 10). "
-            "Pobierane z VIEW_rozrachunki_faktur przez debtor_service."
+            "Pobierane z skw_rozrachunki_faktur przez debtor_service."
         ),
     )
     comments_count: int = Field(

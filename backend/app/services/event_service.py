@@ -1,7 +1,6 @@
 """
 Serwis Eventów / SSE — System Windykacja
 ==========================================
-Krok 14 / Faza 3 — services/event_service.py
 
 Odpowiedzialność:
     - Publikacja eventów do Redis Pub/Sub (dla SSE endpoint)
@@ -28,10 +27,6 @@ Decyzje projektowe:
     - Każdy event ma: type, data, timestamp, user_id (kto wygenerował), event_id (UUID4)
     - event_id pozwala na deduplicację po stronie SSE klienta
 
-Ścieżka docelowa: backend/app/services/event_service.py
-Autor: System Windykacja — Faza 3 Krok 14
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations

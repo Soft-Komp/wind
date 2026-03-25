@@ -1,6 +1,4 @@
 ﻿"""
-api/users.py
-═══════════════════════════════════════════════════════════════════════════════
 Router zarządzania użytkownikami — System Windykacja.
 
 9 endpointów:
@@ -24,9 +22,6 @@ Wzorce:
 Format odpowiedzi: BaseResponse[T] z schemas/common.py
 Serwis: services/user_service.py (CRUD + lock/unlock + dwuetapowy DELETE)
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 import logging

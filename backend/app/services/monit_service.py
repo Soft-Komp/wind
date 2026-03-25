@@ -1,7 +1,6 @@
 """
 Serwis Monitów — System Windykacja
 =====================================
-Krok 16 / Faza 3 — services/monit_service.py
 
 Odpowiedzialność:
     - Masowa wysyłka monitów (email/sms/print) do dłużników
@@ -24,7 +23,7 @@ Architektura wysyłki (NIE implementujemy tu faktycznej wysyłki):
     └──────────────────────────────────────────────┘
               ↓ (asynchronicznie, po kolejkowaniu)
     ┌──────────────────────────────────────────────┐
-    │  ARQ Worker (Faza 6)                         │
+    │  ARQ Worker                         │
     │  - Pobiera task z kolejki                    │
     │  - Faktyczna wysyłka (email/sms gateway)     │
     │  - UPDATE MonitHistory.Status = "sent"       │
@@ -47,10 +46,6 @@ Decyzje projektowe:
     - Retry: ręczne (endpoint /retry/{id}) — nie auto-retry w serwisie
     - Status update (webhook): idempotentny — ten sam status nie zmienia nic
 
-Ścieżka docelowa: backend/app/services/monit_service.py
-Autor: System Windykacja — Faza 3 Krok 16
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations
@@ -805,7 +800,7 @@ async def send_bulk(
         5. AuditLog
         6. SSE event: task_completed (natychmiastowe powiadomienie)
 
-    ⚠️  Faktyczna wysyłka następuje w ARQ worker (Faza 6).
+    ⚠️  Faktyczna wysyłka następuje w ARQ worker .
     Ta funkcja tylko KOLEJKUJE i tworzy pending rekordy.
 
     Args:
@@ -1858,7 +1853,7 @@ async def get_queue_status(
         "arq": {
             "queued":        arq_queued,
             "worker_online": worker_online,
-            "note":          "Worker ARQ nie jest jeszcze uruchomiony (Faza 6)",
+            "note":          "Worker ARQ nie jest jeszcze uruchomiony ",
         },
         "db_summary": db_summary,
         "checked_at":  now.isoformat(),
@@ -2074,8 +2069,8 @@ async def generate_pdf_preview(
     story.append(Spacer(1, 0.5 * cm))
 
     # ── Krok 2.5: Pobierz numery faktur z WAPRO dla invoice_list ─────────────
-    # Klucz "invoice_numbers" NIE istnieje w dict z VIEW_kontrahenci —
-    # trzeba osobno odpytać VIEW_rozrachunki_faktur.
+    # Klucz "invoice_numbers" NIE istnieje w dict z skw_kontrahenci —
+    # trzeba osobno odpytać skw_rozrachunki_faktur.
     invoice_list_str = "—"
     try:
         from app.db.wapro import get_invoices_for_debtor, InvoiceFilterParams

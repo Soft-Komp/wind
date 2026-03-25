@@ -1,10 +1,6 @@
 -- =============================================================================
 -- DODATEK DO SEEDA: Uprawnienia szablonów (templates)
 -- =============================================================================
--- Plik:    dodaj do database/seeds/02_permissions.sql
---          lub uruchom ręcznie w SSMS
--- Wersja:  1.0.0
--- Data:    2026-03-11
 --
 -- Kategoria "templates" — 5 uprawnień.
 -- Po wykonaniu łączna liczba uprawnień: 83 + 5 = 88.
@@ -146,18 +142,3 @@ WHERE  p.[Category] = N'templates'
 ORDER BY r.[RoleName], p.[PermissionName];
 GO
 
-
--- =============================================================================
--- DODATEK DO router.py
--- =============================================================================
--- Dodaj PRZED rejestracją EVENTS (pozycja 10) lub na końcu listy:
---
--- # 12. TEMPLATES
--- _register_router(
---     api_router,
---     module_path="app.api.templates",
---     attr="router",
---     prefix="/templates",
---     tags=["Szablony"],
--- )
--- =============================================================================

@@ -1,6 +1,4 @@
 """
-api/debtors.py
-═══════════════════════════════════════════════════════════════════════════════
 Router dłużników — System Windykacja.
 
 10 endpointów:
@@ -27,9 +25,6 @@ Serwisy:
 ARQ: endpointy send i send-bulk zwracają HTTP 202 Accepted.
 PDF: StreamingResponse z Content-Type: application/pdf.
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

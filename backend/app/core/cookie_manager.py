@@ -39,8 +39,6 @@ SameSite=Strict — uzasadnienie dla tej architektury:
         W .env.docker ustaw COOKIE_SECURE=false dla lokalnego dewelopmentu.
         W .env produkcyjnym: COOKIE_SECURE=true (obowiązkowe).
 
-Autor: System Windykacja Backend
-Wersja: 2.0.0 (cookie-only, SameSite=Strict)
 """
 
 from __future__ import annotations

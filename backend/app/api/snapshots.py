@@ -1,6 +1,4 @@
 """
-api/snapshots.py
-═══════════════════════════════════════════════════════════════════════════════
 Router snapshotów — System Windykacja.
 
 Prefix: /api/v1/snapshots  (zarejestrowany w api/router.py)
@@ -26,9 +24,6 @@ Wzorce:
   - Walidacja tabel: max 50 na raz, lista wykluczeń w serwisie
   - extra='forbid' na schematach wejściowych
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-27
 """
 from __future__ import annotations
 

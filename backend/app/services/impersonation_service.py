@@ -1,7 +1,6 @@
 """
 Serwis Impersonacji — System Windykacja
 =========================================
-Krok 7 / Faza 3 — services/impersonation_service.py
 
 Odpowiedzialność:
     - Impersonacja użytkownika przez admina (wymaga uprawnienia auth.impersonate)
@@ -27,10 +26,6 @@ Zależności:
     - services/config_service.py
     - services/auth_service.py (create_access_token)
 
-Ścieżka docelowa: backend/app/services/impersonation_service.py
-Autor: System Windykacja — Faza 3 Krok 7
-Wersja: 1.0.0
-Data: 2026-02-18
 """
 
 from __future__ import annotations

@@ -1,11 +1,9 @@
 """
-backend/app/db/wapro.py
-========================
 Warstwa dostępu do danych WAPRO przez pyodbc + widoki SQL.
 
 Architektura:
     - TYLKO ODCZYT — żaden endpoint NIE pisze do tabel WAPRO
-    - Dostęp wyłącznie przez widoki: dbo.VIEW_kontrahenci, dbo.VIEW_rozrachunki_faktur
+    - Dostęp wyłącznie przez widoki: dbo.skw_kontrahenci, dbo.skw_rozrachunki_faktur
     - pyodbc z thread-pool executor (asyncio-friendly)
     - Connection pooling z limitem i timeout
     - Retry z exponential backoff dla transient errors
@@ -13,17 +11,14 @@ Architektura:
     - Sanityzacja i walidacja wszystkich parametrów wejściowych
 
 Widoki (schemat dbo):
-    dbo.VIEW_kontrahenci         — lista/szczegóły dłużników (1 wiersz/kontrahent)
-    dbo.VIEW_rozrachunki_faktur  — faktury per kontrahent (1 wiersz/faktura)
+    dbo.skw_kontrahenci         — lista/szczegóły dłużników (1 wiersz/kontrahent)
+    dbo.skw_rozrachunki_faktur  — faktury per kontrahent (1 wiersz/faktura)
 
 Konwencja dat WAPRO:
     DATA_DOK i TERMIN_PLATNOSCI to INT (dni od 1899-12-30).
     Konwersja w widokach SQL: CAST(DATEADD(DAY, kolumna, '18991230') AS DATE)
     W Python: daty przychodzą już jako date/datetime (po konwersji w widoku).
 
-Wersja: 1.0.0
-Data:   2026-02-18
-Autor:  System Windykacja
 """
 from __future__ import annotations
 
@@ -54,8 +49,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Stałe — nazwy widoków (NIGDY nie zmieniać bez migracji Alembic)
 # ---------------------------------------------------------------------------
-VIEW_KONTRAHENCI: str = "dbo.skw_kontrahenci"
-VIEW_ROZRACHUNKI_FAKTUR: str = "dbo.skw_rozrachunki_faktur"
+SKW_KONTRAHENCI: str = "dbo.skw_kontrahenci"
+SKW_ROZRACHUNKI_FAKTUR: str = "dbo.skw_rozrachunki_faktur"
 
 # Maksymalna długość parametrów tekstowych (ochrona przed payload injection)
 _MAX_SEARCH_LEN: int = 200
@@ -72,7 +67,7 @@ _DEFAULT_POOL_TIMEOUT: int = 30  # sekundy na oczekiwanie na wolne połączenie
 # WAPRO transient error codes (08001=connection fail, 08S01=communication link)
 _TRANSIENT_SQL_STATES: frozenset[str] = frozenset({"08001", "08S01", "HYT00", "HY000"})
 
-# Kolumny SELECT dla VIEW_kontrahenci — jawna lista (nigdy SELECT *)
+# Kolumny SELECT dla skw_kontrahenci — jawna lista (nigdy SELECT *)
 _COLS_KONTRAHENCI = """
     ID_KONTRAHENTA,
     NazwaKontrahenta,
@@ -88,7 +83,7 @@ _COLS_KONTRAHENCI = """
     OstatniMonitRozrachunku
 """
 
-# Kolumny SELECT dla VIEW_rozrachunki_faktur — jawna lista
+# Kolumny SELECT dla skw_rozrachunki_faktur — jawna lista
 _COLS_ROZRACHUNKI = """
     ID_ROZRACHUNKU,
     ID_KONTRAHENTA,
@@ -694,7 +689,7 @@ async def _run_in_executor(
 
 
 # ---------------------------------------------------------------------------
-# ZAPYTANIE 1: Lista dłużników (VIEW_kontrahenci)
+# ZAPYTANIE 1: Lista dłużników (skw_kontrahenci)
 # ---------------------------------------------------------------------------
 
 def _build_debtors_query(
@@ -780,7 +775,7 @@ def _build_debtors_query(
 
     sql = f"""
         SELECT {_COLS_KONTRAHENCI}
-        FROM {VIEW_KONTRAHENCI}
+        FROM {SKW_KONTRAHENCI}
         {where_clause}
         {order_clause}
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
@@ -805,7 +800,7 @@ def _build_debtors_count_query(
         SELECT COUNT(*) AS TotalCount
         FROM (
             SELECT ID_KONTRAHENTA
-            FROM {VIEW_KONTRAHENCI}
+            FROM {SKW_KONTRAHENCI}
             {_extract_where_clause(data_sql)}
         ) AS cnt_sub
     """
@@ -833,7 +828,7 @@ async def get_debtors(
     include_total_count: bool = True,
 ) -> QueryResult:
     """
-    Pobiera listę dłużników z VIEW_kontrahenci z filtrowaniem i paginacją.
+    Pobiera listę dłużników z skw_kontrahenci z filtrowaniem i paginacją.
 
     Args:
         params:              Parametry filtrowania (już zwalidowane)
@@ -918,12 +913,12 @@ async def get_debtors(
 
 
 # ---------------------------------------------------------------------------
-# ZAPYTANIE 2: Szczegóły jednego dłużnika (VIEW_kontrahenci)
+# ZAPYTANIE 2: Szczegóły jednego dłużnika (skw_kontrahenci)
 # ---------------------------------------------------------------------------
 
 async def get_debtor_by_id(kontrahent_id: int) -> QueryResult:
     """
-    Pobiera pełne dane jednego kontrahenta z VIEW_kontrahenci.
+    Pobiera pełne dane jednego kontrahenta z skw_kontrahenci.
 
     Args:
         kontrahent_id: ID_KONTRAHENTA (walidowany)
@@ -954,7 +949,7 @@ async def get_debtor_by_id(kontrahent_id: int) -> QueryResult:
     try:
         sql = f"""
             SELECT {_COLS_KONTRAHENCI}
-            FROM {VIEW_KONTRAHENCI}
+            FROM {SKW_KONTRAHENCI}
             WHERE ID_KONTRAHENTA = ?
         """
         rows_raw = await _run_in_executor(
@@ -989,7 +984,7 @@ async def get_debtor_by_id(kontrahent_id: int) -> QueryResult:
 
 async def get_debtors_stats() -> QueryResult:
     """
-    Pobiera zagregowane statystyki dłużników z VIEW_kontrahenci.
+    Pobiera zagregowane statystyki dłużników z skw_kontrahenci.
 
     Używane przez GET /api/v1/debtors/stats.
 
@@ -1022,7 +1017,7 @@ async def get_debtors_stats() -> QueryResult:
                 COALESCE(MAX(DniPrzeterminowania), 0)                AS max_overdue_days,
                 COUNT(CASE WHEN Email   IS NOT NULL THEN 1 END)      AS debtors_with_email,
                 COUNT(CASE WHEN Telefon IS NOT NULL THEN 1 END)      AS debtors_with_phone
-            FROM {VIEW_KONTRAHENCI}
+            FROM {SKW_KONTRAHENCI}
         """
 
         rows = await _run_in_executor(
@@ -1056,7 +1051,7 @@ async def get_debtors_stats() -> QueryResult:
     return result
 
 # ---------------------------------------------------------------------------
-# ZAPYTANIE 3: Faktury kontrahenta (VIEW_rozrachunki_faktur)
+# ZAPYTANIE 3: Faktury kontrahenta (skw_rozrachunki_faktur)
 # ---------------------------------------------------------------------------
 
 def _build_invoices_query(
@@ -1080,7 +1075,7 @@ def _build_invoices_query(
 
     sql = f"""
         SELECT {_COLS_ROZRACHUNKI}
-        FROM {VIEW_ROZRACHUNKI_FAKTUR}
+        FROM {SKW_ROZRACHUNKI_FAKTUR}
         {where_clause}
         {order_clause}
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
@@ -1091,7 +1086,7 @@ def _build_invoices_query(
 
 async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
     """
-    Pobiera faktury kontrahenta z VIEW_rozrachunki_faktur.
+    Pobiera faktury kontrahenta z skw_rozrachunki_faktur.
 
     Args:
         params: InvoiceFilterParams (już zwalidowane)
@@ -1124,7 +1119,7 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
 
         count_sql = f"""
             SELECT COUNT(*) AS TotalCount
-            FROM {VIEW_ROZRACHUNKI_FAKTUR}
+            FROM {SKW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
             {' AND rozliczony <> 2' if not params.include_paid else ''}
             {'AND DniPo >= ' + str(params.min_days_overdue) if params.min_days_overdue > 0 else ''}
@@ -1221,7 +1216,7 @@ async def validate_kontrahent_ids(
     placeholders = ", ".join("?" * len(validated_ids))
     sql = f"""
         SELECT ID_KONTRAHENTA
-        FROM {VIEW_KONTRAHENCI}
+        FROM {SKW_KONTRAHENCI}
         WHERE ID_KONTRAHENTA IN ({placeholders})
     """
 
@@ -1301,8 +1296,8 @@ async def ping() -> dict[str, Any]:
             "server_time": server_time.isoformat() if server_time else None,
             "pool": pool_stats,
             "views": {
-                "VIEW_kontrahenci": VIEW_KONTRAHENCI,
-                "VIEW_rozrachunki_faktur": VIEW_ROZRACHUNKI_FAKTUR,
+                "skw_kontrahenci": SKW_KONTRAHENCI,
+                "skw_rozrachunki_faktur": SKW_ROZRACHUNKI_FAKTUR,
             },
         }
 
@@ -1370,7 +1365,7 @@ async def get_kontrahent_names_batch(
     placeholders = ", ".join("?" * len(unique_ids))
     sql = f"""
         SELECT ID_KONTRAHENTA, NazwaKontrahenta
-        FROM {VIEW_KONTRAHENCI}
+        FROM {SKW_KONTRAHENCI}
         WHERE ID_KONTRAHENTA IN ({placeholders})
     """
     params = tuple(unique_ids)
@@ -1447,8 +1442,8 @@ __all__ = [
     "validate_kontrahent_ids",
     "ping",
     # Stałe — nazwy widoków (do referencji w serwisach)
-    "VIEW_KONTRAHENCI",
-    "VIEW_ROZRACHUNKI_FAKTUR",
+    "skw_KONTRAHENCI",
+    "skw_ROZRACHUNKI_FAKTUR",
     "get_debtors_stats",
     "get_kontrahent_names_batch",
     # Nowe kolumny w widokach — stałe do referencji

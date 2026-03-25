@@ -1,7 +1,6 @@
 """
 Serwis Dłużników — System Windykacja
 ======================================
-Krok 11 / Faza 3 — services/debtor_service.py
 
 Odpowiedzialność:
     - Warstwa biznesowa nad db/wapro.py (WAPRO read-only via pyodbc)
@@ -39,11 +38,6 @@ Zależności:
     - db/wapro.py (WaproConnectionPool)
     - services/audit_service.py
     - db/models/monit_history.py (SQLAlchemy dbo_ext)
-
-Ścieżka docelowa: backend/app/services/debtor_service.py
-Autor: System Windykacja — Faza 3 Krok 11
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations
@@ -557,7 +551,7 @@ async def get_by_id(
     Pobiera szczegóły dłużnika wraz z historią monitów.
 
     Łączy dane z dwóch źródeł:
-        1. WAPRO (dbo.VIEW_kontrahenci + faktury) → dane finansowe
+        1. WAPRO (dbo.skw_kontrahenci + faktury) → dane finansowe
         2. dbo_ext.MonitHistory (SQLAlchemy) → historia wysłanych monitów
 
     Cache: debtor:{debtor_id} (TTL 120s)
@@ -694,7 +688,7 @@ async def get_invoices(
     """
     Pobiera faktury dłużnika z WAPRO (z cache Redis).
 
-    Faktury pobierane z dbo.VIEW_rozrachunki_faktur.
+    Faktury pobierane z dbo.skw_rozrachunki_faktur.
     Opcjonalny filtr po statusie płatności (paid=True/False/None=wszystkie).
 
     Cache: debtor:{debtor_id}:invoices:{page} (TTL 120s)

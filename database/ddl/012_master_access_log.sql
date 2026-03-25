@@ -12,8 +12,6 @@
 --
 -- Powiązania:
 --   → skw_Users.TargetUserID (FK SET NULL — log zostaje po usunięciu usera)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

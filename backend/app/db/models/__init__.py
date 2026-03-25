@@ -1,6 +1,4 @@
 # =============================================================================
-# backend/app/db/models/__init__.py
-# =============================================================================
 # Cel:
 #   Centralny punkt importu wszystkich modeli SQLAlchemy.
 #   Alembic autogenerate MUSI widzieć każdy model przed generowaniem migracji —
@@ -18,7 +16,6 @@
 #   - Kolejność importów ≠ kolejność tworzenia tabel (FK rozwiązuje Alembic)
 #     ale poprawna kolejność eliminuje problemy z circular imports
 #
-# Wersja: 1.0.0 | Data: 2026-02-17 | Faza: 0 — naprawa B5/zadanie 0.3
 # =============================================================================
 
 from __future__ import annotations

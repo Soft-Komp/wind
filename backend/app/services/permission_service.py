@@ -1,7 +1,6 @@
 """
 Serwis Uprawnień — System Windykacja
 ======================================
-Krok 10 / Faza 3 — services/permission_service.py
 
 Odpowiedzialność:
     - Listowanie uprawnień (pogrupowane po Category)
@@ -26,10 +25,6 @@ Decyzje projektowe:
 Zależności:
     - services/audit_service.py (tylko przy mutacjach)
 
-Ścieżka docelowa: backend/app/services/permission_service.py
-Autor: System Windykacja — Faza 3 Krok 10
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations

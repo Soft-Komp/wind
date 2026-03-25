@@ -15,8 +15,6 @@
 --   ← skw_MonitHistory.ID_USER              (FK SET NULL)
 --   ← skw_MasterAccessLog.TargetUserID      (FK SET NULL)
 --   ← skw_Comments.UzytkownikID             (FK RESTRICT)
---
--- Wersja: 2.0.0 | Data: 2026-03-02
 -- ============================================================
 
 USE [WAPRO];

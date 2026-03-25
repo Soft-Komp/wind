@@ -34,9 +34,6 @@ Kolumny tabeli dbo_ext.AuditLog:
     Success         BIT             — 1=OK, 0=błąd
     ErrorMessage    NVARCHAR(500)   — komunikat błędu jeśli Success=0
 
-Wersja: 1.0.0
-Data:   2026-02-18
-Autor:  System Windykacja
 """
 from __future__ import annotations
 

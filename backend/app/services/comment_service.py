@@ -1,7 +1,6 @@
 """
 Serwis Komentarzy — System Windykacja
 =======================================
-Krok 15 / Faza 3 — services/comment_service.py
 
 Odpowiedzialność:
     - Pełny CRUD komentarzy do dłużników (tabela dbo_ext.Comments)
@@ -28,10 +27,6 @@ Decyzje projektowe:
     - Cache Redis: brak (komentarze nie są gorącą ścieżką, częste mutacje, krótkie TTL nie opłacalne)
     - Token DELETE: JWT (scope=confirm_delete, entity_type=Comment, TTL z delete_token.ttl_seconds)
 
-Ścieżka docelowa: backend/app/services/comment_service.py
-Autor: System Windykacja — Faza 3 Krok 15
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations

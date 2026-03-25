@@ -1,7 +1,6 @@
 """
 Serwis Snapshotów — System Windykacja
 =======================================
-Krok 12 / Faza 3 — services/snapshot_service.py
 
 Odpowiedzialność:
     - Tworzenie snapshotów (dump) tabel dbo_ext do plików JSON.gz
@@ -37,11 +36,6 @@ Zależności:
     - services/audit_service.py
     - services/event_service.py
     - services/config_service.py (retention_days)
-
-Ścieżka docelowa: backend/app/services/snapshot_service.py
-Autor: System Windykacja — Faza 3 Krok 12
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations

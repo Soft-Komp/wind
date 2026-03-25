@@ -1,7 +1,6 @@
 """
 Serwis Użytkowników — System Windykacja
 =========================================
-Krok 8 / Faza 3 — services/user_service.py
 
 Odpowiedzialność:
     - Pełny CRUD użytkowników (get_list, get_by_id, create, update, delete)
@@ -26,10 +25,6 @@ Zależności:
     - services/audit_service.py
     - services/config_service.py
 
-Ścieżka docelowa: backend/app/services/user_service.py
-Autor: System Windykacja — Faza 3 Krok 8
-Wersja: 1.0.0
-Data: 2026-02-18
 """
 
 from __future__ import annotations

@@ -1,6 +1,4 @@
 ﻿"""
-main.py
-═══════════════════════════════════════════════════════════════════════════════
 Punkt wejścia aplikacji FastAPI — System Windykacja Backend.
 
 Odpowiedzialności tego pliku:
@@ -19,10 +17,6 @@ Wzorce:
   • Logi → JSON Lines (orjson) do pliku logs/app_YYYY-MM-DD.jsonl + stderr
   • datetime → datetime.now(timezone.utc) — NIGDY utcnow()
 
-Ścieżka docelowa: backend/app/main.py
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 
@@ -49,6 +43,7 @@ from app.db.session import close_db_engine, get_async_session, get_redis_client
 from app.db.wapro import initialize_pool as wapro_initialize_pool
 from app.db.wapro import shutdown_pool as wapro_shutdown_pool
 from app.core.arq_pool import init_arq_pool, close_arq_pool
+from app.core.integrity_watchdog import run_watchdog_loop, request_shutdown
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logger modułu (skonfigurowany przez setup_logging w lifespan)
@@ -823,6 +818,20 @@ async def lifespan(app: FastAPI):
             }).decode()
         )
 
+# ── KROK 9: Integrity Watchdog (background task) ──────────────────────────
+    watchdog_task = asyncio.create_task(
+        run_watchdog_loop(db_factory=get_async_session),
+        name="integrity_watchdog",
+    )
+    logger.info(
+        orjson.dumps({
+            "event": "startup_watchdog_ok",
+            "interval_s": 900,
+            "grace_period_s": 60,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
     yield
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -839,6 +848,30 @@ async def lifespan(app: FastAPI):
     )
 
     try:
+        # ── Zatrzymaj Integrity Watchdog ──────────────────────────────────────────
+        try:
+            request_shutdown()
+            if not watchdog_task.done():
+                watchdog_task.cancel()
+                try:
+                    await asyncio.wait_for(watchdog_task, timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+            logger.info(
+                orjson.dumps({
+                    "event": "app_shutdown_watchdog_stopped",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
+        except Exception as exc:
+            logger.error(
+                orjson.dumps({
+                    "event": "app_shutdown_watchdog_error",
+                    "error": str(exc),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
+
         # ── Zamknij WAPRO pool ────────────────────────────────────────────────────
         try:
             await close_arq_pool()

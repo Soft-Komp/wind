@@ -21,7 +21,6 @@ Szczegóły implementacji:
     • Thread-safe: asyncio.Lock chroni aktualizacje cache
     • Obsługa wielu origins jako CSV (np. "http://a.com,http://b.com")
 
-Wersja: 1.0.0 | Data: 2026-02-20 | Python: 3.12+
 """
 
 from __future__ import annotations

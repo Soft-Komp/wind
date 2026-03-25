@@ -1,6 +1,4 @@
 """
-api/router.py
-═══════════════════════════════════════════════════════════════════════════════
 Centralny agregator routerów API — System Windykacja.
 
 Wszystkie sub-routery rejestrowane tutaj z prefixem /api/v1/.
@@ -19,12 +17,6 @@ Rejestracja w kolejności priorytetów:
   10. events       — SSE Server-Sent Events
   11. system       — konfiguracja, health, audit log
 
-AUDIT R10: roles_permissions jako OSOBNY prefix /roles-permissions
-(nie pod /roles/{id}/permissions jak w v1.4)
-
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 
@@ -103,7 +95,7 @@ _register_router(
     tags=["Role — Uprawnienia"],
 )
 
-# 4. ROLES-PERMISSIONS (★ NOWY — AUDIT R10: osobny prefix)
+# 4. ROLES-PERMISSIONS 
 _register_router(
     api_router,
     module_path="app.api.roles_permissions",
@@ -130,7 +122,7 @@ _register_router(
     tags=["Dłużnicy"],
 )
 
-# 7. MONITS (★ NOWY — AUDIT R7)
+# 7. MONITS 
 _register_router(
     api_router,
     module_path="app.api.monits",
@@ -139,7 +131,7 @@ _register_router(
     tags=["Monity"],
 )
 
-# 8. COMMENTS (★ NOWY — AUDIT R7)
+# 8. COMMENTS 
 _register_router(
     api_router,
     module_path="app.api.comments",

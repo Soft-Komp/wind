@@ -1,6 +1,4 @@
 """
-services/template_service.py
-═══════════════════════════════════════════════════════════════════════════════
 Serwis Szablonów — System Windykacja
 
 Odpowiedzialność:
@@ -28,10 +26,6 @@ Decyzje projektowe:
 Zależności:
     - services/audit_service.py
 
-Ścieżka: backend/app/services/template_service.py
-Autor:   System Windykacja
-Wersja:  1.0.0
-Data:    2026-03-11
 """
 
 from __future__ import annotations

@@ -1,6 +1,4 @@
 """
-backend/app/services/config_service.py
-========================================
 Serwis konfiguracji dynamicznej systemu.
 
 Architektura:
@@ -37,9 +35,6 @@ Klucze konfiguracji (z 05_system_config.sql):
     schema_integrity.reaction  — enum: WARN/ALERT/BLOCK
     snapshot.retention_days    — int
 
-Wersja: 1.0.0
-Data:   2026-02-18
-Autor:  System Windykacja
 """
 from __future__ import annotations
 
@@ -1062,7 +1057,6 @@ async def update_multiple(
             f"Zbyt wiele kluczy do aktualizacji: {len(updates)}. Maksimum: 20."
         )
 
-    # Faza 1: Walidacja ALL przed zapisem czegokolwiek
     validation_errors: list[dict[str, str]] = []
     for key, value in updates.items():
         try:
@@ -1076,7 +1070,6 @@ async def update_multiple(
             + "; ".join(f"{e['key']}: {e['error']}" for e in validation_errors)
         )
 
-    # Faza 2: Zapis
     updated_results: list[dict[str, Any]] = []
     failed_results: list[dict[str, Any]] = []
 

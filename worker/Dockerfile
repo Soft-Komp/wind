@@ -56,8 +56,6 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # ── App code ──────────────────────────────────────────────────────────────────
-# -- App code: kopiuj do /app/worker/ zeby importy worker.xxx dzialaly
-# PYTHONPATH=/app -> Python szuka pakietu "worker" pod /app/worker/__init__.py
 RUN mkdir -p /app/worker
 COPY . /app/worker/
 

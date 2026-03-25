@@ -1,6 +1,4 @@
 """
-api/roles.py
-═══════════════════════════════════════════════════════════════════════════════
 Router ról — System Windykacja.
 
 Prefix: /api/v1/roles  (zarejestrowany w api/router.py)
@@ -22,9 +20,6 @@ Serwis: services/role_service.py
   - initiate_delete(), confirm_delete()
   - get_users_with_role()
 
-Autor: System Windykacja
-Wersja: 2.0.0
-Data: 2026-02-27
 """
 from __future__ import annotations
 

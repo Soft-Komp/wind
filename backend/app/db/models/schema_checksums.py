@@ -1,30 +1,6 @@
 # =============================================================================
-# backend/app/db/models/schema_checksums.py
-# =============================================================================
 # Model SQLAlchemy dla tabeli dbo_ext.SchemaChecksums
 #
-# NAPRAWY W TEJ WERSJI (AUDIT_ZGODNOSCI R5):
-#   [R5-a] Dodana kolumna `SchemaName` (NVARCHAR(20)) — NOWA
-#           Przechowuje schemat obiektu: 'dbo' (widoki WAPRO) lub 'dbo_ext' (custom)
-#           Bez tej kolumny nie można rozróżnić widoków dbo.VIEW_* od dbo_ext.*
-#
-#   [R5-b] ObjectType rozszerzony o 'INDEX' — do śledzenia indeksów wydajnościowych
-#           Poprzednia wersja: tylko 'VIEW' | 'PROCEDURE'
-#           Aktualna wersja:   'VIEW' | 'PROCEDURE' | 'INDEX'
-#           Dotyczy: IX_Roz_Kontrahent_Dlugi, IX_Mon_Kontrahent_Historia,
-#                    IX_Roz_Faktura_Kontrahent (AUDIT R9)
-#
-#   [MODERNIZACJA] datetime.utcnow() → datetime.now(timezone.utc)
-#
-# Tabela wg: AUDIT_ZGODNOSCI v1.0 §R5 + TABELE_REFERENCJA v1.0 §12
-# Schemat: dbo_ext
-#
-# KRYTYCZNE: ten model musi być zsynchronizowany z:
-#   - database/ddl/011_schema_checksums.sql (DDL)
-#   - core/schema_integrity.py (SQL weryfikujący sumy kontrolne)
-#   - schemas/schema_checksums.py (Pydantic schema)
-#
-# Wersja: 1.1.0 | Data: 2026-02-17 | Faza: 0 — naprawa R5
 # =============================================================================
 
 from __future__ import annotations
@@ -64,7 +40,7 @@ class SchemaChecksums(Base):
         Niezgodność → CRITICAL log + AuditLog + SystemExit(1) [tryb BLOCK]
 
     Monitorowane obiekty:
-        - schemat dbo:     widoki WAPRO (VIEW_kontrahenci, VIEW_rozrachunki_faktur)
+        - schemat dbo:     widoki WAPRO (skw_kontrahenci, skw_rozrachunki_faktur)
         - schemat dbo_ext: widoki i procedury własne systemu
         - obiekty INDEX:   indeksy wydajnościowe (weryfikowane przez sys.indexes)
 
@@ -73,8 +49,6 @@ class SchemaChecksums(Base):
         - UPDATE tylko dla LastVerifiedAt i Checksum (przy aktualizacji checksumu)
         - Brak DELETE — historię zmian zachowuje AuditLog
         - Uprawnienia DB: app_user ma SELECT + UPDATE LastVerifiedAt
-
-    Wersja modelu: 1.1.0 (dodano SchemaName + INDEX w ObjectType — AUDIT R5)
     """
 
     __tablename__ = "skw_SchemaChecksums"
@@ -101,7 +75,7 @@ class SchemaChecksums(Base):
         String(200),
         nullable=False,
         comment=(
-            "Nazwa obiektu DB: VIEW_kontrahenci, VIEW_rozrachunki_faktur, "
+            "Nazwa obiektu DB: skw_kontrahenci, skw_rozrachunki_faktur, "
             "IX_Roz_Kontrahent_Dlugi itp. "
             "Unikalny razem z SchemaName + ObjectType."
         ),
@@ -120,7 +94,7 @@ class SchemaChecksums(Base):
 
     # ── [R5] NOWA KOLUMNA — SchemaName ────────────────────────────────────────
     # AUDIT_ZGODNOSCI R5: bez tej kolumny nie można odróżnić:
-    #   - dbo.VIEW_kontrahenci   (WAPRO, schemat dbo)
+    #   - dbo.skw_kontrahenci   (WAPRO, schemat dbo)
     #   - dbo_ext.VIEW_*         (własne widoki, schemat dbo_ext)
     # core/schema_integrity.py używa tej kolumny w GROUP BY i WHERE
     schema_name: Mapped[str] = mapped_column(
@@ -130,7 +104,7 @@ class SchemaChecksums(Base):
         server_default=text("'dbo_ext'"),
         comment=(
             "[NOWA v1.1] Schemat obiektu: 'dbo' lub 'dbo_ext'. "
-            "Widoki WAPRO (VIEW_kontrahenci) → 'dbo'. "
+            "Widoki WAPRO (skw_kontrahenci) → 'dbo'. "
             "Obiekty własne → 'dbo_ext'. "
             "Default 'dbo_ext' dla wstecznej kompatybilności z istniejącymi wierszami."
         ),
@@ -203,7 +177,7 @@ class SchemaChecksums(Base):
         """
         Pełna kwalifikowana nazwa obiektu: schemat.nazwa
         Przykłady:
-            dbo.VIEW_kontrahenci
+            dbo.skw_kontrahenci
             dbo_ext.sp_ArchiveRecord
             dbo.IX_Roz_Kontrahent_Dlugi
         Używana w logach i komunikatach błędów schema_integrity.

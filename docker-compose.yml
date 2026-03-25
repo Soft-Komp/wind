@@ -5,7 +5,6 @@
 # MSSQL:  zewnętrzny, sieć lokalna — 192.168.0.53 (NIE w kontenerze)
 # Redis:  kontener lokalny
 # API:    kontener lokalny, port 8000
-# Worker: Faza 6 — ARQ Worker + REST API (port 8001)
 #
 # Uruchomienie:
 #   docker-compose up --build
@@ -116,7 +115,6 @@ services:
 
   # ─────────────────────────────────────────────────────────────────────────
   # WORKER — ARQ background worker + REST API (port 8001)
-  # Faza 6: odkomentowana i uzupełniona wersja z oryginalnego docker-compose
   # ─────────────────────────────────────────────────────────────────────────
   worker:
     build:

@@ -1,7 +1,6 @@
 """
 Serwis Archiwizacji — System Windykacja
 =========================================
-Krok 13 / Faza 3 — services/archive_service.py
 
 Odpowiedzialność:
     - Archiwizacja rekordów bazy danych przed soft-delete (JSON.gz)
@@ -29,10 +28,6 @@ Decyzje projektowe:
     - gzip poziom 6 (dobry kompromis szybkość/kompresja)
     - Błąd archiwizacji → log ERROR + zwróć None (nie blokuje głównej operacji)
 
-Ścieżka docelowa: backend/app/services/archive_service.py
-Autor: System Windykacja — Faza 3 Krok 13
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations
@@ -394,7 +389,7 @@ def archive_dict(
     Wariant dla danych które nie przychodzą z SQLAlchemy ORM.
 
     Args:
-        table_name:     Nazwa tabeli (np. "dbo.VIEW_kontrahenci").
+        table_name:     Nazwa tabeli (np. "dbo.skw_kontrahenci").
         record_id:      ID rekordu (do nazwy pliku).
         data:           Słownik danych do archiwizacji.
         archive_type:   Typ archiwizacji.

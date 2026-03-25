@@ -1,6 +1,4 @@
 """
-api/events.py
-═══════════════════════════════════════════════════════════════════════════════
 Router SSE (Server-Sent Events) — System Windykacja.
 
 2 endpointy [SSE]:
@@ -27,9 +25,6 @@ EventSource (frontend):
   });
   es.onmessage = (e) => console.log(JSON.parse(e.data));
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-20
 """
 from __future__ import annotations
 

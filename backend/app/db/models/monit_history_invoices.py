@@ -13,7 +13,6 @@
 #
 # NIE używany przez wapro.py — ten odczytuje dane przez pyodbc z widoków.
 #
-# Wersja: 1.0.0 | Data: 2026-03-23
 # =============================================================================
 
 from __future__ import annotations

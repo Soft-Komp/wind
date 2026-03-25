@@ -1,7 +1,6 @@
 """
 Serwis Ról — System Windykacja
 ================================
-Krok 9 / Faza 3 — services/role_service.py
 
 Odpowiedzialność:
     - Pełny CRUD ról (get_list, get_by_id, create, update, delete)
@@ -28,10 +27,6 @@ Zależności:
     - services/audit_service.py
     - services/config_service.py (delete token TTL)
 
-Ścieżka docelowa: backend/app/services/role_service.py
-Autor: System Windykacja — Faza 3 Krok 9
-Wersja: 1.0.0
-Data: 2026-02-19
 """
 
 from __future__ import annotations
@@ -439,9 +434,6 @@ async def _invalidate_user_permission_caches(
 async def _publish_permissions_updated_event(redis: Redis, role_id: int) -> None:
     """
     Publikuje SSE event permissions_updated do kanału admins.
-
-    Stub przed zaimplementowaniem event_service (Porcja B).
-    Wiadomość jest zgodna z formatem oczekiwanym przez SSE endpoint.
 
     Args:
         redis:   Klient Redis.

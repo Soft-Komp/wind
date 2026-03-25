@@ -1,10 +1,6 @@
 -- =============================================================================
 -- SEED 02 — Permissions (83 uprawnienia w 12 kategoriach)
 -- =============================================================================
--- Plik:    database/seeds/02_permissions.sql
--- Wersja:  1.0.0
--- Data:    2026-02-18
--- Zgodny:  USTALENIA_PROJEKTU v1.6 §11 (pełna lista 83 uprawnień)
 --
 -- IDEMPOTENTNY — MERGE INSERT only.
 -- Nie nadpisuje Description ani IsActive jeśli uprawnienie już istnieje.
@@ -167,7 +163,7 @@ BEGIN TRY
              N'Szczegóły dłużnika (adres, NIP)',
              N'debtors'),
             (N'debtors.view_invoices',
-             N'Faktury dłużnika (VIEW_rozrachunki_faktur)',
+             N'Faktury dłużnika (skw_rozrachunki_faktur)',
              N'debtors'),
             (N'debtors.view_contact_data',
              N'Dane kontaktowe dłużnika (email, telefon)',

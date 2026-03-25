@@ -1,6 +1,4 @@
 """
-api/roles_permissions.py
-═══════════════════════════════════════════════════════════════════════════════
 Router macierzy uprawnień ról — System Windykacja.
 
 Prefix: /api/v1/roles-permissions  (zarejestrowany w api/router.py)
@@ -39,9 +37,6 @@ Wzorce:
   - Walidacja permission_ids: tylko istniejące aktywne IDs
   - extra='forbid' na wszystkich schematach wejściowych
 
-Autor: System Windykacja
-Wersja: 1.0.0
-Data: 2026-02-24
 """
 from __future__ import annotations
 

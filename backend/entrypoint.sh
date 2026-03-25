@@ -44,7 +44,6 @@
 #   Jeśli montowanie nie jest skonfigurowane → seedery są pomijane (warning).
 #   Aplikacja startuje normalnie — seedery NIE są wymagane do startu.
 #
-# Wersja: 2.0.0 | Data: 2026-03-02
 # =============================================================================
 
 set -e          # Wyjdź przy błędzie (chyba że obsługujemy ręcznie)
