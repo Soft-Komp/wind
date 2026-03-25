@@ -859,7 +859,7 @@ async def login(
     hashed_password = user.password_hash
 
     # 4. Sprawdź blokadę konta
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+    if user.locked_until and user.locked_until > datetime.now(timezone.utc).replace(tzinfo=None):
         logger.warning(
             "Logowanie NIEUDANE: konto zablokowane user_id=%d (IP=%s, locked_until=%s)",
             user_id, ip_clean, user.locked_until.isoformat(),
@@ -1140,7 +1140,7 @@ async def refresh(
         raise AuthError("Użytkownik nie istnieje lub jest nieaktywny", code="user_inactive")
 
     # Sprawdź lockout
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+    if user.locked_until and user.locked_until > datetime.now(timezone.utc).replace(tzinfo=None):
         raise AccountLockedError(locked_until=user.locked_until)
 
     # 5. Generuj nowy access token
@@ -1239,7 +1239,7 @@ async def get_current_user(
     if user is None:
         raise AuthError("Użytkownik nieaktywny lub usunięty", code="user_inactive")
 
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+    if user.locked_until and user.locked_until > datetime.now(timezone.utc).replace(tzinfo=None):
         raise AccountLockedError(locked_until=user.locked_until)
 
     # 4. Buduj CurrentUser

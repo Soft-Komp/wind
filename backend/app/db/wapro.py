@@ -84,11 +84,13 @@ _COLS_KONTRAHENCI = """
     DniPrzeterminowania,
     OstatniMonitData,
     OstatniMonitTyp,
-    LiczbaMonitow
+    LiczbaMonitow,
+    OstatniMonitRozrachunku
 """
 
 # Kolumny SELECT dla VIEW_rozrachunki_faktur — jawna lista
 _COLS_ROZRACHUNKI = """
+    ID_ROZRACHUNKU,
     ID_KONTRAHENTA,
     NazwaKontrahenta,
     NumerFaktury,
@@ -97,9 +99,10 @@ _COLS_ROZRACHUNKI = """
     KwotaBrutto,
     KwotaZaplacona,
     KwotaPozostala,
-    FormaPlatnosci,
-    DniPrzeterminowania,
-    CzyZaplacona
+    MetodaPlatnosci,
+    DniPo,
+    rozliczony,
+    OstatniMonitRozrachunku
 """
 
 
@@ -124,6 +127,8 @@ class DebtorFilterParams:
     age_category: Optional[str] = None          # KategoriaWieku = X
     has_email: Optional[bool] = None            # Email IS NOT NULL AND Email != ''
     has_phone: Optional[bool] = None            # Telefon IS NOT NULL AND Telefon != ''
+    min_days_overdue: Optional[int] = None      # DniPrzeterminowania >= X (filtr z widoku kontrahenci)
+    max_last_monit_days_ago: Optional[int] = None  # OstatniMonitRozrachunku starszy niż X dni
     # Paginacja
     limit: int = 50
     offset: int = 0
@@ -174,7 +179,10 @@ class DebtorFilterParams:
             raise ValueError("min_debt_amount > max_debt_amount")
 
         # Dni — muszą być >= 0
-        for field_name in ("last_contact_days", "overdue_days_min", "overdue_days_max"):
+        for field_name in (
+            "last_contact_days", "overdue_days_min", "overdue_days_max",
+            "min_days_overdue", "max_last_monit_days_ago",
+        ):
             val = getattr(self, field_name)
             if val is not None and val < 0:
                 raise ValueError(f"{field_name} nie może być ujemna")
@@ -210,7 +218,8 @@ class DebtorFilterParams:
 class InvoiceFilterParams:
     """Parametry filtrowania faktur dla konkretnego kontrahenta."""
     kontrahent_id: int
-    include_paid: bool = False      # False = tylko nieopłacone (główny przypadek)
+    include_paid: bool = False      # False = tylko nieopłacone (rozliczony != 2)
+    min_days_overdue: int = 0       # DniPo >= X; 0 = wszystkie (w tym nieprzetarminowane)
     limit: int = 100
     offset: int = 0
     order_by: str = "TerminPlatnosci"
@@ -219,7 +228,7 @@ class InvoiceFilterParams:
     _ALLOWED_ORDER_BY: frozenset[str] = field(
         default=frozenset({
             "TerminPlatnosci", "DataWystawienia", "KwotaBrutto",
-            "KwotaPozostala", "DniPrzeterminowania",
+            "KwotaPozostala", "DniPo",
         }),
         init=False,
         repr=False,
@@ -229,6 +238,8 @@ class InvoiceFilterParams:
     def __post_init__(self) -> None:
         if self.kontrahent_id <= 0:
             raise ValueError(f"kontrahent_id musi być > 0, otrzymano: {self.kontrahent_id}")
+        if self.min_days_overdue < 0:
+            raise ValueError(f"min_days_overdue nie może być ujemna: {self.min_days_overdue}")
         if self.limit < 1 or self.limit > 500:
             raise ValueError(f"limit musi być między 1 a 500, otrzymano: {self.limit}")
         if self.offset < 0:
@@ -749,6 +760,19 @@ def _build_debtors_query(
     elif params.has_phone is False:
         conditions.append("(Telefon IS NULL OR Telefon = '')")
 
+    # Filtr: ile dni po terminie (nowa kolumna DniPrzeterminowania z widoku kontrahenci)
+    if params.min_days_overdue is not None:
+        conditions.append("DniPrzeterminowania >= ?")
+        query_params.append(params.min_days_overdue)
+
+    # Filtr: ostatni monit do rozrachunku starszy niż X dni
+    if params.max_last_monit_days_ago is not None:
+        conditions.append(
+            "(OstatniMonitRozrachunku IS NULL "
+            "OR DATEDIFF(DAY, OstatniMonitRozrachunku, GETDATE()) >= ?)"
+        )
+        query_params.append(params.max_last_monit_days_ago)
+
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     # Sortowanie — bezpieczna interpolacja tylko z whitelisted kolumny
@@ -1038,15 +1062,18 @@ async def get_debtors_stats() -> QueryResult:
 def _build_invoices_query(
     params: InvoiceFilterParams,
 ) -> tuple[str, tuple[Any, ...]]:
-    """
-    Buduje SQL + parametry dla zapytania faktur kontrahenta.
-    Filtry: kontrahent_id (wymagany) + opcjonalnie include_paid.
-    """
     conditions = ["ID_KONTRAHENTA = ?"]
     query_params: list[Any] = [params.kontrahent_id]
 
+    # Nowy widok używa kolumny 'rozliczony' (2 = w pełni rozliczony)
+    # zamiast CzyZaplacona (której już nie ma)
     if not params.include_paid:
-        conditions.append("CzyZaplacona = 0")
+        conditions.append("rozliczony <> 2")
+
+    # Filtr: tylko faktury X+ dni po terminie (0 = wszystkie)
+    if params.min_days_overdue > 0:
+        conditions.append("DniPo >= ?")
+        query_params.append(params.min_days_overdue)
 
     where_clause = "WHERE " + " AND ".join(conditions)
     order_clause = f"ORDER BY {params.order_by} {params.order_dir}"
@@ -1099,7 +1126,8 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
             SELECT COUNT(*) AS TotalCount
             FROM {VIEW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
-            {' AND CzyZaplacona = 0' if not params.include_paid else ''}
+            {' AND rozliczony <> 2' if not params.include_paid else ''}
+            {'AND DniPo >= ' + str(params.min_days_overdue) if params.min_days_overdue > 0 else ''}
             """
 
         rows_task = _run_in_executor(
@@ -1422,5 +1450,7 @@ __all__ = [
     "VIEW_KONTRAHENCI",
     "VIEW_ROZRACHUNKI_FAKTUR",
     "get_debtors_stats",
-    "get_kontrahent_names_batch"
+    "get_kontrahent_names_batch",
+    # Nowe kolumny w widokach — stałe do referencji
+    "WaproConnectionPool",
 ]

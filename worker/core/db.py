@@ -67,6 +67,26 @@ class MonitHistory(Base):
     error_message: Mapped[Optional[str]] = mapped_column("ErrorMessage", String(500), nullable=True)
 
 
+class MonitHistoryInvoice(Base):
+    """skw_MonitHistory_Invoices — powiązanie monitu z rozrachunkiem WAPRO."""
+    __tablename__ = "skw_MonitHistory_Invoices"
+    __table_args__ = {"schema": "dbo_ext"}
+
+    id_monit_invoice: Mapped[int] = mapped_column(
+        "ID_MONIT_INVOICE", BigInteger, primary_key=True, autoincrement=True
+    )
+    id_monit: Mapped[int] = mapped_column(
+        "ID_MONIT", BigInteger, nullable=False
+    )
+    id_rozrachunku: Mapped[int] = mapped_column(
+        "ID_ROZRACHUNKU", Integer, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False,
+        default=lambda: datetime.now().replace(tzinfo=None),
+    )
+
+
 class AuditLog(Base):
     """skw_AuditLog — zapis akcji workera do audit trail."""
     __tablename__ = "skw_AuditLog"

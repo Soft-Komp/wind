@@ -14,7 +14,7 @@ from typing import Any, Optional
 from arq import Retry
 from sqlalchemy import select, update
 
-from worker.core.db import AuditLog, MonitHistory, get_session
+from worker.core.db import AuditLog, MonitHistory, MonitHistoryInvoice, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
 from worker.services.sms_service import SmsMessage, send_sms
@@ -32,6 +32,7 @@ async def send_bulk_sms(
     monit_ids: list[int],
     triggered_by_user_id: int,
     job_id: Optional[str] = None,
+    invoice_ids: Optional[list[int]] = None,
 ) -> dict[str, Any]:
     """ARQ Task: Masowa wysyłka SMS przez SMSAPI.pl."""
     settings = get_settings()
@@ -196,8 +197,42 @@ async def send_bulk_sms(
                 details=json.dumps({"job_id": effective_job_id}),
             ))
 
-        (success_ids if result_sms.success else failed_ids).append(monit.id_monit)
-        if not result_sms.success:
+        if result_sms.success:
+            success_ids.append(monit.id_monit)
+
+            # Zapis powiązań monit↔rozrachunek — analogicznie jak w email_task
+            if invoice_ids:
+                try:
+                    async with get_session() as inv_db:
+                        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                        for inv_id in invoice_ids:
+                            inv_db.add(MonitHistoryInvoice(
+                                id_monit=monit.id_monit,
+                                id_rozrachunku=inv_id,
+                                created_at=now_naive,
+                            ))
+                        await inv_db.commit()
+                    logger.info(
+                        "MonitHistory_Invoices zapisane (SMS)",
+                        extra={
+                            "monit_id":    monit.id_monit,
+                            "invoice_ids": invoice_ids,
+                            "count":       len(invoice_ids),
+                            "job_id":      effective_job_id,
+                        },
+                    )
+                except Exception as inv_exc:
+                    logger.error(
+                        "BLAD zapisu MonitHistory_Invoices (SMS) — SMS wysłany ale brak rekordu",
+                        extra={
+                            "monit_id":    monit.id_monit,
+                            "invoice_ids": invoice_ids,
+                            "error":       str(inv_exc),
+                            "job_id":      effective_job_id,
+                        },
+                    )
+        else:
+            failed_ids.append(monit.id_monit)
             errors.append({"monit_id": monit.id_monit, "error": result_sms.error})
 
     total_duration = (time.monotonic() - task_start) * 1000

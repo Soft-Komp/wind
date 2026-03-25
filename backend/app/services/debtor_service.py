@@ -139,6 +139,8 @@ class DebtorListParams:
     overdue_min_days: Optional[int] = None
     overdue_max_days: Optional[int] = None
     has_active_monit: Optional[bool] = None
+    min_days_overdue: Optional[int] = None       
+    max_last_monit_days_ago: Optional[int] = None
     page: int = 1
     page_size: int = 50
     sort_by: str = "total_debt"
@@ -177,6 +179,12 @@ class DebtorListParams:
             object.__setattr__(self, "overdue_min_days", 0)
         if self.overdue_max_days is not None and self.overdue_max_days < 0:
             object.__setattr__(self, "overdue_max_days", None)
+        if self.min_days_overdue is None:
+            object.__setattr__(self, "min_days_overdue", 1)
+        elif self.min_days_overdue < 0:
+            object.__setattr__(self, "min_days_overdue", 0)
+        if self.max_last_monit_days_ago is not None and self.max_last_monit_days_ago < 0:
+            object.__setattr__(self, "max_last_monit_days_ago", None)
 
     def to_wapro_params(self) -> DebtorFilterParams:
         # Mapowanie przyjaznych nazw frontendu → kolumny SQL widoku
@@ -204,6 +212,8 @@ class DebtorListParams:
             max_debt_amount=self.max_debt,
             overdue_days_min=self.overdue_min_days,
             overdue_days_max=self.overdue_max_days,
+            min_days_overdue=self.min_days_overdue,
+            max_last_monit_days_ago=self.max_last_monit_days_ago,
             limit=self.page_size,
             offset=(self.page - 1) * self.page_size,
             order_by=order_by_sql,
@@ -224,6 +234,8 @@ class DebtorListParams:
             "od_min": self.overdue_min_days,
             "od_max": self.overdue_max_days,
             "ham": self.has_active_monit,
+            "mdo": self.min_days_overdue,
+            "mlma": self.max_last_monit_days_ago,
             "p": self.page,
             "ps": self.page_size,
             "sb": self.sort_by,
@@ -676,6 +688,7 @@ async def get_invoices(
     page: int = 1,
     page_size: int = 50,
     paid: Optional[bool] = None,
+    min_days_overdue: int = 0,
     requesting_user_id: Optional[int] = None,
 ) -> dict:
     """
@@ -710,6 +723,8 @@ async def get_invoices(
     page_size = min(max(page_size, 1), 200)
 
     cache_key = _REDIS_KEY_INVOICES.format(debtor_id=debtor_id, page=page)
+    if min_days_overdue:
+        cache_key = f"{cache_key}:mdo{min_days_overdue}"
     cached = await _get_redis_cache(redis, cache_key)
     if cached is not None:
         logger.debug("Faktury dłużnika pobrane z cache", extra={"debtor_id": debtor_id})
@@ -719,6 +734,7 @@ async def get_invoices(
         invoice_params = InvoiceFilterParams(
             kontrahent_id=debtor_id,
             include_paid=paid if paid is not None else False,
+            min_days_overdue=min_days_overdue,
             limit=page_size,
             offset=(page - 1) * page_size,
         )

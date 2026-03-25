@@ -379,7 +379,7 @@ def cmd_set_admin_password() -> None:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
-            f"SELECT [ID_USER] FROM [{SCHEMA}].[Users] WHERE [Username] = ?;",
+            f"SELECT [ID_USER] FROM [{SCHEMA}].[skw_Users] WHERE [Username] = ?;",
             username,
         )
         row = cur.fetchone()
@@ -421,7 +421,7 @@ def cmd_set_admin_password() -> None:
         cur = conn.cursor()
         cur.execute(
             f"""
-            UPDATE [{SCHEMA}].[Users]
+            UPDATE [{SCHEMA}].[skw_Users]
             SET [PasswordHash] = ?,
                 [UpdatedAt]    = GETDATE()
             WHERE [ID_USER] = ?;
