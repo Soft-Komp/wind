@@ -29,11 +29,9 @@ UWAGA: Rejestracja w main.py:
     )
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
@@ -59,7 +57,6 @@ from app.core.idempotency import (
     reset_confirm_guard,
     force_status_confirm_guard,
 )
-from app.core.security import require_permission as rp
 from app.schemas.faktura_akceptacja import (
     ConfirmTokenResponse,
     DecyzjaRequest,
@@ -138,7 +135,7 @@ async def list_faktury(
     pagination:   Pagination,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.view_list")),
+    current_user: Annotated[Any, require_permission("faktury.view_list")],
     # Filtry query params
     priorytet:    Optional[str] = Query(default=None),
     status_f:     Optional[str] = Query(default=None, alias="status"),
@@ -210,7 +207,7 @@ async def create_faktura(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.create")),
+    current_user: Annotated[Any, require_permission("faktury.create")],
     idem:         IdempotencyResult = Depends(faktury_create_guard),
 ) -> FakturaCreateResponse:
     if not current_user.has_permission("faktury.referent"):
@@ -268,7 +265,7 @@ async def patch_faktura(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.edit")),
+    current_user: Annotated[Any, require_permission("faktury.edit")],
 ) -> FakturaDetailResponse:
     if not current_user.has_permission("faktury.referent"):
         raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
@@ -304,7 +301,7 @@ async def initiate_reset(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.reset")),
+    current_user: Annotated[Any, require_permission("faktury.reset")],
 ) -> ConfirmTokenResponse:
     if not current_user.has_permission("faktury.referent"):
         raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
@@ -351,7 +348,7 @@ async def confirm_reset(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.reset")),
+    current_user: Annotated[Any, require_permission("faktury.reset")],
     idem:         IdempotencyResult = Depends(reset_confirm_guard),
 ) -> FakturaResetResponse:
     if not current_user.has_permission("faktury.referent"):
@@ -393,7 +390,7 @@ async def initiate_force_status(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.force_status")),
+    current_user: Annotated[Any, require_permission("faktury.force_status")],
 ) -> ConfirmTokenResponse:
     if not current_user.has_permission("faktury.referent"):
         raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
@@ -439,7 +436,7 @@ async def confirm_force_status(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.force_status")),
+    current_user  = require_permission("faktury.force_status"),
     idem:         IdempotencyResult = Depends(force_status_confirm_guard),
 ) -> dict:
     if not current_user.has_permission("faktury.referent"):
@@ -480,7 +477,7 @@ async def get_historia(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.view_historia")),
+    current_user: Annotated[Any, require_permission("faktury.view_historia")],
 ) -> FakturaHistoriaResponse:
     if not current_user.has_permission("faktury.referent"):
         raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
@@ -510,7 +507,7 @@ async def get_pdf_referent(
     redis:        RedisClient,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.view_pdf")),
+    current_user: Annotated[Any, require_permission("faktury.view_pdf")],
 ) -> StreamingResponse:
     await _require_module_enabled(redis)
 

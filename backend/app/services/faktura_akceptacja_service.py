@@ -52,12 +52,10 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.security import create_one_time_token, verify_one_time_token
-from app.db.models.faktura_akceptacja import (
-    FakturaAkceptacja,
-    FakturaLog,
-    FakturaPrzypisanie,
-)
+from app.core.security import create_short_lived_token as create_one_time_token, decode_short_lived_token as verify_one_time_token
+from app.db.models.faktura_akceptacja import FakturaAkceptacja
+from app.db.models.faktura_log import FakturaLog
+from app.db.models.faktura_przypisanie import FakturaPrzypisanie
 from app.db.wapro import execute_query
 from app.schemas.faktura_akceptacja import (
     AkcjaLog,
@@ -1048,6 +1046,7 @@ async def get_faktura_pdf(
         faktura=faktura,
         wapro=wapro,
         przypisania=przypisania,
+        db=db,
     )
 
     # Cache PDF

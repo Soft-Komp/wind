@@ -475,17 +475,7 @@ class Settings(BaseSettings):
 # ---------------------------------------------------------------------------
     @model_validator(mode="after")
     def validate_fakir_user_different_from_db_user(self) -> "Settings":
-        """
-        Blokuje start aplikacji jeśli FAKIR_DB_USER == DB_USER.
-    
-        Rationale:
-            DB_USER ma uprawnienia SELECT do widoków dbo.
-            FAKIR_DB_USER ma TYLKO UPDATE(KOD_STATUSU) ON BUF_DOKUMENT.
-            Użycie tego samego konta dla obu połączeń łamie zasadę
-            minimalnych uprawnień i tworzy ryzyko przypadkowego zapisu
-            przez read-only ścieżkę kodu.
-        """
-        if self.FAKIR_DB_USER == self.DB_USER:
+        if self.FAKIR_DB_USER == self.db_user:
             raise ValueError(
                 "FAKIR_DB_USER nie może być identyczny z DB_USER! "
                 "Używaj osobnego konta bazy dla połączenia Fakir write. "

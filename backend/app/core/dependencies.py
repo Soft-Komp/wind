@@ -21,7 +21,6 @@ Wzorce:
   • Master Key: nagłówek X-Master-Key + X-Master-Pin (bcrypt verify)
 
 """
-from __future__ import annotations
 
 import asyncio
 import logging

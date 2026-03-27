@@ -1112,6 +1112,19 @@ async def update_multiple(
 
 
 # ---------------------------------------------------------------------------
+# Alias dla kompatybilności z modułem faktur (Sprint 2)
+# ---------------------------------------------------------------------------
+async def get_config_value(
+    *,
+    redis,
+    key: str,
+    default: str = "",
+) -> str:
+    """Alias get() — uproszczony interfejs dla modułu faktur."""
+    result = await get(db=None, redis=redis, key=key, default=default)
+    return result or default
+
+# ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------
 

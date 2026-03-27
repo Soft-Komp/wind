@@ -31,8 +31,6 @@ JSON serializacja:
     • Decimal: serialized as float (wartości finansowe)
 """
 
-from __future__ import annotations
-
 import hashlib
 import re
 import unicodedata

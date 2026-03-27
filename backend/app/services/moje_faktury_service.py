@@ -46,11 +46,9 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models.faktura_akceptacja import (
-    FakturaAkceptacja,
-    FakturaLog,
-    FakturaPrzypisanie,
-)
+from app.db.models.faktura_akceptacja import FakturaAkceptacja
+from app.db.models.faktura_log import FakturaLog
+from app.db.models.faktura_przypisanie import FakturaPrzypisanie
 from app.schemas.faktura_akceptacja import (
     AkcjaLog,
     DecyzjaRequest,

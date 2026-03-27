@@ -1420,6 +1420,65 @@ async def get_kontrahent_names_batch(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Dispatcher zapytań dla modułu faktur (Sprint 2)
+# ---------------------------------------------------------------------------
+async def execute_query(
+    query_type: str,
+    params: dict,
+) -> list[dict]:
+    """
+    Dispatcher zapytań WAPRO dla modułu faktur.
+    query_type określa widok/zapytanie do wykonania.
+    Zwraca listę słowników (rows).
+    """
+    from app.db.wapro import _run_in_executor, _execute_query_sync
+    import uuid
+
+    query_id = str(uuid.uuid4())[:8]
+
+    if query_type == "faktura_naglowek":
+        ksef_id = params.get("ksef_id", "")
+        sql = """
+            SELECT TOP 1 *
+            FROM dbo.skw_faktury_akceptacja_naglowek
+            WHERE KSEF_ID = ?
+        """
+        raw = await _run_in_executor(
+            _execute_query_sync, sql, (ksef_id,), query_id, query_type
+        )
+        return raw
+
+    elif query_type == "faktura_pozycje":
+        ksef_id = params.get("ksef_id", "")
+        sql = """
+            SELECT p.*
+            FROM dbo.skw_faktury_akceptacja_pozycje p
+            INNER JOIN dbo.skw_faktury_akceptacja_naglowek n
+                ON n.ID_BUF_DOKUMENT = p.ID_BUF_DOKUMENT
+            WHERE n.KSEF_ID = ?
+            ORDER BY p.NumerPozycji
+        """
+        raw = await _run_in_executor(
+            _execute_query_sync, sql, (ksef_id,), query_id, query_type
+        )
+        return raw
+
+    elif query_type == "faktury_nowe_ksef_ids":
+        sql = """
+            SELECT KSEF_ID
+            FROM dbo.skw_faktury_akceptacja_naglowek
+            WHERE KOD_STATUSU IS NULL
+        """
+        raw = await _run_in_executor(
+            _execute_query_sync, sql, (), query_id, query_type
+        )
+        return raw
+
+    else:
+        logger.warning(f"execute_query: nieznany query_type={query_type!r}")
+        return []
+    
 
 # ---------------------------------------------------------------------------
 # Eksport publicznego API

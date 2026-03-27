@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
     BigInteger,
-    BitString,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,

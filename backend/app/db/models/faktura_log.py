@@ -1,17 +1,14 @@
 """
-Plik   : app/db/models/faktura_przypisanie.py
+Plik   : app/db/models/faktura_log.py
 Moduł  : Akceptacja Faktur KSeF
-Model  : FakturaPrzypisanie → dbo_ext.skw_faktura_przypisanie
+Model  : FakturaLog → dbo_ext.skw_faktura_log
 
-Jeden wiersz = jeden pracownik przypisany do jednej faktury.
+Immutable audit trail modułu faktur.
+ZASADA: tylko INSERT — nigdy UPDATE ani DELETE.
+Analogia do skw_AuditLog — stąd brak UpdatedAt.
 
-Ważne:
-  - is_active=0 przy resecie przypisań (NIE DELETE)
-  - Jeden pracownik może być przypisany wielokrotnie (po resecie)
-    — poprzednie wiersze is_active=0
-  - komentarz przechowywany jawnie w TEJ tabeli
-    DO AuditLog trafia wyłącznie SHA256(komentarz) — privacy by design
-  - decided_at ustawiany TYLKO przy zmianie statusu z 'oczekuje'
+user_id = NULL oznacza akcję systemową (auto-akceptacja, timeout, force).
+FK user_id → ON DELETE SET NULL — historia przeżywa dezaktywację usera.
 """
 from __future__ import annotations
 
@@ -40,179 +37,101 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Stałe — dozwolone statusy decyzji
+# Stałe — dozwolone wartości akcji (spójne z CHK_sfl_akcja w DDL 017)
 # ---------------------------------------------------------------------------
-STATUS_PRZYPISANIA_VALUES = frozenset({
-    "oczekuje",
-    "zaakceptowane",
-    "odrzucone",
+AKCJA_VALUES = frozenset({
+    "przypisano",
+    "zaakceptowano",
+    "odrzucono",
+    "zresetowano",
+    "status_zmieniony",
+    "priorytet_zmieniony",
+    "fakir_update",
+    "fakir_update_failed",
     "nie_moje",
+    "force_akceptacja",
+    "anulowano",
 })
 
-# Statusy które oznaczają podjętą decyzję (nie oczekuje)
-STATUS_ZDECYDOWANE = frozenset({
-    "zaakceptowane",
-    "odrzucone",
-    "nie_moje",
-})
 
-# Tylko ten status traktowany jako pozytywna akceptacja
-STATUS_AKCEPTACJA = "zaakceptowane"
-
-
-class FakturaPrzypisanie(Base):
+class FakturaLog(Base):
     """
-    Model ORM: dbo_ext.skw_faktura_przypisanie
+    Model ORM: dbo_ext.skw_faktura_log
 
-    Przypisanie pracownika do faktury w obiegu akceptacji.
+    Immutable audit trail — każde zdarzenie w module faktur.
+    Jeden wiersz = jedno zdarzenie. Nigdy nie modyfikować po INSERT.
 
-    Logika biznesowa:
-        - Referent tworzy przypisania POST /faktury-akceptacja (nowe)
-        - Pracownik zmienia status POST /moje-faktury/{id}/decyzja
-        - Referent może dezaktywować (reset): is_active=0, create new
-        - Saga pattern sprawdza: ile is_active=1 AND status='zaakceptowane'
-          vs ile is_active=1 ogółem → jeśli wszystkie OK → UPDATE Fakira
+    szczegoly: JSON serializowany przez FakturaLogDetails.
+    Bezpośrednie wstawianie dict ZABRONIONE — zawsze używaj FakturaLogDetails.build().
+
+    user_id = NULL → akcja systemowa (nie użytkownik).
     """
 
-    __tablename__ = "skw_faktura_przypisanie"
+    __tablename__  = "skw_faktura_log"
     __table_args__ = (
-        # Indeksy krytyczne z DDL 016
-        Index(
-            "IX_skw_faktura_przypisanie_user_active",
-            "user_id",
-            "is_active",
-            "status",
-        ),
-        Index(
-            "IX_skw_faktura_przypisanie_faktura_active",
-            "faktura_id",
-            "is_active",
-        ),
         CheckConstraint(
-            "status IN ('oczekuje','zaakceptowane','odrzucone','nie_moje')",
-            name="CK_skw_faktura_przypisanie_status",
+            "akcja IN ("
+            "'przypisano','zaakceptowano','odrzucono','zresetowano',"
+            "'status_zmieniony','priorytet_zmieniony','fakir_update',"
+            "'fakir_update_failed','nie_moje','force_akceptacja','anulowano'"
+            ")",
+            name="CHK_sfl_akcja",
         ),
+        Index("IX_sfl_faktura_created", "faktura_id", "created_at"),
         {"schema": "dbo_ext"},
     )
 
-    # ------------------------------------------------------------------
-    # Kolumny
-    # ------------------------------------------------------------------
+    # ── Kolumny ──────────────────────────────────────────────────────────────
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
         autoincrement=True,
+        comment="Klucz główny IDENTITY(1,1)",
     )
 
     faktura_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey(
-            "dbo_ext.skw_faktura_akceptacja.id",
-            ondelete="NO ACTION",
-            name="FK_skw_faktura_przypisanie_faktura",
-        ),
+        ForeignKey("dbo_ext.skw_faktura_akceptacja.id", ondelete="CASCADE"),
         nullable=False,
-        index=False,  # Pokryte przez IX_skw_faktura_przypisanie_faktura_active
-        comment="FK do skw_faktura_akceptacja",
+        index=True,
+        comment="FK → skw_faktura_akceptacja",
     )
 
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[Optional[int]] = mapped_column(
         Integer,
-        ForeignKey(
-            "dbo_ext.skw_Users.ID_USER",
-            ondelete="NO ACTION",
-            name="FK_skw_faktura_przypisanie_user",
-        ),
-        nullable=False,
-        index=False,  # Pokryte przez IX_skw_faktura_przypisanie_user_active
-        comment="FK do skw_Users — przypisany pracownik",
+        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="SET NULL"),
+        nullable=True,
+        comment="Kto wykonał akcję — NULL = akcja systemowa",
     )
 
-    status: Mapped[str] = mapped_column(
-        String(20),
+    akcja: Mapped[str] = mapped_column(
+        String(50),
         nullable=False,
-        default="oczekuje",
-        server_default="oczekuje",
-        comment="oczekuje | zaakceptowane | odrzucone | nie_moje",
+        comment="Typ zdarzenia — patrz AKCJA_VALUES",
     )
 
-    komentarz: Mapped[Optional[str]] = mapped_column(
+    szczegoly: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
-        comment="Komentarz przy decyzji — pełna treść. Do AuditLog idzie SHA256.",
+        comment="JSON (model FakturaLogDetails) — nigdy raw dict",
     )
 
-    is_active: Mapped[bool] = mapped_column(
-        Integer,
-        nullable=False,
-        default=1,
-        server_default="1",
-        comment="0 = dezaktywowane przez reset referenta",
-    )
-
-    CreatedAt: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow,
         server_default=func.getdate(),
+        comment="Timestamp immutable — nigdy nie aktualizować",
     )
 
-    UpdatedAt: Mapped[Optional[datetime]] = mapped_column(
-        DateTime,
-        nullable=True,
-        default=None,
-        onupdate=datetime.utcnow,
-    )
-
-    decided_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime,
-        nullable=True,
-        default=None,
-        comment="Kiedy pracownik podjął decyzję (NULL dopóki status=oczekuje)",
-    )
-
-    # ------------------------------------------------------------------
-    # Relacje ORM
-    # ------------------------------------------------------------------
+    # ── Relacje ───────────────────────────────────────────────────────────────
 
     faktura: Mapped["FakturaAkceptacja"] = relationship(
         "FakturaAkceptacja",
-        back_populates="przypisania",
-        lazy="select",
+        back_populates="logi",
     )
 
-    pracownik: Mapped["User"] = relationship(
+    user: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[user_id],
-        lazy="select",
     )
-
-    # ------------------------------------------------------------------
-    # Metody pomocnicze
-    # ------------------------------------------------------------------
-
-    def is_decided(self) -> bool:
-        """Czy pracownik podjął już decyzję."""
-        return self.status in STATUS_ZDECYDOWANE
-
-    def is_positive_acceptance(self) -> bool:
-        """Czy decyzja była pozytywna (zaakceptował)."""
-        return self.status == STATUS_AKCEPTACJA
-
-    def to_log_dict(self) -> dict:
-        """Słownik dla before/after w FakturaLogDetails."""
-        return {
-            "user_id":    self.user_id,
-            "status":     self.status,
-            "is_active":  int(self.is_active),
-        }
-
-    def __repr__(self) -> str:
-        return (
-            f"<FakturaPrzypisanie id={self.id!r} "
-            f"faktura={self.faktura_id!r} "
-            f"user={self.user_id!r} "
-            f"status={self.status!r} "
-            f"active={self.is_active!r}>"
-        )

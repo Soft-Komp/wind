@@ -24,10 +24,8 @@ REJESTRACJA w main.py:
     )
 """
 
-from __future__ import annotations
-
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
@@ -115,7 +113,7 @@ async def list_moje_faktury(
     pagination:   Pagination,
     client_ip:    ClientIP,
     request_id:   RequestID,
-    current_user  = Depends(require_permission("faktury.moje_view")),
+    current_user: Annotated[Any, require_permission("faktury.moje_view")],
     status_param: str | None = Query(default=None, alias="status"),
 ) -> dict:
     _require_akceptant(current_user)
@@ -177,7 +175,7 @@ async def get_moja_faktura_detail(
     redis:       RedisClient,
     client_ip:   ClientIP,
     request_id:  RequestID,
-    current_user = Depends(require_permission("faktury.moje_details")),
+    current_user: Annotated[Any, require_permission("faktury.moje_details")],
 ) -> FakturaDetailResponse:
     _require_akceptant(current_user)
     await _require_module_enabled(redis)
@@ -225,7 +223,7 @@ async def zapisz_decyzje(
     redis:       RedisClient,
     client_ip:   ClientIP,
     request_id:  RequestID,
-    current_user = Depends(require_permission("faktury.moje_decyzja")),
+    current_user: Annotated[Any, require_permission("faktury.moje_decyzja")],
     idem:        IdempotencyResult = Depends(decyzja_guard),
 ) -> DecyzjaResponse:
     _require_akceptant(current_user)
@@ -283,7 +281,7 @@ async def get_pdf_pracownik(
     redis:       RedisClient,
     client_ip:   ClientIP,
     request_id:  RequestID,
-    current_user = Depends(require_permission("faktury.view_pdf")),
+    current_user: Annotated[Any, require_permission("faktury.view_pdf")],
 ) -> StreamingResponse:
     _require_akceptant(current_user)
     await _require_module_enabled(redis)
