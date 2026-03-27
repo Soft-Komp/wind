@@ -752,15 +752,16 @@ def _raise_from_user_error(exc: Exception) -> None:
         )
 
     _MAP: dict[str, tuple[int, str, str]] = {
-        "UserNotFoundError":       (404, "users.not_found",            "Użytkownik nie istnieje"),
-        "UserAlreadyExistsError":  (409, "users.already_exists",       "Nazwa użytkownika lub email już zajęte"),
-        "UserAlreadyLockedError":  (400, "users.already_locked",       "Konto jest już zablokowane"),
-        "UserNotLockedError":      (400, "users.not_locked",           "Konto nie jest zablokowane"),
-        "DeleteTokenInvalidError": (400, "users.delete_token_invalid", "Nieprawidłowy token potwierdzający"),
-        "DeleteTokenExpiredError": (400, "users.delete_token_expired", "Token potwierdzający wygasł — zainicjuj usunięcie ponownie"),
-        "LastAdminError":          (409, "users.last_admin",           "Nie można usunąć jedynego administratora systemu"),
-        "UserServiceError":        (400, "users.service_error",        "Błąd operacji na użytkowniku"),
-        "PermissionDeniedError":   (403, "auth.permission_denied",     "Brak wymaganego uprawnienia"),
+        "UserNotFoundError":          (404, "users.not_found",            "Użytkownik nie istnieje"),
+        "UserAlreadyExistsError":     (409, "users.already_exists",       "Nazwa użytkownika lub email już zajęte"),
+        "UserAlreadyLockedError":     (400, "users.already_locked",       "Konto jest już zablokowane"),
+        "UserNotLockedError":         (400, "users.not_locked",           "Konto nie jest zablokowane"),
+        "DeleteTokenInvalidError":    (400, "users.delete_token_invalid", "Nieprawidłowy token potwierdzający"),
+        "DeleteTokenExpiredError":    (400, "users.delete_token_expired", "Token potwierdzający wygasł — zainicjuj usunięcie ponownie"),
+        "LastAdminError":             (409, "users.last_admin",           "Nie można usunąć jedynego administratora systemu"),
+        "UserServiceError":           (400, "users.service_error",        "Błąd operacji na użytkowniku"),
+        "PermissionDeniedError":      (403, "auth.permission_denied",     "Brak wymaganego uprawnienia"),
+        "UserOperationBlockedError":  (409, "users.operation_blocked",    "Operacja zablokowana — użytkownik ma aktywne zasoby"),
     }
 
     exc_type = type(exc).__name__

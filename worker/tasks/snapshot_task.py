@@ -42,6 +42,10 @@ _SKW_TABLES = [
     "skw_Comments",
     "skw_Templates",
     "skw_SchemaVersions",
+    # Moduł Akceptacji Faktur (Sprint 2)
+    "skw_faktura_akceptacja",
+    "skw_faktura_przypisanie",   # ← szczególnie ważne: historyczne is_active=0
+    "skw_faktura_log",           # ← audit trail modułu
 ]
 
 

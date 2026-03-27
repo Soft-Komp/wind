@@ -65,6 +65,7 @@ from app.schemas.faktura_akceptacja import (
     WaproFakturaPozycja,
 )
 from app.services.config_service import get_config_value
+from app.services.event_service import publish_faktura_event
 from app.services.faktura_akceptacja_service import (
     _get_wapro_naglowek,
     _log_event,
@@ -375,12 +376,21 @@ async def zapisz_decyzje(
     }).decode())
 
     # 5. SSE: faktura_zdecydowana → referent
+    # Pobierz numer dokumentu z WAPRO dla payloadu
+    _wapro_numer: Optional[str] = None
+    try:
+        _wapro_tmp = await _get_wapro_naglowek(faktura.numer_ksef)
+        _wapro_numer = _wapro_tmp.numer if _wapro_tmp else None
+    except Exception:
+        pass
+
     await _sse_faktura_zdecydowana(
         redis=redis,
         faktura=faktura,
         pracownik_id=actor_id,
         pracownik_name=actor_name,
         decyzja=nowy_status,
+        wapro_numer=_wapro_numer,
     )
 
     # Pobierz wszystkie aktywne przypisania po decyzji
@@ -553,6 +563,7 @@ async def _sse_faktura_zdecydowana(
     pracownik_id: int,
     pracownik_name: str,
     decyzja: str,
+    wapro_numer: Optional[str] = None,
 ) -> None:
     """SSE push: faktura_zdecydowana → referent (twórca obiegu)."""
     settings = get_settings()
@@ -572,23 +583,26 @@ async def _sse_faktura_zdecydowana(
         "data": {
             "faktura_id": faktura.id,
             "numer_ksef": faktura.numer_ksef,
+            "numer":      wapro_numer,
             "user_id":    pracownik_id,
             "user_name":  pracownik_name,
             "decyzja":    decyzja,
         },
     })
 
-    try:
-        await redis.publish(f"user:{faktura.utworzony_przez}", event)
-    except Exception as exc:
-        logger.warning(
-            orjson.dumps({
-                "event":      "sse_zdecydowana_failed",
-                "faktura_id": faktura.id,
-                "referent_id": faktura.utworzony_przez,
-                "error":      str(exc),
-            }).decode()
-        )
+    await publish_faktura_event(
+        redis=redis,
+        user_id=faktura.utworzony_przez,
+        event_type="faktura_zdecydowana",
+        data={
+            "faktura_id": faktura.id,
+            "numer_ksef": faktura.numer_ksef,
+            "numer":      wapro_numer,
+            "user_id":    pracownik_id,
+            "user_name":  pracownik_name,
+            "decyzja":    decyzja,
+        },
+    )
 
 
 async def _sse_faktura_wymaga_interwencji(
@@ -618,20 +632,13 @@ async def _sse_faktura_wymaga_interwencji(
         },
     })
 
-    try:
-        await redis.publish(f"user:{faktura.utworzony_przez}", event)
-        logger.info(orjson.dumps({
-            "event":      "sse_interwencja_sent",
+    await publish_faktura_event(
+        redis=redis,
+        user_id=faktura.utworzony_przez,
+        event_type="faktura_wymaga_interwencji",
+        data={
             "faktura_id": faktura.id,
+            "numer_ksef": faktura.numer_ksef,
             "powod":      powod.value,
-            "referent":   faktura.utworzony_przez,
-            "ts":         datetime.now(timezone.utc).isoformat(),
-        }).decode())
-    except Exception as exc:
-        logger.warning(
-            orjson.dumps({
-                "event":      "sse_interwencja_failed",
-                "faktura_id": faktura.id,
-                "error":      str(exc),
-            }).decode()
-        )
+        },
+    )

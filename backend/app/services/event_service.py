@@ -61,6 +61,12 @@ EventType = Literal[
     "user_unlocked",
     "snapshot_created",
     "snapshot_restored",
+    # Moduł Akceptacji Faktur (Sprint 2.1)
+    "nowa_faktura",
+    "faktura_zdecydowana",
+    "faktura_zakonczona",
+    "faktura_zresetowana",
+    "faktura_wymaga_interwencji",
 ]
 
 # Poziomy powiadomień systemowych
@@ -249,6 +255,56 @@ async def publish(
         "published_to":   published_to,
         "logged_to_file": True,
     }
+
+
+# ===========================================================================
+# Pomocnicza funkcja dla modułu faktur — dual-write JSONL + Redis
+# ===========================================================================
+
+async def publish_faktura_event(
+    redis: Redis,
+    user_id: int,
+    event_type: str,
+    data: dict,
+    actor_user_id: Optional[int] = None,
+) -> bool:
+    """
+    Publikuje event modułu faktur do konkretnego usera.
+
+    Dual-write: zawsze zapisuje do JSONL niezależnie od stanu Redis.
+    Używany przez: faktura_akceptacja_service, moje_faktury_service, fakir_service.
+
+    Args:
+        redis:         Klient Redis.
+        user_id:       ID odbiorcy eventu (channel:user:{id}).
+        event_type:    Typ eventu (nowa_faktura, faktura_zdecydowana, itd.).
+        data:          Payload eventu.
+        actor_user_id: Kto wygenerował event (do metadanych, opcjonalne).
+
+    Returns:
+        True jeśli Redis publish się powiódł, False w przeciwnym razie.
+        Błąd Redis NIE rzuca wyjątku — tylko loguje WARNING.
+    """
+    envelope = _build_event_envelope(event_type, data, actor_user_id)
+
+    # Zapis do JSONL — zawsze, niezależnie od Redis (R-06)
+    _append_event_to_log(envelope)
+
+    # Publish do Redis
+    channel = f"channel:user:{user_id}"
+    success = await _publish_to_channel(redis, channel, envelope)
+
+    logger.info(
+        "Faktura SSE event opublikowany",
+        extra={
+            "event_type":  event_type,
+            "event_id":    envelope["event_id"],
+            "user_id":     user_id,
+            "redis_ok":    success,
+        },
+    )
+
+    return success
 
 
 # ===========================================================================

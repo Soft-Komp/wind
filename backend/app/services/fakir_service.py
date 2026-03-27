@@ -50,6 +50,7 @@ from app.schemas.faktura_akceptacja import (
     StatusWewnetrzny,
 )
 from app.services.config_service import get_config_value
+from app.services.event_service import publish_faktura_event
 
 logger = logging.getLogger("app.services.fakir_service")
 
@@ -433,25 +434,12 @@ async def _broadcast_faktura_zakonczona(
 
     event = orjson.dumps({"type": "faktura_zakonczona", "data": payload})
 
-    try:
-        for user_id in odbiorcy:
-            await redis.publish(f"user:{user_id}", event)
-        logger.info(
-            orjson.dumps({
-                "event":      "sse_faktura_zakonczona_sent",
-                "faktura_id": faktura_id,
-                "odbiorcy":   odbiorcy,
-                "ts":         datetime.now(timezone.utc).isoformat(),
-            }).decode()
-        )
-    except Exception as exc:
-        logger.warning(
-            orjson.dumps({
-                "event":      "sse_publish_failed",
-                "faktura_id": faktura_id,
-                "error":      str(exc),
-                "ts":         datetime.now(timezone.utc).isoformat(),
-            }).decode()
+    for user_id in odbiorcy:
+        await publish_faktura_event(
+            redis=redis,
+            user_id=user_id,
+            event_type="faktura_zakonczona",
+            data=payload,
         )
 
 

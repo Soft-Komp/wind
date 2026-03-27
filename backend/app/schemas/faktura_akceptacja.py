@@ -60,6 +60,7 @@ class StatusWewnetrzny(str, Enum):
     W_TOKU        = "w_toku"
     ZAAKCEPTOWANA = "zaakceptowana"
     ANULOWANA     = "anulowana"
+    ORPHANED      = "orphaned"   # ET-01: faktura zniknęła z WAPRO
 
 
 class Priorytet(str, Enum):

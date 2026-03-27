@@ -61,7 +61,7 @@ from typing import Final
 from alembic import op
 
 # ── Meta Alembic ─────────────────────────────────────────────────────────────
-revision: str = "006"
+revision: str = "0005"
 down_revision: str = "0004"     # ⚠ UWAGA: spec mówi "0001" — ale real HEAD to 0004
 branch_labels = None
 depends_on = None

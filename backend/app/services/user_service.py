@@ -328,9 +328,12 @@ class UserRoleNotFoundError(UserError):
     """Podana rola nie istnieje lub jest nieaktywna."""
 
 
-class UserDeleteTokenError(UserError):
-    """Błąd tokenu potwierdzającego DELETE (nieprawidłowy, wygasły lub już użyty)."""
+class UserDeleteTokenError(Exception):
+    """Nieprawidłowy lub wygasły token potwierdzający usunięcie."""
 
+
+class UserOperationBlockedError(Exception):
+    """Operacja zablokowana — user ma aktywne zasoby (ET-03: aktywne faktury)."""
 
 class UserSelfDeleteError(UserError):
     """Próba usunięcia własnego konta (zabronione)."""
@@ -1297,6 +1300,38 @@ async def confirm_delete(
 
     if user is None:
         raise UserNotFoundError(f"Użytkownik ID={user_id} nie istnieje.")
+
+    # --- 4b. ET-03: Blokada gdy user ma aktywne przypisania faktur ---
+    try:
+        from sqlalchemy import text as sa_text
+        faktura_check = await db.execute(
+            sa_text(
+                "SELECT COUNT(*) FROM [dbo_ext].[skw_faktura_przypisanie] "
+                "WHERE user_id = :uid AND is_active = 1 AND status = 'oczekuje'"
+            ),
+            {"uid": user_id},
+        )
+        active_faktura_count = faktura_check.scalar() or 0
+    except Exception:
+        # Tabela nie istnieje jeśli moduł faktur nie wdrożony — bezpieczny fallback
+        active_faktura_count = 0
+
+    if active_faktura_count > 0:
+        logger.warning(
+            "Próba usunięcia usera z aktywnymi przypisaniami faktur — zablokowano (ET-03)",
+            extra={
+                "user_id":             user_id,
+                "active_faktura_count": active_faktura_count,
+                "initiated_by":        initiating_user_id,
+                "ip_address":          ip_address,
+            }
+        )
+        raise UserOperationBlockedError(
+            f"Nie można usunąć użytkownika ID={user_id}. "
+            f"Posiada {active_faktura_count} aktywnych przypisań faktur oczekujących na akceptację. "
+            f"Przed usunięciem referent musi zresetować te przypisania "
+            f"przez POST /faktury-akceptacja/{{id}}/reset."
+        )
 
     # --- 5. Archiwizacja ---
     archive_path = _archive_user(user)

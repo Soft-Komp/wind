@@ -78,6 +78,7 @@ from app.schemas.faktura_akceptacja import (
     WaproFakturaPozycja,
 )
 from app.services.config_service import get_config_value
+from app.services.event_service import publish_faktura_event
 
 logger = logging.getLogger("app.services.faktura_akceptacja")
 
@@ -210,6 +211,99 @@ async def _log_event(
     ))
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ET-01: Obsługa faktury "orphaned" — znikła z WAPRO w trakcie obiegu
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _handle_orphan_if_needed(
+    *,
+    db: AsyncSession,
+    redis: Redis,
+    faktura: FakturaAkceptacja,
+) -> bool:
+    """
+    Wykrywa i obsługuje ET-01: faktura aktywna w naszej tabeli, ale zniknęła z WAPRO.
+
+    Warunki wykrycia:
+      - status_wewnetrzny NOT IN ('orphaned', 'anulowana') — nie reaguj podwójnie
+      - is_active = True
+      - _get_wapro_naglowek() zwraca None
+
+    Akcje:
+      1. UPDATE status_wewnetrzny → 'orphaned'
+      2. Wpis do skw_faktura_log (akcja: status_zmieniony)
+      3. LOG ERROR do pliku
+      4. SSE system_notification → referent (level=CRITICAL)
+
+    Returns:
+        True  — faktura była aktywna i właśnie oznaczona jako orphaned
+        False — faktura już była orphaned/anulowana lub WAPRO odpowiedział
+    """
+    # Nie reaguj podwójnie
+    if faktura.status_wewnetrzny in ("orphaned", "anulowana"):
+        return False
+
+    # WAPRO — sprawdź czy faktura nadal tam jest
+    wapro = await _get_wapro_naglowek(faktura.numer_ksef)
+    if wapro is not None:
+        return False  # Wszystko OK
+
+    # ── Faktura zniknęła z WAPRO ───────────────────────────────────────────
+    now = datetime.now().replace(tzinfo=None)
+    stary_status = faktura.status_wewnetrzny
+
+    faktura.status_wewnetrzny = "orphaned"
+    faktura.updated_at = now
+
+    await _log_event(
+        db=db,
+        faktura_id=faktura.id,
+        user_id=faktura.utworzony_przez,
+        akcja=AkcjaLog.STATUS_ZMIENIONY,
+        before={"status_wewnetrzny": stary_status},
+        after={"status_wewnetrzny": "orphaned"},
+        meta={
+            "numer_ksef": faktura.numer_ksef,
+            "powod": "Faktura zniknęła z widoku WAPRO (BUF_DOKUMENT). "
+                     "Możliwe: usunięcie lub przeniesienie w Fakirze.",
+        },
+        endpoint="system/et-01-detection",
+    )
+
+    await db.commit()
+
+    logger.error(
+        orjson.dumps({
+            "event":           "faktura_orphaned_detected",
+            "faktura_id":      faktura.id,
+            "numer_ksef":      faktura.numer_ksef,
+            "stary_status":    stary_status,
+            "referent_id":     faktura.utworzony_przez,
+            "ts":              datetime.now(timezone.utc).isoformat(),
+            "action_required": "Sprawdź BUF_DOKUMENT w Fakirze — faktura zniknęła z widoku WAPRO",
+        }).decode()
+    )
+
+    # SSE system_notification → referent
+    try:
+        await publish_faktura_event(
+            redis=redis,
+            user_id=faktura.utworzony_przez,
+            event_type="system_notification",
+            data={
+                "level":      "CRITICAL",
+                "message":    f"Faktura {faktura.numer_ksef} zniknęła z systemu WAPRO/Fakir "
+                              f"i wymaga interwencji. Sprawdź BUF_DOKUMENT.",
+                "faktura_id": faktura.id,
+                "numer_ksef": faktura.numer_ksef,
+                "component":  "faktura_akceptacja",
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"ET-01: SSE notification failed faktura_id={faktura.id}: {exc}")
+
+    return True
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1. GET lista faktur
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -273,11 +367,14 @@ async def get_faktury_list(
 
     items = []
     for f in strona:
-        wapro = await _get_wapro_naglowek(f.numer_ksef)
+        # ET-01: sprawdź czy faktura nadal jest w WAPRO
+        orphaned = await _handle_orphan_if_needed(db=db, redis=redis, faktura=f)
+
+        wapro = await _get_wapro_naglowek(f.numer_ksef) if not orphaned else None
         items.append({
             "id":                f.id,
             "numer_ksef":        f.numer_ksef,
-            "status_wewnetrzny": f.status_wewnetrzny,
+            "status_wewnetrzny": f.status_wewnetrzny,  # już 'orphaned' jeśli wykryto
             "priorytet":         f.priorytet,
             "opis_skrocony":     (f.opis_dokumentu or "")[:120] or None,
             "is_active":         f.is_active,
@@ -932,6 +1029,9 @@ async def get_faktura_pdf(
         pass
 
     # Pobierz dane WAPRO
+    # ET-01: sprawdź czy faktura nadal jest w WAPRO
+    await _handle_orphan_if_needed(db=db, redis=redis, faktura=faktura)
+
     wapro = await _get_wapro_naglowek(faktura.numer_ksef)
 
     # Pobierz przypisania
@@ -983,21 +1083,39 @@ async def _sse_push_nowa_faktura(
     except Exception:
         return
 
+    # Pobierz dane WAPRO do payloadu (raz, przed pętlą)
+    wapro_dane = None
+    try:
+        wapro_dane = await _get_wapro_naglowek(faktura.numer_ksef)
+    except Exception as exc:
+        logger.warning(f"SSE nowa_faktura: brak danych WAPRO dla {faktura.numer_ksef}: {exc}")
+
     event = orjson.dumps({
         "type": "nowa_faktura",
         "data": {
-            "faktura_id":  faktura.id,
-            "numer_ksef":  faktura.numer_ksef,
-            "priorytet":   faktura.priorytet,
-            "opis_skrocony": (faktura.opis_dokumentu or "")[:120],
+            "faktura_id":        faktura.id,
+            "numer_ksef":        faktura.numer_ksef,
+            "numer":             wapro_dane.numer if wapro_dane else None,
+            "priorytet":         faktura.priorytet,
+            "nazwa_kontrahenta": wapro_dane.nazwa_kontrahenta if wapro_dane else None,
+            "opis_skrocony":     (faktura.opis_dokumentu or "")[:120],
         },
     })
 
     for user_id in user_ids:
-        try:
-            await redis.publish(f"user:{user_id}", event)
-        except Exception as exc:
-            logger.warning(f"SSE nowa_faktura push failed user_id={user_id}: {exc}")
+        await publish_faktura_event(
+            redis=redis,
+            user_id=user_id,
+            event_type="nowa_faktura",
+            data={
+                "faktura_id":        faktura.id,
+                "numer_ksef":        faktura.numer_ksef,
+                "numer":             wapro_dane.numer if wapro_dane else None,
+                "priorytet":         faktura.priorytet,
+                "nazwa_kontrahenta": wapro_dane.nazwa_kontrahenta if wapro_dane else None,
+                "opis_skrocony":     (faktura.opis_dokumentu or "")[:120],
+            },
+        )
 
 
 async def _sse_push_zresetowana(
@@ -1018,19 +1136,33 @@ async def _sse_push_zresetowana(
     except Exception:
         return
 
+    # Pobierz numer dokumentu z WAPRO
+    wapro_dane = None
+    try:
+        wapro_dane = await _get_wapro_naglowek(faktura.numer_ksef)
+    except Exception as exc:
+        logger.warning(f"SSE zresetowana: brak danych WAPRO dla {faktura.numer_ksef}: {exc}")
+
     event = orjson.dumps({
         "type": "faktura_zresetowana",
         "data": {
             "faktura_id": faktura.id,
             "numer_ksef": faktura.numer_ksef,
+            "numer":      wapro_dane.numer if wapro_dane else None,
         },
     })
 
     for user_id in dezaktywowane_ids:
-        try:
-            await redis.publish(f"user:{user_id}", event)
-        except Exception as exc:
-            logger.warning(f"SSE zresetowana push failed user_id={user_id}: {exc}")
+        await publish_faktura_event(
+            redis=redis,
+            user_id=user_id,
+            event_type="faktura_zresetowana",
+            data={
+                "faktura_id": faktura.id,
+                "numer_ksef": faktura.numer_ksef,
+                "numer":      wapro_dane.numer if wapro_dane else None,
+            },
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Archiwum JSON.gz przy anulowaniu
