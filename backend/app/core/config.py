@@ -444,6 +444,56 @@ class Settings(BaseSettings):
         description="Prefix dla wszystkich endpointów API.",
     )
 
+    
+# ---------------------------------------------------------------------------
+# FAKIR WRITE — osobne połączenie z uprawnieniem zapisu do BUF_DOKUMENT
+# Patrz: database/ddl/021_fakir_write_user.sql
+# ---------------------------------------------------------------------------
+    FAKIR_DB_HOST: str = Field(
+        ...,
+        description="Host bazy WAPRO dla połączenia fakir_write (write). "
+                    "MUSI różnić się od DB_HOST albo być tym samym hostem "
+                    "ale FAKIR_DB_USER MUSI być inny od DB_USER.",
+    )
+    FAKIR_DB_USER: str = Field(
+        ...,
+        description="User DB z uprawnieniem UPDATE(KOD_STATUSU) ON dbo.BUF_DOKUMENT. "
+                    "Stworzony przez 021_fakir_write_user.sql.",
+    )
+    FAKIR_DB_PASSWORD: SecretStr = Field(
+        ...,
+        description="Hasło dla FAKIR_DB_USER. Nigdy nie loguj jawnie.",
+    )
+    FAKIR_DB_DATABASE: str = Field(
+        default="WAPRO",
+        description="Nazwa bazy danych WAPRO (domyślnie WAPRO).",
+    )
+    
+# ---------------------------------------------------------------------------
+# Walidator: FAKIR_DB_USER musi być INNY niż DB_USER
+# Ochrona przed pomyłką — read-only user nie może być używany do zapisu
+# ---------------------------------------------------------------------------
+    @model_validator(mode="after")
+    def validate_fakir_user_different_from_db_user(self) -> "Settings":
+        """
+        Blokuje start aplikacji jeśli FAKIR_DB_USER == DB_USER.
+    
+        Rationale:
+            DB_USER ma uprawnienia SELECT do widoków dbo.
+            FAKIR_DB_USER ma TYLKO UPDATE(KOD_STATUSU) ON BUF_DOKUMENT.
+            Użycie tego samego konta dla obu połączeń łamie zasadę
+            minimalnych uprawnień i tworzy ryzyko przypadkowego zapisu
+            przez read-only ścieżkę kodu.
+        """
+        if self.FAKIR_DB_USER == self.DB_USER:
+            raise ValueError(
+                "FAKIR_DB_USER nie może być identyczny z DB_USER! "
+                "Używaj osobnego konta bazy dla połączenia Fakir write. "
+                "Stwórz użytkownika przez database/ddl/021_fakir_write_user.sql "
+                "i ustaw FAKIR_DB_USER=windykacja_fakir_write w .env"
+            )
+        return self
+
     # -----------------------------------------------------------------------
     # Walidatory
     # -----------------------------------------------------------------------

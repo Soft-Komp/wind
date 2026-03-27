@@ -460,6 +460,9 @@ SEED_FILES="
 05_system_config.sql
 06_templates_permissions.sql
 07_default_templates.sql
+08_faktura_permissions.sql
+09_faktura_role_permissions.sql
+10_system_config_faktura.sql
 "
 
 _should_run_seeds=false

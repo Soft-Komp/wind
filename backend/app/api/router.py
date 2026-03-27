@@ -175,3 +175,21 @@ _register_router(
     prefix="/templates",
     tags=["Szablony"],
 )
+
+# 13. FAKTURY — REFERENT
+_register_router(
+    api_router,
+    module_path="app.api.faktury_akceptacja",
+    attr="router",
+    prefix="/faktury-akceptacja",
+    tags=["Faktury — Referent"],
+)
+
+# 14. FAKTURY — PRACOWNIK
+_register_router(
+    api_router,
+    module_path="app.api.moje_faktury",
+    attr="router",
+    prefix="/moje-faktury",
+    tags=["Faktury — Pracownik"],
+)
