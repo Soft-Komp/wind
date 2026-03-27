@@ -61,8 +61,8 @@ from typing import Final
 from alembic import op
 
 # ── Meta Alembic ─────────────────────────────────────────────────────────────
-revision: str = "007"
-down_revision: str = "006"
+revision: str = "0007"
+down_revision: str = "0006"
 branch_labels = None
 depends_on = None
 
