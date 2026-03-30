@@ -99,7 +99,7 @@ async def _get_watchdog_config(db: "AsyncSession") -> dict[str, Any]:
         result = await db.execute(
             text("""
                 SELECT ConfigKey, ConfigValue
-                FROM   dbo_ext.SystemConfig
+                FROM   dbo_ext.skw_SystemConfig
                 WHERE  ConfigKey IN (
                     'integrity_watchdog.enabled',
                     'integrity_watchdog.interval_seconds',

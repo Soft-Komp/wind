@@ -9,7 +9,7 @@ Architektura:
            │ miss / stale               │ miss
            ▼                            ▼
     ┌──────────────────────────────────────────────┐
-    │        dbo_ext.SystemConfig (MSSQL)          │
+    │        dbo_ext.skw_SystemConfig (MSSQL)          │
     │  ConfigKey (UNIQUE)  │  ConfigValue (TEXT)   │
     └──────────────────────────────────────────────┘
 
@@ -255,7 +255,7 @@ async def _redis_delete(redis: Optional[Redis], *keys: str) -> int:
 
 async def _fetch_from_db(db: AsyncSession, key: str) -> Optional[str]:
     """
-    Pobiera wartość konfiguracji z dbo_ext.SystemConfig.
+    Pobiera wartość konfiguracji z dbo_ext.skw_SystemConfig.
     Zwraca None jeśli klucz nie istnieje lub IsActive=0.
     """
     try:
@@ -344,7 +344,7 @@ async def get(
 
     Kolejność:
         1. Redis cache (TTL zależny od klucza)
-        2. dbo_ext.SystemConfig (fallback i cache fill)
+        2. dbo_ext.skw_SystemConfig (fallback i cache fill)
         3. `default` jeśli klucz nieistnieje
 
     Args:

@@ -1,5 +1,5 @@
 """
-Model tabeli dbo_ext.SystemConfig.
+Model tabeli dbo_ext.skw_SystemConfig.
 Dynamiczna konfiguracja aplikacji. Cachowana w Redis (TTL: 5 min).
 Zmiana config_value działa bez restartu aplikacji.
 """

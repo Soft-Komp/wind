@@ -42,7 +42,6 @@ UŻYCIE jako FastAPI Depends():
         return result
 """
 
-from __future__ import annotations
 
 import hashlib
 import json

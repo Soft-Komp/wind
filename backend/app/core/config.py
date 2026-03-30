@@ -431,6 +431,14 @@ class Settings(BaseSettings):
             "Domyślnie True — bezpieczna wartość dla nowych wdrożeń."
         ),
     )
+    INSTALL_DATE: Optional[str] = Field(
+        default=None,
+        description=(
+            "Data fresh install (YYYY-MM-DD). Gdy ustawiona i w ciągu 24h — "
+            "schema_integrity używa WARN zamiast BLOCK. "
+            "Usuń po ustabilizowaniu systemu."
+        ),
+    )
     app_name: str = Field(
         default="System Windykacja",
         description="Nazwa aplikacji — widoczna w Swagger UI.",

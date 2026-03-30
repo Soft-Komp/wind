@@ -819,8 +819,16 @@ async def lifespan(app: FastAPI):
         )
 
 # ── KROK 9: Integrity Watchdog (background task) ──────────────────────────
+    from contextlib import asynccontextmanager as _acm
+    from sqlalchemy.ext.asyncio import AsyncSession as _AsyncSession
+
+    @_acm
+    async def _watchdog_db_factory() -> AsyncGenerator[_AsyncSession, None]:
+        async for session in get_async_session():
+            yield session
+
     watchdog_task = asyncio.create_task(
-        run_watchdog_loop(db_factory=get_async_session),
+        run_watchdog_loop(db_factory=_watchdog_db_factory),
         name="integrity_watchdog",
     )
     logger.info(

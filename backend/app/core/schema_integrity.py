@@ -414,7 +414,7 @@ async def _get_reaction_level(db: AsyncSession) -> ReactionLevel:
             text(
                 """
                 SELECT TOP 1 ConfigValue
-                FROM dbo_ext.SystemConfig
+                FROM dbo_ext.skw_SystemConfig
                 WHERE ConfigKey = 'schema_integrity.reaction'
                   AND IsActive = 1
                 """
@@ -1443,15 +1443,36 @@ async def _run_full_verification(
 
         # BLOCK tylko przy starcie i tylko jeśli skonfigurowany
         if not runtime_check and reaction_level == "BLOCK":
-            logger.critical(
-                "Reakcja BLOCK — aplikacja zatrzymana. "
-                "Zmień schema_integrity.reaction na WARN aby pominąć.",
-                extra={"verification_id": result.verification_id},
-            )
-            raise SystemExit(
-                f"[SchemaIntegrity] BLOCK: {len(mismatches)} niezgodności. "
-                f"Verification ID: {result.verification_id}"
-            )
+
+            # Sprawdź okno fresh install (INSTALL_DATE w .env)
+            _install_grace = False
+            try:
+                from app.core.config import get_settings as _gs
+                from datetime import date as _date
+                _idate_str = getattr(_gs(), "INSTALL_DATE", None)
+                if _idate_str and str(_idate_str).strip():
+                    _idate = _date.fromisoformat(str(_idate_str).strip())
+                    _install_grace = (_date.today() - _idate).days < 1
+            except Exception:
+                pass
+
+            if _install_grace:
+                logger.warning(
+                    "Reakcja BLOCK pominięta — aktywne okno fresh install "
+                    "(INSTALL_DATE=%s). Usuń INSTALL_DATE z .env po weryfikacji systemu.",
+                    getattr(get_settings(), "INSTALL_DATE", "?"),
+                    extra={"verification_id": result.verification_id},
+                )
+            else:
+                logger.critical(
+                    "Reakcja BLOCK — aplikacja zatrzymana. "
+                    "Zmień schema_integrity.reaction na WARN aby pominąć.",
+                    extra={"verification_id": result.verification_id},
+                )
+                raise SystemExit(
+                    f"[SchemaIntegrity] BLOCK: {len(mismatches)} niezgodności. "
+                    f"Verification ID: {result.verification_id}"
+                )
 
         return result
 

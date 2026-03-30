@@ -143,7 +143,7 @@ async def system_health(
     "/config",
     summary="Lista kluczy konfiguracji systemu",
     description=(
-        "Zwraca wszystkie klucze konfiguracji z `dbo_ext.SystemConfig`. "
+        "Zwraca wszystkie klucze konfiguracji z `dbo_ext.skw_SystemConfig`. "
         "Wartości wrażliwe (`master_key.pin_hash`) są redagowane (`***`). "
         "Wyniki z cache Redis (`config:__all__` TTL 300s). "
         "**Wymaga uprawnienia:** `system.config_view`"

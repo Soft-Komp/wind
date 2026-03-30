@@ -409,6 +409,34 @@ case "$ALEMBIC_MODE" in
         log_info "Uruchamiam: alembic upgrade head"
         if alembic upgrade head; then
             log_ok "Migracje zakończone pomyślnie."
+
+            # ── Cleanup wiszących checksumów ─────────────────────────────────
+            # Migracja może wstawić checksums dla widoków wymagających ręcznego
+            # DDL (np. 018_faktura_widoki_dbo.sql). Usunięcie "wiszących" wpisów
+            # pozwala aplikacji przeliczyć checksums od nowa przy starcie.
+            log_info "Czyszczenie wiszących wpisów w skw_SchemaChecksums..."
+            /opt/mssql-tools18/bin/sqlcmd \
+                -S "tcp:${DB_HOST},${DB_PORT}" \
+                -d "${DB_NAME}" \
+                -U "${DB_USER}" \
+                -P "${DB_PASSWORD}" \
+                -C -b -h -1 \
+                -Q "
+                    SET NOCOUNT ON;
+                    IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NOT NULL
+                    BEGIN
+                        DELETE FROM [dbo_ext].[skw_SchemaChecksums]
+                        WHERE ObjectName NOT IN (
+                            SELECT s.name + '.' + o.name
+                            FROM sys.objects  o
+                            JOIN sys.schemas  s ON o.schema_id = s.schema_id
+                            WHERE o.type IN ('V', 'P', 'FN', 'IF', 'TF')
+                        );
+                        PRINT 'SchemaChecksums cleanup: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' wpisow usunieto.';
+                    END
+                " 2>/dev/null \
+                && log_ok "SchemaChecksums cleanup — zakończony." \
+                || log_warn "SchemaChecksums cleanup — błąd (niekrytyczny, kontynuuję)."
         else
             _EXIT_CODE=$?
             log_error "alembic upgrade head zakończone błędem (exit code: ${_EXIT_CODE})"
