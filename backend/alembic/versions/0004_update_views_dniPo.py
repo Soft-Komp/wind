@@ -31,7 +31,7 @@ depends_on    = None
 # Nowe widoki
 # =============================================================================
 
-_VIEW_ROZRACHUNKI_NEW = """
+_SKW_ROZRACHUNKI_NEW = """
 CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS
 WITH cte_ostatni_monit AS
@@ -159,7 +159,7 @@ LEFT JOIN cte_monity_rozrachunki AS monr ON monr.ID_KONTRAHENTA = CAST(k.ID_KONT
 # Poprzednie wersje (do downgrade)
 # =============================================================================
 
-_VIEW_ROZRACHUNKI_OLD = """
+_SKW_ROZRACHUNKI_OLD = """
 CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS
 SELECT
