@@ -632,8 +632,7 @@ async def initiate_reset_przypisania(
         redis=redis, key="faktury.confirm_token_ttl_seconds", default="60"
     ))
 
-    token = await create_one_time_token(
-        redis=redis,
+    token = create_one_time_token(
         scope="confirm_reset_faktura",
         entity_type="FakturaAkceptacja",
         entity_id=faktura_id,
@@ -676,8 +675,7 @@ async def confirm_reset_przypisania(
     request_id: str,
 ) -> FakturaResetResponse:
     """Krok 2 resetu: weryfikacja tokenu → dezaktywacja starych → nowe przypisania."""
-    payload = await verify_one_time_token(
-        redis=redis,
+    payload = verify_one_time_token(
         token=confirm_token,
         expected_scope="confirm_reset_faktura",
         expected_entity_type="FakturaAkceptacja",
@@ -812,8 +810,7 @@ async def initiate_force_status(
         redis=redis, key="faktury.confirm_token_ttl_seconds", default="60"
     ))
 
-    token = await create_one_time_token(
-        redis=redis,
+    token = create_one_time_token(
         scope=scope,
         entity_type="FakturaAkceptacja",
         entity_id=faktura_id,
@@ -849,8 +846,7 @@ async def confirm_force_status(
     payload = None
     for scope in ("confirm_force_akceptacja", "confirm_anuluj_faktura"):
         try:
-            payload = await verify_one_time_token(
-                redis=redis,
+            payload = verify_one_time_token(
                 token=confirm_token,
                 expected_scope=scope,
                 expected_entity_type="FakturaAkceptacja",

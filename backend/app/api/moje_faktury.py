@@ -59,13 +59,14 @@ router = APIRouter()
 # Helper: włącznik modułu (DRY — identyczny jak w faktury_akceptacja.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _require_module_enabled(redis: Redis) -> None:
+async def _require_module_enabled(redis: Redis, db=None) -> None:
     """403 jeśli moduł wyłączony."""
     try:
         enabled = await get_config_value(
             redis=redis,
             key="modul_akceptacji_faktur_enabled",
             default="false",
+            db=db,
         )
         if str(enabled).lower() != "true":
             raise HTTPException(
@@ -119,7 +120,7 @@ async def list_moje_faktury(
     status_param: str | None = Query(default=None, alias="status"),
 ) -> dict:
     await _require_akceptant(current_user, db, redis)
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     logger.info(
         orjson.dumps({
@@ -168,7 +169,7 @@ async def list_moje_faktury(
         "Dane z widoku WAPRO + opis/uwagi referenta + pozycje faktury + status przypisania. "
         "Cache Redis 120s. Zwraca 403 jeśli faktura nie jest przypisana do zalogowanego usera."
     ),
-    response_model=FakturaDetailResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def get_moja_faktura_detail(
@@ -180,7 +181,7 @@ async def get_moja_faktura_detail(
     current_user: Annotated[Any, require_permission("faktury.moje_details")],
 ) -> FakturaDetailResponse:
     await _require_akceptant(current_user, db, redis)
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     logger.info(
         orjson.dumps({
@@ -229,7 +230,7 @@ async def zapisz_decyzje(
     idem:        IdempotencyResult = Depends(decyzja_guard),
 ) -> DecyzjaResponse:
     await _require_akceptant(current_user, db, redis)
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     # Idempotency replay
     if idem.is_replay:
@@ -286,7 +287,7 @@ async def get_pdf_pracownik(
     current_user: Annotated[Any, require_permission("faktury.view_pdf")],
 ) -> StreamingResponse:
     await _require_akceptant(current_user, db, redis)
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     # Sprawdź włącznik PDF
     pdf_enabled = await get_config_value(

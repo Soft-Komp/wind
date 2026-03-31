@@ -415,6 +415,7 @@ def create_short_lived_token(
     entity_id: int,
     requested_by: int,
     ttl_seconds: int = 60,
+    extra_payload: dict | None = None,
 ) -> str:
     """
     Generuje krótkotrwały JWT do jednorazowych operacji.
@@ -444,6 +445,8 @@ def create_short_lived_token(
         "exp":          expires_at,
         "jti":          secrets.token_hex(16),
     }
+    if extra_payload:
+        payload.update(extra_payload)
 
     token = jwt.encode(payload, secret_key, algorithm=algorithm)
 

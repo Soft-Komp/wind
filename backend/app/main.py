@@ -757,6 +757,29 @@ async def lifespan(app: FastAPI):
         )
         raise RuntimeError(f"Inicjalizacja cookie config nieudana: {exc}") from exc
 
+    # ── KROK 6b: Warmup cache konfiguracji → Redis ────────────────────────────
+    try:
+        from app.services.config_service import get_all as _config_get_all
+        from app.db.session import async_session_factory
+        async with async_session_factory() as _warmup_db:
+            _all_config = await _config_get_all(db=_warmup_db, redis=redis)
+        logger.info(
+            orjson.dumps({
+                "event": "startup_config_cache_warmup_ok",
+                "keys_loaded": len(_all_config),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps({
+                "event": "startup_config_cache_warmup_failed",
+                "error": str(exc),
+                "note": "Config będzie ładowany z bazy przy pierwszym żądaniu",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+
     # ── KROK 7: Startup zakończony ────────────────────────────────────────────
     elapsed_ms = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
 

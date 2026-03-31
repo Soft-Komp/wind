@@ -885,6 +885,46 @@ else
 fi
 
 # =============================================================================
+# KROK 7c: DDL Fakir Write User — tworzenie użytkownika SQL dla Fakira
+# Uruchamiany tylko jeśli FAKIR_DB_PASSWORD jest ustawiony w środowisku.
+# =============================================================================
+if [ -n "${FAKIR_DB_PASSWORD:-}" ]; then
+    log_section "KROK 7c: Fakir Write User DDL"
+    _FAKIR_DDL="/app/database/ddl/021_fakir_write_user.sql"
+
+    if [ ! -f "$_FAKIR_DDL" ]; then
+        log_warn "[FAKIR-DDL] Brak pliku: ${_FAKIR_DDL} — pomijam."
+    else
+        _FAKIR_OUT=$(/opt/mssql-tools18/bin/sqlcmd \
+            -S "tcp:${DB_HOST},${DB_PORT}" \
+            -d "${DB_NAME}" \
+            -U "${DB_USER}" \
+            -P "${DB_PASSWORD}" \
+            -v FAKIR_PASSWORD="${FAKIR_DB_PASSWORD}" \
+            -C -b -I -r1 \
+            -i "$_FAKIR_DDL" \
+            2>&1)
+        _FAKIR_RC=$?
+
+        if [ -n "$_FAKIR_OUT" ]; then
+            while IFS= read -r _ln; do
+                [ -n "$_ln" ] && log_info "[FAKIR-DDL]   $_ln"
+            done <<EOF
+$_FAKIR_OUT
+EOF
+        fi
+
+        if [ "$_FAKIR_RC" -eq 0 ]; then
+            log_ok "[FAKIR-DDL] 021_fakir_write_user.sql — OK"
+        else
+            log_warn "[FAKIR-DDL] 021_fakir_write_user.sql — BŁĄD (exit: ${_FAKIR_RC}) — niekrytyczny, kontynuuję."
+        fi
+    fi
+else
+    log_info "[FAKIR-DDL] FAKIR_DB_PASSWORD nie ustawiony — pomijam tworzenie użytkownika Fakir."
+fi
+
+# =============================================================================
 # KROK 8: Start serwera
 # =============================================================================
 

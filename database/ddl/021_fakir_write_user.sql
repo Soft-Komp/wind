@@ -61,7 +61,7 @@ IF NOT EXISTS (
 BEGIN
     -- ⚠️ ZMIEŃ HASŁO ↓
     CREATE LOGIN [windykacja_fakir_write]
-        WITH PASSWORD   = N'ZMIEN_TO_HASLO_Fk!2026#ProdSrv',
+        WITH PASSWORD   = N'$(FAKIR_PASSWORD)',
              -- CHECK_POLICY: weryfikacja siły hasła przez politykę Windows
              CHECK_POLICY      = ON,
              -- CHECK_EXPIRATION: wygasanie hasła (OFF dla service account)
