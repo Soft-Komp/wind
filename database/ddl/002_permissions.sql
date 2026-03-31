@@ -62,9 +62,9 @@ BEGIN TRY
             -- Kategoria musi być jedną z dozwolonych wartości
             CONSTRAINT [CK_skw_Permissions_Category]
                 CHECK ([Category] IN (
-                    'auth', 'users', 'roles', 'debtors', 'monits',
+                    'auth', 'users', 'roles', 'permissions', 'debtors', 'monits',
                     'comments', 'pdf', 'reports', 'snapshots',
-                    'audit', 'system'
+                    'audit', 'system', 'templates', 'faktury'
                 ))
         );
 

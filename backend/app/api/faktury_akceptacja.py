@@ -85,7 +85,18 @@ router = APIRouter()
 # Helper: sprawdzenie włącznika modułu
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _require_module_enabled(redis: Redis) -> None:
+async def _require_referent(current_user, db: AsyncSession, redis: Redis) -> None:
+    """Sprawdza uprawnienie faktury.referent przez cache/bazę."""
+    from app.core.dependencies import _get_role_permissions
+    perms = await _get_role_permissions(current_user.role_id, db, redis)
+    if "faktury.referent" not in perms:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Brak uprawnienia: faktury.referent",
+        )
+
+
+async def _require_module_enabled(redis: Redis, db=None) -> None:
     """
     Sprawdza czy moduł faktur jest włączony (SystemConfig, cache 300s).
     Rzuca HTTP 403 jeśli wyłączony.
@@ -95,6 +106,7 @@ async def _require_module_enabled(redis: Redis) -> None:
             redis=redis,
             key="modul_akceptacji_faktur_enabled",
             default="false",
+            db=db,
         )
         if str(enabled).lower() != "true":
             raise HTTPException(
@@ -119,7 +131,7 @@ async def _require_module_enabled(redis: Redis) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/faktury-akceptacja",
+    "",
     summary="Lista faktur w obiegu akceptacji",
     description=(
         "Zwraca listę faktur: NOWE (z WAPRO bez obiegu) + W_TOKU (w naszej tabeli). "
@@ -144,20 +156,16 @@ async def list_faktury(
     date_to:      Optional[str] = Query(default=None),
 ) -> dict:
     # Sprawdź uprawnienie referenta
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Brak uprawnienia: faktury.referent",
-        )
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     logger.info(
         orjson.dumps({
             "event":      "faktury_list_request",
-            "user_id":    current_user.user_id,
+            "user_id":    current_user.id_user,
             "page":       pagination.page,
-            "limit":      pagination.limit,
+            "limit":      pagination.per_page,
             "filters":    {"priorytet": priorytet, "status": status_f, "search": search},
             "ip":         client_ip,
             "request_id": request_id,
@@ -169,7 +177,7 @@ async def list_faktury(
         db=db,
         redis=redis,
         page=pagination.page,
-        limit=pagination.limit,
+        limit=pagination.per_page,
         priorytet=priorytet,
         status=status_f,
         search=search,
@@ -181,7 +189,7 @@ async def list_faktury(
         "data":  result["items"],
         "total": result["total"],
         "page":  pagination.page,
-        "limit": pagination.limit,
+        "limit": pagination.per_page,
     }
 
 
@@ -190,7 +198,7 @@ async def list_faktury(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/faktury-akceptacja",
+    "",
     summary="Wpuszczenie faktury do obiegu akceptacji",
     description=(
         "Tworzy wpis w skw_faktura_akceptacja + przypisania w skw_faktura_przypisanie. "
@@ -210,13 +218,9 @@ async def create_faktura(
     current_user: Annotated[Any, require_permission("faktury.create")],
     idem:         IdempotencyResult = Depends(faktury_create_guard),
 ) -> FakturaCreateResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Brak uprawnienia: faktury.referent",
-        )
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     # Idempotency replay
     if idem.is_replay:
@@ -225,7 +229,7 @@ async def create_faktura(
     logger.info(
         orjson.dumps({
             "event":       "faktura_create_request",
-            "user_id":     current_user.user_id,
+            "user_id":     current_user.id_user,
             "numer_ksef":  body.numer_ksef,
             "priorytet":   body.priorytet,
             "user_ids":    body.user_ids,
@@ -238,7 +242,7 @@ async def create_faktura(
         db=db,
         redis=redis,
         body=body,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -248,14 +252,40 @@ async def create_faktura(
     return result
 
 
+@router.get(
+    "/{faktura_id}",
+    summary="Szczegóły faktury w obiegu akceptacji",
+    response_model=FakturaDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_faktura_detail(
+    faktura_id:   Annotated[int, Path(gt=0)],
+    db:           DB,
+    redis:        RedisClient,
+    client_ip:    ClientIP,
+    request_id:   RequestID,
+    current_user: Annotated[Any, require_permission("faktury.view_details")],
+) -> FakturaDetailResponse:
+    await _require_referent(current_user, db, redis)
+    await _require_module_enabled(redis, db)
+
+    return await svc.get_faktura_detail(
+        db=db,
+        redis=redis,
+        faktura_id=faktura_id,
+        actor_id=current_user.id_user,
+    )
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH /faktury-akceptacja/{id} — edycja priorytetu/opisu/uwag
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.patch(
-    "/faktury-akceptacja/{faktura_id}",
+    "/{faktura_id}",
     summary="Edycja priorytetu, opisu i uwag faktury",
-    response_model=FakturaDetailResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def patch_faktura(
@@ -267,17 +297,16 @@ async def patch_faktura(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.edit")],
 ) -> FakturaDetailResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     return await svc.patch_faktura(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
         body=body,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -289,7 +318,7 @@ async def patch_faktura(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/faktury-akceptacja/{faktura_id}/reset",
+    "/{faktura_id}/reset",
     summary="Inicjacja resetu przypisań (krok 1 — zwraca confirm_token)",
     response_model=ConfirmTokenResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -303,10 +332,9 @@ async def initiate_reset(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.reset")],
 ) -> ConfirmTokenResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     # Sprawdź włącznik resetu
     reset_enabled = await get_config_value(
@@ -323,7 +351,7 @@ async def initiate_reset(
         redis=redis,
         faktura_id=faktura_id,
         body=body,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -335,7 +363,7 @@ async def initiate_reset(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/faktury-akceptacja/{faktura_id}/reset/confirm",
+    "/{faktura_id}/reset/confirm",
     summary="Potwierdzenie resetu przypisań (krok 2)",
     response_model=FakturaResetResponse,
     status_code=status.HTTP_200_OK,
@@ -351,10 +379,9 @@ async def confirm_reset(
     current_user: Annotated[Any, require_permission("faktury.reset")],
     idem:         IdempotencyResult = Depends(reset_confirm_guard),
 ) -> FakturaResetResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     if idem.is_replay:
         return idem.cached_response
@@ -364,7 +391,7 @@ async def confirm_reset(
         redis=redis,
         faktura_id=faktura_id,
         confirm_token=body.confirm_token,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -378,7 +405,7 @@ async def confirm_reset(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.patch(
-    "/faktury-akceptacja/{faktura_id}/status",
+    "/{faktura_id}/status",
     summary="Wymuszenie zmiany statusu faktury (krok 1 — zwraca confirm_token)",
     response_model=ConfirmTokenResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -392,10 +419,9 @@ async def initiate_force_status(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.force_status")],
 ) -> ConfirmTokenResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     force_enabled = await get_config_value(
         redis=redis, key="faktury.force_status_enabled", default="true"
@@ -411,7 +437,7 @@ async def initiate_force_status(
         redis=redis,
         faktura_id=faktura_id,
         body=body,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -423,7 +449,7 @@ async def initiate_force_status(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/faktury-akceptacja/{faktura_id}/status/confirm",
+    "/{faktura_id}/status/confirm",
     summary="Potwierdzenie zmiany statusu (krok 2)",
     response_model=dict,
     status_code=status.HTTP_200_OK,
@@ -439,10 +465,9 @@ async def confirm_force_status(
     current_user  = require_permission("faktury.force_status"),
     idem:         IdempotencyResult = Depends(force_status_confirm_guard),
 ) -> dict:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     if idem.is_replay:
         return idem.cached_response
@@ -452,7 +477,7 @@ async def confirm_force_status(
         redis=redis,
         faktura_id=faktura_id,
         confirm_token=body.confirm_token,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -466,7 +491,7 @@ async def confirm_force_status(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/faktury-akceptacja/{faktura_id}/historia",
+    "/{faktura_id}/historia",
     summary="Historia zdarzeń faktury (skw_faktura_log)",
     response_model=FakturaHistoriaResponse,
     status_code=status.HTTP_200_OK,
@@ -479,10 +504,9 @@ async def get_historia(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.view_historia")],
 ) -> FakturaHistoriaResponse:
-    if not current_user.has_permission("faktury.referent"):
-        raise HTTPException(status_code=403, detail="Brak uprawnienia: faktury.referent")
+    await _require_referent(current_user, db, redis)
 
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     return await svc.get_historia(
         db=db,
@@ -496,7 +520,7 @@ async def get_historia(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/faktury-akceptacja/{faktura_id}/pdf",
+    "/{faktura_id}/pdf",
     summary="Wizualizacja PDF faktury (karta akceptacji)",
     status_code=status.HTTP_200_OK,
     response_class=StreamingResponse,
@@ -509,7 +533,7 @@ async def get_pdf_referent(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.view_pdf")],
 ) -> StreamingResponse:
-    await _require_module_enabled(redis)
+    await _require_module_enabled(redis, db)
 
     # Sprawdź włącznik PDF
     pdf_enabled = await get_config_value(
@@ -525,7 +549,7 @@ async def get_pdf_referent(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
     )
 
     return StreamingResponse(

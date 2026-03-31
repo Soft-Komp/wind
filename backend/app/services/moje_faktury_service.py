@@ -127,7 +127,7 @@ async def get_moje_faktury_list(
             FakturaPrzypisanie.is_active == True,  # noqa: E712
             FakturaPrzypisanie.status == "oczekuje",
         )
-    stmt = stmt.order_by(FakturaPrzypisanie.created_at.desc())
+    stmt = stmt.order_by(FakturaPrzypisanie.CreatedAt.desc())
 
     result = await db.execute(stmt)
     przypisania = result.scalars().all()
@@ -155,7 +155,7 @@ async def get_moje_faktury_list(
             "priorytet":         faktura.priorytet,
             "moj_status":        p.status,
             "is_active":         p.is_active,
-            "created_at":        p.created_at.isoformat() if p.created_at else None,
+            "created_at":        p.CreatedAt.isoformat() if p.CreatedAt else None,
             "decided_at":        p.decided_at.isoformat() if p.decided_at else None,
             "numer":             wapro.numer if wapro else None,
             "wartosc_brutto":    float(wapro.wartosc_brutto) if wapro and wapro.wartosc_brutto else None,
@@ -236,10 +236,10 @@ async def get_moja_faktura_detail(
         "priorytet":         faktura.priorytet,
         "opis_dokumentu":    faktura.opis_dokumentu,
         "uwagi":             faktura.uwagi,
-        "is_active":         faktura.is_active,
+        "is_active":         faktura.IsActive,
         "moj_status":        moje.status if moje else None,
-        "created_at":        faktura.created_at.isoformat() if faktura.created_at else None,
-        "updated_at":        faktura.updated_at.isoformat() if faktura.updated_at else None,
+        "created_at":        faktura.CreatedAt.isoformat() if faktura.CreatedAt else None,
+        "updated_at":        faktura.UpdatedAt.isoformat() if faktura.UpdatedAt else None,
         # WAPRO
         "numer":             wapro.numer if wapro else None,
         "wartosc_netto":     float(wapro.wartosc_netto) if wapro and wapro.wartosc_netto else None,
@@ -334,7 +334,7 @@ async def zapisz_decyzje(
     # Ustaw fakturę w_toku jeśli była nowe
     if faktura.status_wewnetrzny == "nowe":
         faktura.status_wewnetrzny = "w_toku"
-        faktura.updated_at = now
+        faktura.UpdatedAt = now
 
     # 3+4. Log (komentarz tylko do faktura_log, hash do AuditLog via meta)
     await _log_event(
@@ -547,7 +547,7 @@ async def _get_moje_przypisanie(
         select(FakturaPrzypisanie).where(
             FakturaPrzypisanie.faktura_id == faktura_id,
             FakturaPrzypisanie.user_id == user_id,
-        ).order_by(FakturaPrzypisanie.created_at.desc())
+        ).order_by(FakturaPrzypisanie.CreatedAt.desc())
     )
     return result.scalars().first()
 

@@ -139,3 +139,8 @@ GPGKJASLO
 | Seedery się nie uruchamiają | `RUN_SEEDS=never` w `.env` | Zmień na `RUN_SEEDS=auto` |
 | Alembic próbuje tworzyć tabele | `ALEMBIC_MODE=upgrade` zamiast `stamp` | Zmień na `ALEMBIC_MODE=stamp` |
 | Alembic — `Multiple head revisions` | Stary plik w `alembic/versions/` | Usuń `_archive/` i stare pliki `001_*.py` |
+
+
+docker exec -it windykacja_api python /app/database/setup.py --set-admin-password
+
+docker logs windykacja_api 2>&1 | Select-String "xyz"

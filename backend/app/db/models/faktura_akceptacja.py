@@ -199,7 +199,7 @@ class FakturaAkceptacja(Base):
         "FakturaLog",
         back_populates="faktura",
         lazy="select",
-        order_by="FakturaLog.CreatedAt.desc()",
+        order_by="FakturaLog.created_at.desc()",
     )
 
     autor: Mapped["User"] = relationship(

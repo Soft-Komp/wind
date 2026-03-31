@@ -13,7 +13,7 @@ from .base import AuditMixin, Base
 PERMISSION_CATEGORIES = frozenset({
     "auth", "users", "roles", "permissions", "debtors",
     "comments", "monits", "pdf", "reports", "audit",
-    "snapshots", "system",
+    "snapshots", "system", "templates", "faktury",
 })
 
 

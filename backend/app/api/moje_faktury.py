@@ -82,9 +82,11 @@ async def _require_module_enabled(redis: Redis) -> None:
         )
 
 
-def _require_akceptant(current_user) -> None:
+async def _require_akceptant(current_user, db, redis) -> None:
     """Sprawdza rolę modułową faktury.akceptant."""
-    if not current_user.has_permission("faktury.akceptant"):
+    from app.core.dependencies import _get_role_permissions
+    perms = await _get_role_permissions(current_user.role_id, db, redis)
+    if "faktury.akceptant" not in perms:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Brak uprawnienia: faktury.akceptant",
@@ -96,7 +98,7 @@ def _require_akceptant(current_user) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/moje-faktury",
+    "",
     summary="Lista faktur przypisanych do zalogowanego pracownika",
     description=(
         "Domyślnie: tylko oczekujące (is_active=1, status=oczekuje). "
@@ -116,16 +118,16 @@ async def list_moje_faktury(
     current_user: Annotated[Any, require_permission("faktury.moje_view")],
     status_param: str | None = Query(default=None, alias="status"),
 ) -> dict:
-    _require_akceptant(current_user)
+    await _require_akceptant(current_user, db, redis)
     await _require_module_enabled(redis)
 
     logger.info(
         orjson.dumps({
             "event":      "moje_faktury_list",
-            "user_id":    current_user.user_id,
+            "user_id":    current_user.id_user,
             "status":     status_param,
             "page":       pagination.page,
-            "limit":      pagination.limit,
+            "limit": pagination.per_page,
             "ip":         client_ip,
             "request_id": request_id,
         }).decode()
@@ -141,9 +143,9 @@ async def list_moje_faktury(
     result = await svc.get_moje_faktury_list(
         db=db,
         redis=redis,
-        user_id=current_user.user_id,
+        user_id=current_user.id_user,
         page=pagination.page,
-        limit=pagination.limit,
+        limit=pagination.per_page,
         archiwum=(status_param == "archiwum"),
     )
 
@@ -151,7 +153,7 @@ async def list_moje_faktury(
         "data":  result["items"],
         "total": result["total"],
         "page":  pagination.page,
-        "limit": pagination.limit,
+        "limit": pagination.per_page,
     }
 
 
@@ -160,7 +162,7 @@ async def list_moje_faktury(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/moje-faktury/{faktura_id}",
+    "/{faktura_id}",
     summary="Szczegóły faktury przypisanej do pracownika",
     description=(
         "Dane z widoku WAPRO + opis/uwagi referenta + pozycje faktury + status przypisania. "
@@ -177,13 +179,13 @@ async def get_moja_faktura_detail(
     request_id:  RequestID,
     current_user: Annotated[Any, require_permission("faktury.moje_details")],
 ) -> FakturaDetailResponse:
-    _require_akceptant(current_user)
+    await _require_akceptant(current_user, db, redis)
     await _require_module_enabled(redis)
 
     logger.info(
         orjson.dumps({
             "event":      "moje_faktury_detail",
-            "user_id":    current_user.user_id,
+            "user_id":    current_user.id_user,
             "faktura_id": faktura_id,
             "ip":         client_ip,
             "request_id": request_id,
@@ -194,7 +196,7 @@ async def get_moja_faktura_detail(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
-        user_id=current_user.user_id,
+        user_id=current_user.id_user,
     )
 
 
@@ -203,7 +205,7 @@ async def get_moja_faktura_detail(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/moje-faktury/{faktura_id}/decyzja",
+    "/{faktura_id}/decyzja",
     summary="Podjęcie decyzji: akceptacja / odrzucenie / nie_moje",
     description=(
         "Body: {status: 'zaakceptowane'|'odrzucone'|'nie_moje', komentarz: '...'}. "
@@ -226,7 +228,7 @@ async def zapisz_decyzje(
     current_user: Annotated[Any, require_permission("faktury.moje_decyzja")],
     idem:        IdempotencyResult = Depends(decyzja_guard),
 ) -> DecyzjaResponse:
-    _require_akceptant(current_user)
+    await _require_akceptant(current_user, db, redis)
     await _require_module_enabled(redis)
 
     # Idempotency replay
@@ -236,7 +238,7 @@ async def zapisz_decyzje(
     logger.info(
         orjson.dumps({
             "event":            "moje_faktury_decyzja",
-            "user_id":          current_user.user_id,
+            "user_id":          current_user.id_user,
             "faktura_id":       faktura_id,
             "status":           body.status,
             "has_komentarz":    bool(body.komentarz),
@@ -251,7 +253,7 @@ async def zapisz_decyzje(
         redis=redis,
         faktura_id=faktura_id,
         body=body,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
         actor_name=current_user.username,
         actor_ip=client_ip,
         request_id=request_id,
@@ -266,7 +268,7 @@ async def zapisz_decyzje(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
-    "/moje-faktury/{faktura_id}/pdf",
+    "/{faktura_id}/pdf",
     summary="Wizualizacja PDF faktury przypisanej do pracownika",
     description=(
         "Identyczny PDF jak dla referenta. "
@@ -283,7 +285,7 @@ async def get_pdf_pracownik(
     request_id:  RequestID,
     current_user: Annotated[Any, require_permission("faktury.view_pdf")],
 ) -> StreamingResponse:
-    _require_akceptant(current_user)
+    await _require_akceptant(current_user, db, redis)
     await _require_module_enabled(redis)
 
     # Sprawdź włącznik PDF
@@ -300,7 +302,7 @@ async def get_pdf_pracownik(
     is_assigned = await svc.check_przypisanie(
         db=db,
         faktura_id=faktura_id,
-        user_id=current_user.user_id,
+        user_id=current_user.id_user,
     )
     if not is_assigned:
         raise HTTPException(
@@ -313,7 +315,7 @@ async def get_pdf_pracownik(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
-        actor_id=current_user.user_id,
+        actor_id=current_user.id_user,
     )
 
     return StreamingResponse(

@@ -1119,9 +1119,10 @@ async def get_config_value(
     redis,
     key: str,
     default: str = "",
+    db=None,
 ) -> str:
     """Alias get() — uproszczony interfejs dla modułu faktur."""
-    result = await get(db=None, redis=redis, key=key, default=default)
+    result = await get(db=db, redis=redis, key=key, default=default)
     return result or default
 
 # ---------------------------------------------------------------------------

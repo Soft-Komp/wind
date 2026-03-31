@@ -77,7 +77,7 @@ class FakturaLog(Base):
             ")",
             name="CHK_sfl_akcja",
         ),
-        Index("IX_sfl_faktura_created", "faktura_id", "created_at"),
+        Index("IX_sfl_faktura_created", "faktura_id", "CreatedAt"),
         {"schema": "dbo_ext"},
     )
 
@@ -118,6 +118,7 @@ class FakturaLog(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt",
         DateTime,
         nullable=False,
         server_default=func.getdate(),

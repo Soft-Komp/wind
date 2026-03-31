@@ -214,11 +214,11 @@ def _create_faktura_akceptacja() -> None:
                 )
             );
 
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_akceptacja] — UTWORZONA.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_akceptacja] — UTWORZONA.';
         END
         ELSE
         BEGIN
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_akceptacja] — już istnieje, pomijam.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_akceptacja] — już istnieje, pomijam.';
         END
     """)
 
@@ -315,11 +315,11 @@ def _create_faktura_przypisanie() -> None:
                     (faktura_id ASC, is_active ASC)
                 INCLUDE (user_id, status);
 
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_przypisanie] + 2 indeksy — UTWORZONE.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_przypisanie] + 2 indeksy — UTWORZONE.';
         END
         ELSE
         BEGIN
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_przypisanie] — już istnieje, pomijam.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_przypisanie] — już istnieje, pomijam.';
         END
     """)
 
@@ -416,11 +416,11 @@ def _create_faktura_log() -> None:
                 ON [{SCHEMA}].[skw_faktura_log]
                     (faktura_id ASC, CreatedAt DESC);
 
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_log] + indeks — UTWORZONE.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_log] + indeks — UTWORZONE.';
         END
         ELSE
         BEGIN
-            PRINT N'[007] Tabela [{SCHEMA}].[skw_faktura_log] — już istnieje, pomijam.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[skw_faktura_log] — już istnieje, pomijam.';
         END
     """)
 
@@ -440,11 +440,11 @@ def _drop_table_if_exists(table_name: str) -> None:
         IF OBJECT_ID(N'[{SCHEMA}].[{table_name}]', N'U') IS NOT NULL
         BEGIN
             DROP TABLE [{SCHEMA}].[{table_name}];
-            PRINT N'[007] Tabela [{SCHEMA}].[{table_name}] — USUNIĘTA.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[{table_name}] — USUNIĘTA.';
         END
         ELSE
         BEGIN
-            PRINT N'[007] Tabela [{SCHEMA}].[{table_name}] — nie istnieje, pomijam.';
+            PRINT N'[0006] Tabela [{SCHEMA}].[{table_name}] — nie istnieje, pomijam.';
         END
     """)
     logger.warning(

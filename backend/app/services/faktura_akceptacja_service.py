@@ -71,6 +71,8 @@ from app.schemas.faktura_akceptacja import (
     FakturaResetRequest,
     FakturaResetResponse,
     Priorytet,
+    PrzypisanieResponse,
+    StatusPrzypisania,
     StatusWewnetrzny,
     WaproFakturaNaglowek,
     WaproFakturaPozycja,
@@ -165,7 +167,7 @@ async def _get_wapro_nowe_ksef_ids(db: AsyncSession) -> set[str]:
             params={},
         )
         existing_stmt = select(FakturaAkceptacja.numer_ksef).where(
-            FakturaAkceptacja.is_active == True  # noqa: E712
+            FakturaAkceptacja.IsActive == True  # noqa: E712
         )
         return {r.get("KSEF_ID") for r in rows if r.get("KSEF_ID")}
     except Exception as exc:
@@ -250,7 +252,7 @@ async def _handle_orphan_if_needed(
     stary_status = faktura.status_wewnetrzny
 
     faktura.status_wewnetrzny = "orphaned"
-    faktura.updated_at = now
+    faktura.UpdatedAt = now
 
     await _log_event(
         db=db,
@@ -338,7 +340,7 @@ async def get_faktury_list(
 
     # Buduj query
     stmt = select(FakturaAkceptacja).where(
-        FakturaAkceptacja.is_active == True  # noqa: E712
+        FakturaAkceptacja.IsActive == True  # noqa: E712
     )
 
     if priorytet:
@@ -346,7 +348,7 @@ async def get_faktury_list(
     if status:
         stmt = stmt.where(FakturaAkceptacja.status_wewnetrzny == status)
 
-    stmt = stmt.order_by(FakturaAkceptacja.created_at.desc())
+    stmt = stmt.order_by(FakturaAkceptacja.CreatedAt.desc())
     result = await db.execute(stmt)
     wszystkie = result.scalars().all()
 
@@ -375,9 +377,9 @@ async def get_faktury_list(
             "status_wewnetrzny": f.status_wewnetrzny,  # już 'orphaned' jeśli wykryto
             "priorytet":         f.priorytet,
             "opis_skrocony":     (f.opis_dokumentu or "")[:120] or None,
-            "is_active":         f.is_active,
-            "created_at":        f.created_at.isoformat() if f.created_at else None,
-            "updated_at":        f.updated_at.isoformat() if f.updated_at else None,
+            "is_active": f.IsActive,
+            "created_at":        f.CreatedAt.isoformat() if f.CreatedAt else None,
+            "updated_at":        f.UpdatedAt.isoformat() if f.UpdatedAt else None,
             "numer":             wapro.numer if wapro else None,
             "wartosc_brutto":    float(wapro.wartosc_brutto) if wapro and wapro.wartosc_brutto else None,
             "nazwa_kontrahenta": wapro.nazwa_kontrahenta if wapro else None,
@@ -417,7 +419,7 @@ async def create_faktura_akceptacja(
     existing = await db.execute(
         select(FakturaAkceptacja).where(
             FakturaAkceptacja.numer_ksef == body.numer_ksef,
-            FakturaAkceptacja.is_active == True,  # noqa: E712
+            FakturaAkceptacja.IsActive == True,  # noqa: E712
         )
     )
     if existing.scalar_one_or_none():
@@ -448,8 +450,8 @@ async def create_faktura_akceptacja(
         opis_dokumentu=body.opis_dokumentu,
         uwagi=body.uwagi,
         utworzony_przez=actor_id,
-        is_active=True,
-        created_at=now,
+        IsActive=True,
+        CreatedAt=now,
     )
     db.add(faktura)
     await db.flush()  # Pobierz ID bez commit
@@ -461,7 +463,7 @@ async def create_faktura_akceptacja(
             user_id=user_id,
             status="oczekuje",
             is_active=True,
-            created_at=now,
+            CreatedAt=now,
         ))
 
     # Log
@@ -511,7 +513,7 @@ async def create_faktura_akceptacja(
         status=StatusWewnetrzny.NOWE,
         priorytet=Priorytet(faktura.priorytet),
         przypisano_do=body.user_ids,
-        created_at=faktura.created_at,
+        created_at=faktura.CreatedAt,
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -533,7 +535,7 @@ async def patch_faktura(
     result = await db.execute(
         select(FakturaAkceptacja).where(
             FakturaAkceptacja.id == faktura_id,
-            FakturaAkceptacja.is_active == True,  # noqa: E712
+            FakturaAkceptacja.IsActive == True,  # noqa: E712
         )
     )
     faktura = result.scalar_one_or_none()
@@ -561,7 +563,7 @@ async def patch_faktura(
         faktura.uwagi = body.uwagi
         changes["uwagi"] = body.uwagi
 
-    faktura.updated_at = datetime.now().replace(tzinfo=None)
+    faktura.UpdatedAt = datetime.now().replace(tzinfo=None)
 
     akcja = AkcjaLog.PRIORYTET_ZMIENIONY if "priorytet" in changes else AkcjaLog.STATUS_ZMIENIONY
     await _log_event(
@@ -602,7 +604,7 @@ async def initiate_reset_przypisania(
     result = await db.execute(
         select(FakturaAkceptacja).where(
             FakturaAkceptacja.id == faktura_id,
-            FakturaAkceptacja.is_active == True,  # noqa: E712
+            FakturaAkceptacja.IsActive == True,  # noqa: E712
         )
     )
     faktura = result.scalar_one_or_none()
@@ -705,7 +707,7 @@ async def confirm_reset_przypisania(
     # Dezaktywuj stare
     now = datetime.now().replace(tzinfo=None)
     for p in stare:
-        p.is_active = False
+        p.IsActive = False
         p.updated_at = now
 
     # Nowe przypisania
@@ -715,12 +717,12 @@ async def confirm_reset_przypisania(
             user_id=user_id,
             status="oczekuje",
             is_active=True,
-            created_at=now,
+            CreatedAt=now,
         ))
 
     # Reset statusu faktury do w_toku
     faktura.status_wewnetrzny = "w_toku"
-    faktura.updated_at = now
+    faktura.UpdatedAt = now
 
     await _log_event(
         db=db,
@@ -785,7 +787,7 @@ async def initiate_force_status(
     result = await db.execute(
         select(FakturaAkceptacja).where(
             FakturaAkceptacja.id == faktura_id,
-            FakturaAkceptacja.is_active == True,  # noqa: E712
+            FakturaAkceptacja.IsActive == True,  # noqa: E712
         )
     )
     faktura = result.scalar_one_or_none()
@@ -879,11 +881,11 @@ async def confirm_force_status(
     now = datetime.now().replace(tzinfo=None)
 
     faktura.status_wewnetrzny = nowy_status
-    faktura.updated_at = now
+    faktura.UpdatedAt = now
 
     # Anulowanie → soft-delete + archiwum
     if nowy_status == "anulowana":
-        faktura.is_active = False
+        faktura.IsActive = False
         await _archive_faktura(faktura)
 
     akcja = (
@@ -993,6 +995,124 @@ async def get_historia(
 # 9. GET /pdf
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def get_faktura_detail(
+    *,
+    db: AsyncSession,
+    redis: Redis,
+    faktura_id: int,
+    actor_id: int,
+) -> FakturaDetailResponse:
+    """Szczegóły faktury: dane z naszej tabeli + WAPRO + pozycje + przypisania."""
+    cache_key = _cache_key_detail(faktura_id)
+
+    try:
+        cached = await redis.get(cache_key)
+        if cached:
+            data = orjson.loads(cached)
+            return FakturaDetailResponse(**data)
+    except Exception:
+        pass
+
+    result = await db.execute(
+        select(FakturaAkceptacja).where(FakturaAkceptacja.id == faktura_id)
+    )
+    faktura = result.scalar_one_or_none()
+    if not faktura:
+        raise HTTPException(status_code=404, detail=f"Faktura ID={faktura_id} nie istnieje.")
+
+    await _handle_orphan_if_needed(db=db, redis=redis, faktura=faktura)
+    wapro = await _get_wapro_naglowek(faktura.numer_ksef)
+
+    res_p = await db.execute(
+        select(FakturaPrzypisanie).where(
+            FakturaPrzypisanie.faktura_id == faktura_id
+        ).order_by(FakturaPrzypisanie.CreatedAt)
+    )
+    przypisania = res_p.scalars().all()
+
+    wapro_pozycje = []
+    if wapro:
+        try:
+            from app.db.wapro import execute_query
+            rows = await execute_query(
+                query_type="faktura_pozycje",
+                params={"ksef_id": faktura.numer_ksef},
+            )
+            for r in rows:
+                wapro_pozycje.append(WaproFakturaPozycja(
+                    id_buf_dokument=r.get("ID_BUF_DOKUMENT", 0),
+                    numer_pozycji=int(r.get("NumerPozycji") or 0),
+                    nazwa_towaru=str(r.get("NazwaTowaru") or ""),
+                    ilosc=float(r["Ilosc"]) if r.get("Ilosc") is not None else None,
+                    jednostka=r.get("Jednostka"),
+                    cena_netto=float(r["CenaNetto"]) if r.get("CenaNetto") is not None else None,
+                    wartosc_netto=float(r["WartoscNetto"]) if r.get("WartoscNetto") is not None else None,
+                    wartosc_brutto=float(r["WartoscBrutto"]) if r.get("WartoscBrutto") is not None else None,
+                    stawka_vat=r.get("StawkaVAT"),
+                ))
+        except Exception as exc:
+            logger.warning(f"Błąd pobierania pozycji WAPRO: {exc}")
+
+    przypisania_resp = []
+    for p in przypisania:
+        przypisania_resp.append(PrzypisanieResponse(
+            id=p.id,
+            faktura_id=p.faktura_id,
+            user_id=p.user_id,
+            status=StatusPrzypisania(p.status),
+            komentarz=p.komentarz,
+            is_active=bool(p.is_active),
+            created_at=p.CreatedAt,
+            decided_at=p.decided_at,
+        ))
+
+    is_overdue = False
+    if wapro and wapro.termin_platnosci:
+        try:
+            from datetime import date
+            tp = wapro.termin_platnosci
+            if isinstance(tp, datetime):
+                tp = tp.date()
+            is_overdue = tp < date.today()
+        except Exception:
+            pass
+
+    response = FakturaDetailResponse(
+        id=faktura.id,
+        numer_ksef=faktura.numer_ksef,
+        status_wewnetrzny=StatusWewnetrzny(faktura.status_wewnetrzny),
+        utworzony_przez=faktura.utworzony_przez,
+        priorytet=Priorytet(faktura.priorytet),
+        opis_dokumentu=faktura.opis_dokumentu,
+        uwagi=faktura.uwagi,
+        is_active=bool(faktura.IsActive),
+        created_at=faktura.CreatedAt,
+        updated_at=faktura.UpdatedAt,
+        numer=wapro.numer if wapro else None,
+        kod_statusu=wapro.kod_statusu if wapro else None,
+        status_opis=wapro.status_opis if wapro else None,
+        data_wystawienia=wapro.data_wystawienia if wapro else None,
+        termin_platnosci=wapro.termin_platnosci if wapro else None,
+        wartosc_netto=wapro.wartosc_netto if wapro else None,
+        wartosc_brutto=wapro.wartosc_brutto if wapro else None,
+        kwota_vat=wapro.kwota_vat if wapro else None,
+        forma_platnosci=wapro.forma_platnosci if wapro else None,
+        nazwa_kontrahenta=wapro.nazwa_kontrahenta if wapro else None,
+        email_kontrahenta=wapro.email_kontrahenta if wapro else None,
+        telefon_kontrahenta=wapro.telefon_kontrahenta if wapro else None,
+        is_overdue=is_overdue,
+        pozycje=wapro_pozycje,
+        przypisania=przypisania_resp,
+    )
+
+    try:
+        await redis.setex(cache_key, 120, orjson.dumps(response.model_dump()))
+    except Exception:
+        pass
+
+    return response
+
+
 async def get_faktura_pdf(
     *,
     db: AsyncSession,
@@ -1014,7 +1134,7 @@ async def get_faktura_pdf(
 
     # Cache key bazuje na updated_at (świeżość danych)
     data_hash = hashlib.md5(
-        f"{faktura_id}:{faktura.updated_at}:{faktura.status_wewnetrzny}".encode()
+        f"{faktura_id}:{faktura.UpdatedAt}:{faktura.status_wewnetrzny}".encode()
     ).hexdigest()[:12]
     cache_key = _cache_key_pdf(faktura_id, data_hash)
 
@@ -1036,7 +1156,7 @@ async def get_faktura_pdf(
     res_p = await db.execute(
         select(FakturaPrzypisanie).where(
             FakturaPrzypisanie.faktura_id == faktura_id
-        ).order_by(FakturaPrzypisanie.created_at)
+        ).order_by(FakturaPrzypisanie.CreatedAt)
     )
     przypisania = res_p.scalars().all()
 
@@ -1047,6 +1167,7 @@ async def get_faktura_pdf(
         wapro=wapro,
         przypisania=przypisania,
         db=db,
+        redis=redis,           # ← dodane: potrzebne do logo z SystemConfig
     )
 
     # Cache PDF
@@ -1183,7 +1304,7 @@ async def _archive_faktura(faktura: FakturaAkceptacja) -> None:
         "opis_dokumentu":    faktura.opis_dokumentu,
         "uwagi":             faktura.uwagi,
         "utworzony_przez":   faktura.utworzony_przez,
-        "created_at":        faktura.created_at.isoformat() if faktura.created_at else None,
+        "created_at":        faktura.CreatedAt.isoformat() if faktura.CreatedAt else None,
         "archived_at":       datetime.now(timezone.utc).isoformat(),
     }
 

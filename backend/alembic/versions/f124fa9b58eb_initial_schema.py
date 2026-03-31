@@ -146,7 +146,7 @@ def _create_skw_permissions() -> None:
                     CHECK ([Category] IN (
                         N'system', N'audit', N'snapshots', N'reports', N'pdf',
                         N'comments', N'monits', N'debtors', N'permissions',
-                        N'roles', N'users', N'auth', N'templates'
+                        N'roles', N'users', N'auth', N'templates', N'faktury'
                     ))
             );
             CREATE NONCLUSTERED INDEX [IX_skw_Permissions_Category]

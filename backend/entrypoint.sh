@@ -800,6 +800,91 @@ if [ "$_should_run_seeds" = "true" ]; then
 fi  # if [ "$_should_run_seeds" = "true" ]
 
 # =============================================================================
+# KROK 7b: Seedery modułowe — zawsze uruchamiane (MERGE idempotentne)
+# Niezależne od RUN_SEEDS — moduły mogą być dodawane po inicjalnym setupie.
+# Warunek uruchomienia: skw_Permissions istnieje (migracje wykonane).
+# =============================================================================
+
+log_section "KROK 7b: Seedery modułowe (zawsze)"
+
+MODULE_SEED_FILES="
+08_faktura_permissions.sql
+09_faktura_role_permissions.sql
+10_system_config_faktura.sql
+"
+
+# Sprawdź czy tabela skw_Permissions istnieje — jeśli nie, seedery nie zadziałają
+_PERMS_EXISTS=$(/opt/mssql-tools18/bin/sqlcmd \
+    -S "tcp:${DB_HOST},${DB_PORT}" \
+    -d "${DB_NAME}" \
+    -U "${DB_USER}" \
+    -P "${DB_PASSWORD}" \
+    -C -b -h -1 \
+    -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo_ext' AND t.name='skw_Permissions';" \
+    2>/dev/null | tr -d ' \r\n' || echo "0")
+
+if [ "$_PERMS_EXISTS" = "0" ]; then
+    log_warn "[SEED-MOD] Tabela skw_Permissions nie istnieje — pomijam seedery modułowe."
+    log_warn "[SEED-MOD] Uruchom migracje Alembic przed seedami modułowymi."
+else
+    log_info "[SEED-MOD] Tabela skw_Permissions istnieje — uruchamiam seedery modułowe."
+
+    if [ ! -d "$SEED_DIR" ]; then
+        log_warn "[SEED-MOD] Brak katalogu seederów: ${SEED_DIR} — pomijam."
+    else
+        _mod_ok=0
+        _mod_fail=0
+        _mod_skip=0
+
+        for MOD_SEED in $MODULE_SEED_FILES; do
+            MOD_SEED=$(printf '%s' "$MOD_SEED" | tr -d ' \t\r\n')
+            [ -z "$MOD_SEED" ] && continue
+
+            MOD_PATH="${SEED_DIR}/${MOD_SEED}"
+
+            if [ ! -f "$MOD_PATH" ]; then
+                log_warn "[SEED-MOD] Brak pliku: ${MOD_PATH} — pomijam."
+                _mod_skip=$((_mod_skip + 1))
+                continue
+            fi
+
+            log_info "[SEED-MOD] Uruchamiam: ${MOD_SEED}"
+
+            if /opt/mssql-tools18/bin/sqlcmd \
+                    -S "tcp:${DB_HOST},${DB_PORT}" \
+                    -d "${DB_NAME}" \
+                    -U "${DB_USER}" \
+                    -P "${DB_PASSWORD}" \
+                    -C -b -I -r1 \
+                    -i "$MOD_PATH" \
+                    > /tmp/sw_mod_out_$$ 2> /tmp/sw_mod_err_$$; then
+
+                log_ok "[SEED-MOD] ${MOD_SEED} — OK"
+                if [ -s /tmp/sw_mod_out_$$ ]; then
+                    while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && log_info "[SEED-MOD]   $_ln"
+                    done < /tmp/sw_mod_out_$$
+                fi
+                _mod_ok=$((_mod_ok + 1))
+            else
+                _RC=$?
+                log_warn "[SEED-MOD] ${MOD_SEED} — BŁĄD (exit: ${_RC}) — niekrytyczny, kontynuuję."
+                if [ -s /tmp/sw_mod_err_$$ ]; then
+                    while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && log_warn "[SEED-MOD]   $_ln"
+                    done < /tmp/sw_mod_err_$$
+                fi
+                _mod_fail=$((_mod_fail + 1))
+            fi
+
+            rm -f /tmp/sw_mod_out_$$ /tmp/sw_mod_err_$$ 2>/dev/null || true
+        done
+
+        log_ok "[SEED-MOD] Seedery modułowe: ${_mod_ok} OK | ${_mod_fail} BŁĘDÓW | ${_mod_skip} POMINIĘTYCH"
+    fi
+fi
+
+# =============================================================================
 # KROK 8: Start serwera
 # =============================================================================
 
