@@ -55,6 +55,11 @@ class ThrottleService:
     # GŁÓWNE METODY
     # -----------------------------------------------------------------------
 
+    def _alert_key(prefix: str, alert_type) -> str:
+        """Normalizuje alert_type do stringa niezależnie od typu."""
+        val = alert_type.value if hasattr(alert_type, 'value') else str(alert_type)
+        return f"{prefix}{val}"
+
     async def should_send_alert(
         self,
         result: CheckResult,
@@ -67,7 +72,7 @@ class ThrottleService:
             True  = wyślij email (pierwszy raz lub po upływie cooldown)
             False = pomiń (cooldown aktywny)
         """
-        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type}"
+        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type if isinstance(result.alert_type, str) else result.alert_type.value}"
 
         exists = await self._redis.exists(cooldown_key)
 
@@ -102,7 +107,7 @@ class ThrottleService:
         Wywołaj PO udanym wysłaniu emaila.
         """
         now = datetime.now(timezone.utc)
-        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type}"
+        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type if isinstance(result.alert_type, str) else result.alert_type.value}"
         state_key = f"{_PREFIX_STATE}{result.alert_type}"
 
         # 1. Ustaw cooldown z TTL
@@ -205,7 +210,7 @@ class ThrottleService:
         Wywołaj PO wysłaniu recovery emaila.
         """
         state_key = f"{_PREFIX_STATE}{result.alert_type}"
-        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type}"
+        cooldown_key = f"{_PREFIX_COOLDOWN}{result.alert_type if isinstance(result.alert_type, str) else result.alert_type.value}"
 
         # Zaktualizuj state na is_firing=False (zachowaj historię)
         state_json = await self._redis.get(state_key)

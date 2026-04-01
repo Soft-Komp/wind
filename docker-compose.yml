@@ -164,6 +164,55 @@ services:
       options:
         max-size: "20m"
         max-file: "10"
+  # ─────────────────────────────────────────────────────────────────────────
+  # ALERT MANAGER — monitoring + email-alerty (standalone asyncio, bez FastAPI)
+  # ─────────────────────────────────────────────────────────────────────────
+  alertmanager:
+    build:
+      context: ./alertmanager
+      dockerfile: Dockerfile
+    container_name: windykacja_alertmanager
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: windykacja_alertmanager
+      ENVIRONMENT: "${APP_ENV:-production}"
+      DB_HOST: "${DB_HOST:-192.168.0.53}"
+      DB_PORT: "${DB_PORT:-1433}"
+      DB_NAME: "${DB_NAME}"
+      DB_USER: "${DB_USER:-sa}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      ODBC_DRIVER: "${ODBC_DRIVER:-ODBC Driver 18 for SQL Server}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      ALERT_SMTP_HOST: "${ALERT_SMTP_HOST:-}"
+      ALERT_SMTP_PORT: "${ALERT_SMTP_PORT:-587}"
+      ALERT_SMTP_USER: "${ALERT_SMTP_USER:-}"
+      ALERT_SMTP_PASSWORD: "${ALERT_SMTP_PASSWORD:-}"
+      ALERT_SMTP_FROM: "${ALERT_SMTP_FROM:-}"
+      ALERT_SMTP_USE_TLS: "${ALERT_SMTP_USE_TLS:-true}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_USE_TLS: "${SMTP_USE_TLS:-true}"
+      ALERT_RECIPIENTS_FALLBACK: "${ALERT_RECIPIENTS_FALLBACK:-}"
+      CHECK_INTERVAL_SECONDS: "${ALERT_CHECK_INTERVAL:-30}"
+      CONFIG_RELOAD_INTERVAL_SECONDS: "${ALERT_CONFIG_RELOAD:-300}"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WOLUMENY

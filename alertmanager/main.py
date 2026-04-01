@@ -33,10 +33,10 @@ from typing import Any
 import orjson
 import redis.asyncio as aioredis
 
-from checkers.brute_force_checker import BruteForceChecker
 from checkers.db_checker import DbChecker
-from checkers.dlq_checker import DlqChecker
 from checkers.redis_checker import (
+    BruteForceChecker,
+    DlqChecker,
     FakirChecker,
     RedisChecker,
     WorkerChecker,

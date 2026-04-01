@@ -222,8 +222,9 @@ class WorkerChecker(BaseChecker):
         for worker_name in self.WORKER_NAMES:
             # Klucz heartbeatu ARQ — sprawdź kilka wariantów nazewnictwa
             keys_to_check = [
+                f"arq:health-check",         # rzeczywisty klucz ARQ
                 f"arq:health:{worker_name}",
-                f"arq:health",               # generyczny fallback
+                f"arq:health",
             ]
 
             found = False

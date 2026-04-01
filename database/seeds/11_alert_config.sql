@@ -1,5 +1,5 @@
 -- =============================================================================
--- database/seeds/06_alert_config.sql
+-- database/seeds/11_alert_config.sql
 -- System Windykacja — Klucze SystemConfig dla Alert Managera
 --
 -- Idempotentny MERGE — nigdy nie nadpisuje wartości admina,
@@ -9,7 +9,7 @@
 USE GPGKJASLO;
 GO
 
-PRINT 'Seeder: 06_alert_config.sql — SystemConfig Alert Manager';
+PRINT 'Seeder: 11_alert_config.sql — SystemConfig Alert Manager';
 GO
 
 MERGE [dbo_ext].[skw_SystemConfig] AS target

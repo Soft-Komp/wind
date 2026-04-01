@@ -812,6 +812,7 @@ MODULE_SEED_FILES="
 08_faktura_permissions.sql
 09_faktura_role_permissions.sql
 10_system_config_faktura.sql
+11_alert_config.sql
 "
 
 # Sprawdź czy tabela skw_Permissions istnieje — jeśli nie, seedery nie zadziałają
