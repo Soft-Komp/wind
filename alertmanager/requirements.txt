@@ -1,0 +1,32 @@
+# =============================================================================
+# alertmanager/requirements.txt
+# System Windykacja — Alert Manager
+#
+# Minimalne zależności — brak FastAPI, brak SQLAlchemy.
+# Cel: lekki, szybki serwis monitoringu.
+# =============================================================================
+
+# Asynchroniczny klient Redis (pub/sub + komendy)
+redis==5.2.1
+
+# Asynchroniczny klient SMTP
+aiosmtplib==3.0.2
+
+# Połączenie z MSSQL (synchroniczne, uruchamiane w executor)
+pyodbc==5.2.0
+
+# Walidacja konfiguracji i zmiennych środowiskowych
+pydantic==2.11.1
+pydantic-settings==2.9.0
+
+# Parsowanie email (RFC 5322)
+email-validator==2.2.0
+
+# Serializacja JSON (szybsza niż stdlib)
+orjson==3.10.16
+
+# Retry logic z backoff
+tenacity==9.1.2
+
+# Timezone
+python-dateutil==2.9.0.post0

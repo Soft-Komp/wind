@@ -491,6 +491,7 @@ SEED_FILES="
 08_faktura_permissions.sql
 09_faktura_role_permissions.sql
 10_system_config_faktura.sql
+11_alert_config.sql
 "
 
 _should_run_seeds=false
