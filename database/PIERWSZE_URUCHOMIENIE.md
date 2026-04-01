@@ -144,3 +144,5 @@ GPGKJASLO
 docker exec -it windykacja_api python /app/database/setup.py --set-admin-password
 
 docker logs windykacja_api 2>&1 | Select-String "xyz"
+
+docker exec -e SELFTEST_PASSWORD="xyz" windykacja_api python -m tests.runner --filter test_health_ok --verbose

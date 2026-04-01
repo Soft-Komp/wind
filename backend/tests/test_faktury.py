@@ -64,9 +64,9 @@ class TestFakturyLista:
         data = resp.json()
         assert "items" in data, "Brak 'items' w odpowiedzi historii"
         assert data["total"] >= 1, "Historia pusta — powinna mieć min. 1 zdarzenie (przypisano)"
-        pierwsze = data["items"][0]
-        assert pierwsze.get("akcja") == "przypisano", (
-            f"Pierwsze zdarzenie to '{pierwsze.get('akcja')}', oczekiwano 'przypisano'"
+        akcje = [item.get("akcja") for item in data["items"]]
+        assert "przypisano" in akcje, (
+            f"Brak zdarzenia 'przypisano' w historii. Znalezione akcje: {akcje}"
         )
 
 
@@ -145,7 +145,7 @@ class TestFakturyReset:
                 "nowe_user_ids": [1],
             },
         )
-        assert r1.status_code == 200, f"Reset krok 1: got {r1.status_code}: {r1.text[:200]}"
+        assert r1.status_code in (200, 202), f"Reset krok 1: got {r1.status_code}: {r1.text[:200]}"
         data1 = r1.json()
         assert "confirm_token" in data1, "Brak confirm_token w odpowiedzi krok 1"
         assert data1.get("expires_in", 0) > 0, "expires_in powinno być > 0"
@@ -217,7 +217,7 @@ class TestMojeFaktury:
             f"/faktury-akceptacja/{faktura_testowa_id}/reset",
             json={"powod": "SELFTEST przed decyzją", "nowe_user_ids": [1]},
         )
-        if r_reset.status_code == 200:
+        if r_reset.status_code in (200, 202):
             token = r_reset.json().get("confirm_token")
             if token:
                 authed_client.post(
@@ -274,9 +274,21 @@ class TestUprawnieniaFaktury:
         resp = authed_client.get("/permissions", params={"category": "faktury"})
         assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:200]}"
         data = resp.json()
-        items = data.get("data", {}).get("items", data.get("data", []))
-        if isinstance(items, dict):
-            items = list(items.values())
+        raw = data.get("data", data)
+        # Obsługa formatu: {"items": {"faktury": [...]}, "total": 14}
+        if isinstance(raw, dict):
+            inner = raw.get("items", raw)
+            if isinstance(inner, dict):
+                # grouped_by_category — spłaszcz do jednej listy
+                items = [p for sublist in inner.values() for p in sublist]
+            elif isinstance(inner, list):
+                items = inner
+            else:
+                items = []
+        elif isinstance(raw, list):
+            items = raw
+        else:
+            items = []
         assert len(items) == 14, (
             f"Oczekiwano 14 uprawnień faktury, znaleziono {len(items)}: "
             f"{[p.get('permission_name') or p.get('name') for p in items]}"

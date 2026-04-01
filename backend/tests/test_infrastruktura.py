@@ -13,7 +13,8 @@ class TestHealth:
 
     def test_health_ok(self, http_client: httpx.Client) -> None:
         """GET /health zwraca 200."""
-        resp = http_client.get("/health")
+        with httpx.Client(base_url="http://localhost:8000", timeout=10) as c:
+            resp = c.get("/health")
         assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:200]}"
 
     def test_swagger_dostepny(self, http_client: httpx.Client) -> None:
@@ -82,7 +83,11 @@ class TestRoleIUprawnienia:
             pytest.skip("Endpoint /permissions/categories nie istnieje")
         assert resp.status_code == 200
         data = resp.json()
-        kategorie = data.get("data", [])
+        raw = data.get("data", {})
+        if isinstance(raw, dict):
+            kategorie = raw.get("categories", list(raw.keys()))
+        else:
+            kategorie = raw
         assert "faktury" in kategorie, (
             f"Brak kategorii 'faktury' w: {kategorie}"
         )
@@ -136,8 +141,8 @@ class TestSSEStream:
     """Testy SSE."""
 
     def test_sse_stream_dostepny(self, authed_client: httpx.Client) -> None:
-        """GET /sse/stream zwraca 200 i nagłówek text/event-stream."""
-        with authed_client.stream("GET", "/sse/stream", timeout=5) as resp:
+        """GET /events/stream zwraca 200 i nagłówek text/event-stream."""
+        with authed_client.stream("GET", "/events/stream", timeout=5) as resp:
             assert resp.status_code == 200, f"got {resp.status_code}"
             ct = resp.headers.get("content-type", "")
             assert "text/event-stream" in ct, f"Zły Content-Type: {ct}"
@@ -146,7 +151,7 @@ class TestSSEStream:
         """SSE bez tokenu zwraca 401."""
         with httpx.Client(base_url=http_client.base_url, timeout=5) as c:
             try:
-                with c.stream("GET", "/sse/stream", timeout=3) as resp:
+                with c.stream("GET", "/events/stream", timeout=3) as resp:
                     assert resp.status_code == 401, f"got {resp.status_code}"
             except httpx.TimeoutException:
                 pytest.skip("SSE timeout — endpoint może wymagać dłuższego połączenia")

@@ -186,21 +186,18 @@ def uruchom_pytest(verbose: bool, filter_str: str | None) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
-def uruchom_bez_pytest(raport: SelfTestRaport, verbose: bool, filter_str: str | None) -> None:
+def uruchom_bez_pytest(raport: SelfTestRaport, verbose: bool, filter_str: str | None, pytest_bin: str | None = None) -> None:
     """
-    Fallback gdy pytest-json-report nie jest zainstalowany.
     Uruchamia pytest i parsuje wyjście tekstowe.
     """
     import subprocess
+    import shutil
 
-    PYTEST_BIN = "/home/appuser/.local/bin/pytest"
-    cmd = [
-        PYTEST_BIN,
-        "/app/tests/",
-        "--tb=short",
-        "--no-header",
-        "-v",
-    ]
+    _bin = pytest_bin or shutil.which("pytest") or sys.executable
+    if _bin == sys.executable:
+        cmd = [_bin, "-m", "pytest", "/app/tests/", "--tb=short", "--no-header", "-v"]
+    else:
+        cmd = [_bin, "/app/tests/", "--tb=short", "--no-header", "-v"]
 
     if filter_str:
         cmd.extend(["-k", filter_str])
@@ -261,7 +258,7 @@ Przykłady:
   python -m tests.runner --filter infra     # tylko infrastruktura
         """,
     )
-    parser.add_argument("--verbose", "-v", action="store_true", help="Szczegółowy output")
+    parser.add_argument("--verbose", "-V", action="store_true", help="Szczegółowy output")
     parser.add_argument("--filter", "-k", type=str, default=None, help="Filtr testów (pytest -k)")
     parser.add_argument("--no-report", action="store_true", help="Nie zapisuj raportu JSON")
     args = parser.parse_args()
@@ -276,38 +273,16 @@ Przykłady:
     raport = SelfTestRaport()
 
     # Sprawdź czy pytest jest dostępny
-    try:
-        import pytest  # noqa: F401
-    except ImportError:
-        print("  ❌ pytest nie jest zainstalowany!")
-        print("  Zainstaluj: pip install pytest httpx pytest-asyncio --break-system-packages")
-        return 1
+    import shutil
+    import os.path as _osp
+    pytest_bin = shutil.which("pytest") or "/home/appuser/.local/bin/pytest"
+    if not _osp.exists(pytest_bin):
+        # Spróbuj przez python -m pytest
+        pytest_bin = None
 
     print("  Uruchamianie testów...\n")
 
-    # Uruchom pytest z JSON reportem jeśli dostępny
-    try:
-        import pytest_jsonreport  # noqa: F401
-        rc, output = uruchom_pytest(args.verbose, args.filter)
-
-        # Wczytaj raport JSON
-        json_path = Path("/tmp/selftest_pytest.json")
-        if json_path.exists():
-            pytest_data = json.loads(json_path.read_text())
-            for test in pytest_data.get("tests", []):
-                nazwa  = test.get("nodeid", "").split("::")[-1]
-                status = test.get("outcome", "ERROR").upper()
-                czas   = test.get("call", {}).get("duration", 0) * 1000
-                blad   = None
-                if status == "FAILED":
-                    blad = test.get("call", {}).get("longrepr", "")[:200]
-                raport.dodaj(nazwa, status, czas, blad)
-        else:
-            uruchom_bez_pytest(raport, args.verbose, args.filter)
-
-    except ImportError:
-        # Fallback — parsuj output tekstowy pytest
-        uruchom_bez_pytest(raport, args.verbose, args.filter)
+    uruchom_bez_pytest(raport, args.verbose, args.filter, pytest_bin=pytest_bin)
 
     # Podsumowanie
     raport.drukuj_podsumowanie()

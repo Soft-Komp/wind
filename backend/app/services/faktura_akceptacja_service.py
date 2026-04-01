@@ -705,8 +705,8 @@ async def confirm_reset_przypisania(
     # Dezaktywuj stare
     now = datetime.now().replace(tzinfo=None)
     for p in stare:
-        p.IsActive = False
-        p.updated_at = now
+        p.is_active = False
+        p.UpdatedAt = now
 
     # Nowe przypisania
     for user_id in nowe_user_ids:
