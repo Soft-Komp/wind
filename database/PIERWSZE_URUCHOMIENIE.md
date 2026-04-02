@@ -146,3 +146,38 @@ docker exec -it windykacja_api python /app/database/setup.py --set-admin-passwor
 docker logs windykacja_api 2>&1 | Select-String "xyz"
 
 docker exec -e SELFTEST_PASSWORD="xyz" windykacja_api python -m tests.runner --filter test_health_ok --verbose
+
+
+- nie dodało kluczy w [skw_SystemConfig] dotyczących uruchamiania modułów
+- nie uaktualniło orphaned
+USE [GPGKJASLO];
+GO
+
+-- 1. Usuwamy stare ograniczenie
+ALTER TABLE [dbo_ext].[skw_faktura_akceptacja] 
+DROP CONSTRAINT [CHK_sfa_status_wewnetrzny];
+GO
+
+-- 2. Dodajemy nowe ograniczenie z uwzględnieniem statusu 'orphaned'
+ALTER TABLE [dbo_ext].[skw_faktura_akceptacja] 
+ADD CONSTRAINT [CHK_sfa_status_wewnetrzny] 
+CHECK ([status_wewnetrzny] IN (N'anulowana', N'zaakceptowana', N'w_toku', N'nowe', N'orphaned'));
+GO
+
+Rzeczyzwiazane z fakturami mają taką odpowiedź.
+{ "data": [], "total": 1, "page": 1, "limit": 50 }
+
+Mabyć przekształcona w coś takiego:
+{
+  "code": 200,
+  "app_code": "faktury.list",
+  "errors": [],
+  "data": {
+    "data": [],
+    "total": 1,
+    "page": 1,
+    "limit": 50
+  }
+}
+
+Generalnie ma dostać envelope.

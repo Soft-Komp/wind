@@ -73,6 +73,7 @@ from app.schemas.faktura_akceptacja import (
     FakturaResetRequest,
     FakturaResetResponse,
 )
+from app.schemas.common import BaseResponse
 from app.services import faktura_akceptacja_service as svc
 from app.services.config_service import get_config_value
 
@@ -185,12 +186,28 @@ async def list_faktury(
         date_to=date_to,
     )
 
-    return {
-        "data":  result["items"],
-        "total": result["total"],
-        "page":  pagination.page,
-        "limit": pagination.per_page,
-    }
+    logger.debug(
+        orjson.dumps({
+            "event":       "faktury_list_response",
+            "user_id":     current_user.id_user,
+            "total":       result["total"],
+            "page":        pagination.page,
+            "items_count": len(result["items"]),
+            "request_id":  request_id,
+        }).decode()
+    )
+
+    return BaseResponse(
+        code=200,
+        app_code="faktury.view_list",
+        errors=[],
+        data={
+            "data":  result["items"],
+            "total": result["total"],
+            "page":  pagination.page,
+            "limit": pagination.per_page,
+        },
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,7 +222,7 @@ async def list_faktury(
         "SSE push (nowa_faktura) do przypisanych pracowników. "
         "Idempotentny: dwa identyczne requesty w 10s zwracają ten sam wynik."
     ),
-    response_model=FakturaCreateResponse,
+    response_model=dict,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_faktura(
@@ -217,14 +234,19 @@ async def create_faktura(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.create")],
     idem:         IdempotencyResult = Depends(faktury_create_guard),
-) -> FakturaCreateResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
 
     await _require_module_enabled(redis, db)
 
     # Idempotency replay
     if idem.is_replay:
-        return idem.cached_response
+        return BaseResponse(
+            code=201,
+            app_code="faktury.create",
+            errors=[],
+            data=idem.cached_response,
+        ).model_dump(mode="json")
 
     logger.info(
         orjson.dumps({
@@ -248,14 +270,20 @@ async def create_faktura(
         request_id=request_id,
     )
 
-    await idem.store_result(result.model_dump(), status_code=201)
-    return result
+    result_dict = result.model_dump(mode="json")
+    await idem.store_result(result_dict, status_code=201)
+    return BaseResponse(
+        code=201,
+        app_code="faktury.create",
+        errors=[],
+        data=result_dict,
+    ).model_dump(mode="json")
 
 
 @router.get(
     "/{faktura_id}",
     summary="Szczegóły faktury w obiegu akceptacji",
-    response_model=FakturaDetailResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def get_faktura_detail(
@@ -265,16 +293,23 @@ async def get_faktura_detail(
     client_ip:    ClientIP,
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.view_details")],
-) -> FakturaDetailResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
     await _require_module_enabled(redis, db)
 
-    return await svc.get_faktura_detail(
+    result = await svc.get_faktura_detail(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
         actor_id=current_user.id_user,
     )
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=200,
+        app_code="faktury.view_details",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 
@@ -296,12 +331,12 @@ async def patch_faktura(
     client_ip:    ClientIP,
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.edit")],
-) -> FakturaDetailResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
 
     await _require_module_enabled(redis, db)
 
-    return await svc.patch_faktura(
+    result = await svc.patch_faktura(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
@@ -311,6 +346,13 @@ async def patch_faktura(
         actor_ip=client_ip,
         request_id=request_id,
     )
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=200,
+        app_code="faktury.edit",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -320,7 +362,7 @@ async def patch_faktura(
 @router.post(
     "/{faktura_id}/reset",
     summary="Inicjacja resetu przypisań (krok 1 — zwraca confirm_token)",
-    response_model=ConfirmTokenResponse,
+    response_model=dict,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def initiate_reset(
@@ -331,7 +373,7 @@ async def initiate_reset(
     client_ip:    ClientIP,
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.reset")],
-) -> ConfirmTokenResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
 
     await _require_module_enabled(redis, db)
@@ -346,7 +388,7 @@ async def initiate_reset(
             detail="Reset przypisań jest tymczasowo wyłączony przez administratora.",
         )
 
-    return await svc.initiate_reset_przypisania(
+    result = await svc.initiate_reset_przypisania(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
@@ -356,6 +398,13 @@ async def initiate_reset(
         actor_ip=client_ip,
         request_id=request_id,
     )
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=202,
+        app_code="faktury.reset",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -365,7 +414,7 @@ async def initiate_reset(
 @router.post(
     "/{faktura_id}/reset/confirm",
     summary="Potwierdzenie resetu przypisań (krok 2)",
-    response_model=FakturaResetResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def confirm_reset(
@@ -378,26 +427,28 @@ async def confirm_reset(
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.reset")],
     idem:         IdempotencyResult = Depends(reset_confirm_guard),
-) -> FakturaResetResponse:
+)  -> dict:
     await _require_referent(current_user, db, redis)
 
     await _require_module_enabled(redis, db)
 
     if idem.is_replay:
-        return idem.cached_response
+        return BaseResponse(
+            code=200,
+            app_code="faktury.reset",
+            errors=[],
+            data=idem.cached_response,
+        ).model_dump(mode="json")
 
-    result = await svc.confirm_reset_przypisania(
-        db=db,
-        redis=redis,
-        faktura_id=faktura_id,
-        confirm_token=body.confirm_token,
-        actor_id=current_user.id_user,
-        actor_name=current_user.username,
-        actor_ip=client_ip,
-        request_id=request_id,
-    )
-    await idem.store_result(result.model_dump())
-    return result
+    result = await svc.confirm_reset_przypisania(...)
+    result_dict = result.model_dump(mode="json")
+    await idem.store_result(result_dict)
+    return BaseResponse(
+        code=200,
+        app_code="faktury.reset",
+        errors=[],
+        data=result_dict,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -407,7 +458,7 @@ async def confirm_reset(
 @router.patch(
     "/{faktura_id}/status",
     summary="Wymuszenie zmiany statusu faktury (krok 1 — zwraca confirm_token)",
-    response_model=ConfirmTokenResponse,
+    response_model=dict,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def initiate_force_status(
@@ -418,7 +469,7 @@ async def initiate_force_status(
     client_ip:    ClientIP,
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.force_status")],
-) -> ConfirmTokenResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
 
     await _require_module_enabled(redis, db)
@@ -432,16 +483,14 @@ async def initiate_force_status(
             detail="Force-akceptacja jest tymczasowo wyłączona przez administratora.",
         )
 
-    return await svc.initiate_force_status(
-        db=db,
-        redis=redis,
-        faktura_id=faktura_id,
-        body=body,
-        actor_id=current_user.id_user,
-        actor_name=current_user.username,
-        actor_ip=client_ip,
-        request_id=request_id,
-    )
+    result = await svc.initiate_force_status(...)
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=202,
+        app_code="faktury.force_status",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -470,20 +519,21 @@ async def confirm_force_status(
     await _require_module_enabled(redis, db)
 
     if idem.is_replay:
-        return idem.cached_response
+        return BaseResponse(
+            code=200,
+            app_code="faktury.force_status",
+            errors=[],
+            data=idem.cached_response,
+        ).model_dump(mode="json")
 
-    result = await svc.confirm_force_status(
-        db=db,
-        redis=redis,
-        faktura_id=faktura_id,
-        confirm_token=body.confirm_token,
-        actor_id=current_user.id_user,
-        actor_name=current_user.username,
-        actor_ip=client_ip,
-        request_id=request_id,
-    )
+    result = await svc.confirm_force_status(...)
     await idem.store_result(result)
-    return result
+    return BaseResponse(
+        code=200,
+        app_code="faktury.force_status",
+        errors=[],
+        data=result,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -493,7 +543,7 @@ async def confirm_force_status(
 @router.get(
     "/{faktura_id}/historia",
     summary="Historia zdarzeń faktury (skw_faktura_log)",
-    response_model=FakturaHistoriaResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def get_historia(
@@ -503,16 +553,18 @@ async def get_historia(
     client_ip:    ClientIP,
     request_id:   RequestID,
     current_user: Annotated[Any, require_permission("faktury.view_historia")],
-) -> FakturaHistoriaResponse:
+) -> dict:
     await _require_referent(current_user, db, redis)
-
     await _require_module_enabled(redis, db)
 
-    return await svc.get_historia(
-        db=db,
-        redis=redis,
-        faktura_id=faktura_id,
-    )
+    result = await svc.get_historia(db=db, redis=redis, faktura_id=faktura_id)
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=200,
+        app_code="faktury.view_historia",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

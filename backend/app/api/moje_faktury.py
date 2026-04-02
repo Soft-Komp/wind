@@ -47,6 +47,7 @@ from app.schemas.faktura_akceptacja import (
     FakturaDetailResponse,
     MojeFakturyFilter,
 )
+from app.schemas.common import BaseResponse
 from app.services import moje_faktury_service as svc
 from app.services.config_service import get_config_value
 
@@ -150,12 +151,27 @@ async def list_moje_faktury(
         archiwum=(status_param == "archiwum"),
     )
 
-    return {
-        "data":  result["items"],
-        "total": result["total"],
-        "page":  pagination.page,
-        "limit": pagination.per_page,
-    }
+    logger.debug(
+        orjson.dumps({
+            "event":       "moje_faktury_list_response",
+            "user_id":     current_user.id_user,
+            "total":       result["total"],
+            "items_count": len(result["items"]),
+            "request_id":  request_id,
+        }).decode()
+    )
+
+    return BaseResponse(
+        code=200,
+        app_code="faktury.moje_view",
+        errors=[],
+        data={
+            "data":  result["items"],
+            "total": result["total"],
+            "page":  pagination.page,
+            "limit": pagination.per_page,
+        },
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,12 +209,19 @@ async def get_moja_faktura_detail(
         }).decode()
     )
 
-    return await svc.get_moja_faktura_detail(
+    result = await svc.get_moja_faktura_detail(
         db=db,
         redis=redis,
         faktura_id=faktura_id,
         user_id=current_user.id_user,
     )
+    data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    return BaseResponse(
+        code=200,
+        app_code="faktury.moje_details",
+        errors=[],
+        data=data,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +238,7 @@ async def get_moja_faktura_detail(
         "Idempotentny: duplikat w 10s → X-Idempotency-Replayed: true. "
         "Przy ostatnim zaakceptowaniu → trigger sagi Fakira."
     ),
-    response_model=DecyzjaResponse,
+    response_model=dict,
     status_code=status.HTTP_200_OK,
 )
 async def zapisz_decyzje(
@@ -228,40 +251,28 @@ async def zapisz_decyzje(
     request_id:  RequestID,
     current_user: Annotated[Any, require_permission("faktury.moje_decyzja")],
     idem:        IdempotencyResult = Depends(decyzja_guard),
-) -> DecyzjaResponse:
+) -> dict:
     await _require_akceptant(current_user, db, redis)
     await _require_module_enabled(redis, db)
 
     # Idempotency replay
     if idem.is_replay:
-        return idem.cached_response
+        return BaseResponse(
+            code=200,
+            app_code="faktury.moje_decyzja",
+            errors=[],
+            data=idem.cached_response,
+        ).model_dump(mode="json")
 
-    logger.info(
-        orjson.dumps({
-            "event":            "moje_faktury_decyzja",
-            "user_id":          current_user.id_user,
-            "faktura_id":       faktura_id,
-            "status":           body.status,
-            "has_komentarz":    bool(body.komentarz),
-            "komentarz_hash":   body.komentarz_hash(),
-            "ip":               client_ip,
-            "request_id":       request_id,
-        }).decode()
-    )
-
-    result = await svc.zapisz_decyzje(
-        db=db,
-        redis=redis,
-        faktura_id=faktura_id,
-        body=body,
-        actor_id=current_user.id_user,
-        actor_name=current_user.username,
-        actor_ip=client_ip,
-        request_id=request_id,
-    )
-
-    await idem.store_result(result.model_dump())
-    return result
+    result = await svc.zapisz_decyzje(...)
+    result_dict = result.model_dump(mode="json")
+    await idem.store_result(result_dict)
+    return BaseResponse(
+        code=200,
+        app_code="faktury.moje_decyzja",
+        errors=[],
+        data=result_dict,
+    ).model_dump(mode="json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
