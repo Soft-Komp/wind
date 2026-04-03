@@ -7,7 +7,6 @@
 -- IDEMPOTENTNY: TAK — IF EXISTS przed DROP.
 -- KIEDY:    Przed uruchomieniem migracji 0009 (lub niezależnie).
 -- =============================================================================
-USE [GPGKJASLO];
 GO
 
 SET NOCOUNT ON;

@@ -82,7 +82,6 @@ GO
 -- KROK 2: Database User w bazie GPGKJASLO
 -- ===========================================================================
 
-USE [GPGKJASLO];
 GO
 
 IF NOT EXISTS (

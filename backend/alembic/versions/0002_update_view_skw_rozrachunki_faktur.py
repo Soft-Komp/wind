@@ -95,82 +95,55 @@ def upgrade() -> None:
 
 
 def _upgrade_create_or_alter_view() -> None:
-    """
-    Tworzy lub zastępuje widok dbo.skw_rozrachunki_faktur.
-
-    CREATE OR ALTER VIEW jest idempotentny w MSSQL 2016+.
-    Nie niszczy zależności (inne widoki, procedury) — ALTER zachowuje uprawnienia.
-
-    Zmiany logiki względem v1:
-        - LEFT JOIN + CTE RODO guard (zamiast INNER JOIN z CTE filtrującym)
-        - KwotaZaplacona obliczana jako DECIMAL(15,2) z klauzulą CASE WHEN < 0
-        - rozliczony=2 → zapłacona (nie =1 jak w v1 initial_schema)
-        - Nowe kolumny: DniPo, rozliczony, typ_dok
-        - Usunięte kolumny: NIP, CzyZaplacona, DniPrzeterminowania
-        - FormaPlatnosci → MetodaPlatnosci
-    """
+    # WERSJA POŚREDNIA (v2) — bez OstatniMonitRozrachunku.
+    # Migracja 0004 nadpisze pełną wersją po utworzeniu skw_MonitHistory_Invoices (0003).
     logger.info("[%s] CREATE OR ALTER VIEW %s.%s ...", revision, SCHEMA_WAPRO, VIEW_NAME)
 
     op.execute("""
         CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
-    AS
-    WITH cte_ostatni_monit AS
-    (
-        SELECT
-            mi.ID_ROZRACHUNKU,
-            mi.CreatedAt                                            AS OstatniMonitRozrachunku,
-            ROW_NUMBER() OVER (
-                PARTITION BY mi.ID_ROZRACHUNKU
-                ORDER BY mi.CreatedAt DESC
-            )                                                       AS rn
-        FROM dbo_ext.skw_MonitHistory_Invoices AS mi
-    )
-    SELECT
-        r.ID_ROZRACHUNKU,
-        r.ID_KONTRAHENTA,
-        ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
-        r.NR_DOK                                                    AS NumerFaktury,
-        CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
-        CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
-        r.KWOTA                                                     AS KwotaBrutto,
-        CAST(
-            CASE
-                WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
-                THEN 0
-                ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
-            END
-        AS DECIMAL(15,2))                                           AS KwotaZaplacona,
-        ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
-        r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
+AS
+SELECT
+    r.ID_ROZRACHUNKU,
+    r.ID_KONTRAHENTA,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
+    r.NR_DOK                                                    AS NumerFaktury,
+    CAST(DATEADD(DAY, r.DATA_DOK, '18991230')         AS DATE)  AS DataWystawienia,
+    CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE)  AS TerminPlatnosci,
+    r.KWOTA                                                     AS KwotaBrutto,
+    CAST(
         CASE
-            WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
-                THEN NULL
-            WHEN DATEDIFF(
-                    DAY,
-                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
-                    CAST(GETDATE() AS DATE)
-                ) <= 0
-                THEN 0
-            ELSE
-                DATEDIFF(
-                    DAY,
-                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
-                    CAST(GETDATE() AS DATE)
-                )
-        END                                                         AS DniPo,
-        r.CZY_ROZLICZONY,
-        r.ID_TYP_DOK,
-        mon.OstatniMonitRozrachunku
-    FROM dbo.ROZRACHUNEK_VIEW AS r
-    LEFT JOIN dbo.KONTRAHENT AS k
-        ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
-    LEFT JOIN cte_ostatni_monit AS mon
-        ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
-        AND mon.rn = 1
-    WHERE
-        r.ID_KONTRAHENTA    IS NOT NULL
-        AND r.STRONA        = 'WN'
-        AND r.CZY_ROZLICZONY IN (0, 1);
+            WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
+            THEN 0
+            ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
+        END
+    AS DECIMAL(15,2))                                           AS KwotaZaplacona,
+    ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
+    r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
+    CASE
+        WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
+            THEN NULL
+        WHEN DATEDIFF(
+                DAY,
+                CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE),
+                CAST(GETDATE() AS DATE)
+             ) <= 0
+            THEN 0
+        ELSE
+            DATEDIFF(
+                DAY,
+                CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE),
+                CAST(GETDATE() AS DATE)
+            )
+    END                                                         AS DniPo,
+    r.CZY_ROZLICZONY,
+    r.ID_TYP_DOK
+FROM dbo.ROZRACHUNEK_VIEW AS r
+LEFT JOIN dbo.KONTRAHENT AS k
+       ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
+WHERE
+    r.ID_KONTRAHENTA    IS NOT NULL
+    AND r.STRONA        = 'WN'
+    AND r.CZY_ROZLICZONY IN (0, 1)
     """)
 
     logger.info("[%s] CREATE OR ALTER VIEW %s.%s → OK", revision, SCHEMA_WAPRO, VIEW_NAME)

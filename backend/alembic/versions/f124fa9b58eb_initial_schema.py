@@ -496,6 +496,9 @@ def _create_skw_comments() -> None:
         END
     """)
 def _create_skw_kontrahenci() -> None:
+    # WERSJA WSTĘPNA (v1) — bez OstatniMonitRozrachunku.
+    # Migracja 0004 nadpisze ten widok pełną wersją po tym jak
+    # migracja 0003 utworzy tabelę skw_MonitHistory_Invoices.
     op.execute("""
         CREATE OR ALTER VIEW dbo.skw_kontrahenci
 AS
@@ -505,17 +508,13 @@ WITH cte_rozrachunki AS
         r.ID_KONTRAHENTA,
         SUM(ISNULL(r.POZOSTALO_WN, 0))                               AS SumaDlugu,
         COUNT(*)                                                      AS LiczbaFaktur,
-        CAST(
-            dbo.RM_Func_ClarionDateToDateTime(
-                MIN(r.DATA_DOK)
-            )
-        AS DATE)                                                      AS NajstarszaFaktura,
+        CAST(DATEADD(DAY, MIN(r.DATA_DOK), '18991230') AS DATE)      AS NajstarszaFaktura,
         MAX(
             CASE
                 WHEN r.TERMIN_PLATNOSCI IS NOT NULL AND r.TERMIN_PLATNOSCI > 0
                 THEN DATEDIFF(
                     DAY,
-                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                    CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE),
                     CAST(GETDATE() AS DATE)
                 )
                 ELSE 0
@@ -549,15 +548,6 @@ cte_monity AS
         LiczbaMonitow
     FROM cte_monity_ranked
     WHERE rn = 1
-),
-cte_monity_rozrachunki AS
-(
-    SELECT
-        mh.ID_KONTRAHENTA,
-        MAX(mi.CreatedAt)                                             AS OstatniMonitRozrachunku
-    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
-    JOIN dbo_ext.skw_MonitHistory          AS mh ON mh.ID_MONIT = mi.ID_MONIT
-    GROUP BY mh.ID_KONTRAHENTA
 )
 SELECT
     k.ID_KONTRAHENTA,
@@ -570,37 +560,26 @@ SELECT
     ISNULL(roz.DniPrzeterminowania, 0)      AS DniPrzeterminowania,
     mon.OstatniMonitData,
     mon.OstatniMonitTyp,
-    ISNULL(mon.LiczbaMonitow,      0)       AS LiczbaMonitow,
-    monr.OstatniMonitRozrachunku
+    ISNULL(mon.LiczbaMonitow,      0)       AS LiczbaMonitow
 FROM      dbo.KONTRAHENT           AS k
-LEFT JOIN cte_rozrachunki          AS roz  ON roz.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
-LEFT JOIN cte_monity               AS mon  ON mon.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
-LEFT JOIN cte_monity_rozrachunki   AS monr ON monr.ID_KONTRAHENTA  = k.ID_KONTRAHENTA
+LEFT JOIN cte_rozrachunki          AS roz  ON roz.ID_KONTRAHENTA = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity               AS mon  ON mon.ID_KONTRAHENTA = k.ID_KONTRAHENTA
     """)
 
-
 def _create_skw_rozrachunki_faktur() -> None:
+    # WERSJA WSTĘPNA (v1) — bez OstatniMonitRozrachunku.
+    # Migracja 0004 nadpisze ten widok pełną wersją po tym jak
+    # migracja 0003 utworzy tabelę skw_MonitHistory_Invoices.
     op.execute("""
         CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS
-WITH cte_ostatni_monit AS
-(
-    SELECT
-        mi.ID_ROZRACHUNKU,
-        mi.CreatedAt                                            AS OstatniMonitRozrachunku,
-        ROW_NUMBER() OVER (
-            PARTITION BY mi.ID_ROZRACHUNKU
-            ORDER BY mi.CreatedAt DESC
-        )                                                       AS rn
-    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
-)
 SELECT
     r.ID_ROZRACHUNKU,
     r.ID_KONTRAHENTA,
     ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
     r.NR_DOK                                                    AS NumerFaktury,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
+    CAST(DATEADD(DAY, r.DATA_DOK, '18991230')         AS DATE)  AS DataWystawienia,
+    CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE)  AS TerminPlatnosci,
     r.KWOTA                                                     AS KwotaBrutto,
     CAST(
         CASE
@@ -616,26 +595,22 @@ SELECT
             THEN NULL
         WHEN DATEDIFF(
                 DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE),
                 CAST(GETDATE() AS DATE)
              ) <= 0
             THEN 0
         ELSE
             DATEDIFF(
                 DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(DATEADD(DAY, r.TERMIN_PLATNOSCI, '18991230') AS DATE),
                 CAST(GETDATE() AS DATE)
             )
     END                                                         AS DniPo,
     r.CZY_ROZLICZONY,
-    r.ID_TYP_DOK,
-    mon.OstatniMonitRozrachunku
+    r.ID_TYP_DOK
 FROM dbo.ROZRACHUNEK_VIEW AS r
 LEFT JOIN dbo.KONTRAHENT AS k
        ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
-LEFT JOIN cte_ostatni_monit AS mon
-       ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
-      AND mon.rn = 1
 WHERE
     r.ID_KONTRAHENTA    IS NOT NULL
     AND r.STRONA        = 'WN'

@@ -29,7 +29,6 @@
 --   GETDATE() zwraca DATETIME — automatyczna konwersja do DATETIME2 jest bezpieczna.
 -- =============================================================================
 
-USE [GPGKJASLO];
 GO
 
 -- ===========================================================================

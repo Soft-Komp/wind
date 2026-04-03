@@ -897,6 +897,7 @@ if [ -n "${FAKIR_DB_PASSWORD:-}" ]; then
     if [ ! -f "$_FAKIR_DDL" ]; then
         log_warn "[FAKIR-DDL] Brak pliku: ${_FAKIR_DDL} — pomijam."
     else
+        set +e
         _FAKIR_OUT=$(/opt/mssql-tools18/bin/sqlcmd \
             -S "tcp:${DB_HOST},${DB_PORT}" \
             -d "${DB_NAME}" \
@@ -907,6 +908,7 @@ if [ -n "${FAKIR_DB_PASSWORD:-}" ]; then
             -i "$_FAKIR_DDL" \
             2>&1)
         _FAKIR_RC=$?
+        set -e
 
         if [ -n "$_FAKIR_OUT" ]; then
             while IFS= read -r _ln; do
