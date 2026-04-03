@@ -46,43 +46,51 @@ WITH cte_ostatni_monit AS
     FROM dbo_ext.skw_MonitHistory_Invoices AS mi
 )
 SELECT
-    r.id_rozrachunku                                            AS ID_ROZRACHUNKU,
-    r.id_platnika                                               AS ID_KONTRAHENTA,
+    r.ID_ROZRACHUNKU,
+    r.ID_KONTRAHENTA,
     ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
-    r.numer                                                     AS NumerFaktury,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia)  AS DATE) AS DataWystawienia,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci)  AS DATE) AS TerminPlatnosci,
-    ABS(r.wartosc_brutto)                                       AS KwotaBrutto,
+    r.NR_DOK                                                    AS NumerFaktury,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
+    r.KWOTA                                                     AS KwotaBrutto,
     CAST(
         CASE
-            WHEN ABS(r.wartosc_brutto) - ABS(r.pozostalo) < 0 THEN 0
-            ELSE ABS(r.wartosc_brutto) - ABS(r.pozostalo)
+            WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
+            THEN 0
+            ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
         END
     AS DECIMAL(15,2))                                           AS KwotaZaplacona,
-    ABS(r.pozostalo)                                            AS KwotaPozostala,
-    r.forma_platnosci                                           AS MetodaPlatnosci,
+    ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
+    r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
     CASE
-        WHEN r.rozliczony = 2 THEN 0
-        WHEN r.termin_platnosci IS NULL OR r.termin_platnosci = 0 THEN NULL
-        WHEN DATEDIFF(DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                CAST(GETDATE() AS DATE)) <= 0 THEN 0
-        ELSE DATEDIFF(DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                CAST(GETDATE() AS DATE))
+        WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
+            THEN NULL
+        WHEN DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+             ) <= 0
+            THEN 0
+        ELSE
+            DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+            )
     END                                                         AS DniPo,
-    r.rozliczony,
-    r.typ_dok,
+    r.CZY_ROZLICZONY,
+    r.ID_TYP_DOK,
     mon.OstatniMonitRozrachunku
-FROM ROZRACHUNEK_V AS r
+FROM dbo.ROZRACHUNEK_VIEW AS r
 LEFT JOIN dbo.KONTRAHENT AS k
-       ON CAST(k.ID_KONTRAHENTA AS INT) = r.id_platnika
+       ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
 LEFT JOIN cte_ostatni_monit AS mon
-       ON mon.ID_ROZRACHUNKU = r.id_rozrachunku
+       ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
       AND mon.rn = 1
 WHERE
-    r.id_platnika IS NOT NULL
-    AND r.pozostalo < 0
+    r.ID_KONTRAHENTA    IS NOT NULL
+    AND r.STRONA        = 'WN'
+    AND r.CZY_ROZLICZONY IN (0, 1)
 """
 
 _SKW_KONTRAHENCI_NEW = """
@@ -91,68 +99,80 @@ AS
 WITH cte_rozrachunki AS
 (
     SELECT
-        r.id_platnika,
-        SUM(ABS(r.pozostalo))                                   AS SumaDlugu,
-        COUNT(CASE WHEN r.typ_dok = 'h' THEN 1 END)             AS LiczbaFaktur,
-        CAST(dbo.RM_Func_ClarionDateToDateTime(
-            MIN(CASE WHEN r.typ_dok = 'h' THEN r.data_wystawienia END)
-        ) AS DATE)                                              AS NajstarszaFaktura,
-        MAX(CASE
-            WHEN r.termin_platnosci IS NOT NULL AND r.termin_platnosci > 0
-            THEN DATEDIFF(DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                CAST(GETDATE() AS DATE))
-            ELSE 0
-        END)                                                    AS DniPrzeterminowania
-    FROM dbo.ROZRACHUNEK_V AS r
-    WHERE r.id_platnika IS NOT NULL
-      AND r.rozliczony = 0
-      AND r.pozostalo < 0
-    GROUP BY r.id_platnika
+        r.ID_KONTRAHENTA,
+        SUM(ISNULL(r.POZOSTALO_WN, 0))                               AS SumaDlugu,
+        COUNT(*)                                                      AS LiczbaFaktur,
+        CAST(
+            dbo.RM_Func_ClarionDateToDateTime(
+                MIN(r.DATA_DOK)
+            )
+        AS DATE)                                                      AS NajstarszaFaktura,
+        MAX(
+            CASE
+                WHEN r.TERMIN_PLATNOSCI IS NOT NULL AND r.TERMIN_PLATNOSCI > 0
+                THEN DATEDIFF(
+                    DAY,
+                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                    CAST(GETDATE() AS DATE)
+                )
+                ELSE 0
+            END
+        )                                                             AS DniPrzeterminowania
+    FROM dbo.ROZRACHUNEK_VIEW AS r
+    WHERE r.ID_KONTRAHENTA   IS NOT NULL
+      AND r.STRONA           = 'WN'
+      AND r.CZY_ROZLICZONY   IN (0, 1)
+    GROUP BY r.ID_KONTRAHENTA
 ),
 cte_monity_ranked AS
 (
     SELECT
-        m.ID_KONTRAHENTA, m.SentAt, m.MonitType,
-        COUNT(*) OVER (PARTITION BY m.ID_KONTRAHENTA)           AS LiczbaMonitow,
+        m.ID_KONTRAHENTA,
+        m.SentAt,
+        m.MonitType,
+        COUNT(*)     OVER (PARTITION BY m.ID_KONTRAHENTA)            AS LiczbaMonitow,
         ROW_NUMBER() OVER (
             PARTITION BY m.ID_KONTRAHENTA
             ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
-        )                                                       AS rn
+        )                                                             AS rn
     FROM dbo_ext.skw_MonitHistory AS m
 ),
 cte_monity AS
 (
-    SELECT ID_KONTRAHENTA, SentAt AS OstatniMonitData,
-           MonitType AS OstatniMonitTyp, LiczbaMonitow
-    FROM cte_monity_ranked WHERE rn = 1
+    SELECT
+        ID_KONTRAHENTA,
+        SentAt      AS OstatniMonitData,
+        MonitType   AS OstatniMonitTyp,
+        LiczbaMonitow
+    FROM cte_monity_ranked
+    WHERE rn = 1
 ),
 cte_monity_rozrachunki AS
 (
     SELECT
         mh.ID_KONTRAHENTA,
-        MAX(mi.CreatedAt)                                       AS OstatniMonitRozrachunku
+        MAX(mi.CreatedAt)                                             AS OstatniMonitRozrachunku
     FROM dbo_ext.skw_MonitHistory_Invoices AS mi
-    JOIN dbo_ext.skw_MonitHistory AS mh ON mh.ID_MONIT = mi.ID_MONIT
+    JOIN dbo_ext.skw_MonitHistory          AS mh ON mh.ID_MONIT = mi.ID_MONIT
     GROUP BY mh.ID_KONTRAHENTA
 )
 SELECT
     k.ID_KONTRAHENTA,
-    ISNULL(k.NAZWA_PELNA, k.NAZWA)              AS NazwaKontrahenta,
-    k.ADRES_EMAIL                               AS Email,
-    k.TELEFON_FIRMOWY                           AS Telefon,
-    ISNULL(roz.SumaDlugu,           0)          AS SumaDlugu,
-    ISNULL(roz.LiczbaFaktur,        0)          AS LiczbaFaktur,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)          AS NazwaKontrahenta,
+    k.ADRES_EMAIL                           AS Email,
+    k.TELEFON_FIRMOWY                       AS Telefon,
+    ISNULL(roz.SumaDlugu,          0)       AS SumaDlugu,
+    ISNULL(roz.LiczbaFaktur,       0)       AS LiczbaFaktur,
     roz.NajstarszaFaktura,
-    ISNULL(roz.DniPrzeterminowania, 0)          AS DniPrzeterminowania,
+    ISNULL(roz.DniPrzeterminowania, 0)      AS DniPrzeterminowania,
     mon.OstatniMonitData,
     mon.OstatniMonitTyp,
-    ISNULL(mon.LiczbaMonitow,       0)          AS LiczbaMonitow,
+    ISNULL(mon.LiczbaMonitow,      0)       AS LiczbaMonitow,
     monr.OstatniMonitRozrachunku
-FROM dbo.KONTRAHENT AS k
-LEFT JOIN cte_rozrachunki        AS roz  ON roz.id_platnika    = CAST(k.ID_KONTRAHENTA AS INT)
-LEFT JOIN cte_monity             AS mon  ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT)
-LEFT JOIN cte_monity_rozrachunki AS monr ON monr.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT)
+FROM      dbo.KONTRAHENT           AS k
+LEFT JOIN cte_rozrachunki          AS roz  ON roz.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity               AS mon  ON mon.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity_rozrachunki   AS monr ON monr.ID_KONTRAHENTA  = k.ID_KONTRAHENTA
 """
 
 # =============================================================================
@@ -162,27 +182,63 @@ LEFT JOIN cte_monity_rozrachunki AS monr ON monr.ID_KONTRAHENTA = CAST(k.ID_KONT
 _SKW_ROZRACHUNKI_OLD = """
 CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS
+WITH cte_ostatni_monit AS
+(
+    SELECT
+        mi.ID_ROZRACHUNKU,
+        mi.CreatedAt                                            AS OstatniMonitRozrachunku,
+        ROW_NUMBER() OVER (
+            PARTITION BY mi.ID_ROZRACHUNKU
+            ORDER BY mi.CreatedAt DESC
+        )                                                       AS rn
+    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
+)
 SELECT
-    r.id_rozrachunku        AS ID_ROZRACHUNKU,
-    r.id_platnika           AS ID_KONTRAHENTA,
-    ISNULL(k.NAZWA_PELNA, k.NAZWA) AS NazwaKontrahenta,
-    r.numer                 AS NumerFaktury,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia) AS DATE) AS DataWystawienia,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE) AS TerminPlatnosci,
-    ABS(r.wartosc_brutto)   AS KwotaBrutto,
+    r.ID_ROZRACHUNKU,
+    r.ID_KONTRAHENTA,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
+    r.NR_DOK                                                    AS NumerFaktury,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
+    r.KWOTA                                                     AS KwotaBrutto,
     CAST(
         CASE
-            WHEN ABS(r.wartosc_brutto) - ABS(r.pozostalo) < 0 THEN 0
-            ELSE ABS(r.wartosc_brutto) - ABS(r.pozostalo)
+            WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
+            THEN 0
+            ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
         END
-    AS DECIMAL(15,2))       AS KwotaZaplacona,
-    ABS(r.pozostalo)        AS KwotaPozostala,
-    r.forma_platnosci       AS MetodaPlatnosci,
-    r.rozliczony,
-    r.typ_dok
-FROM ROZRACHUNEK_V AS r
-LEFT JOIN dbo.KONTRAHENT AS k ON CAST(k.ID_KONTRAHENTA AS INT) = r.id_platnika
-WHERE r.id_platnika IS NOT NULL AND r.pozostalo < 0
+    AS DECIMAL(15,2))                                           AS KwotaZaplacona,
+    ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
+    r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
+    CASE
+        WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
+            THEN NULL
+        WHEN DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+             ) <= 0
+            THEN 0
+        ELSE
+            DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+            )
+    END                                                         AS DniPo,
+    r.CZY_ROZLICZONY,
+    r.ID_TYP_DOK,
+    mon.OstatniMonitRozrachunku
+FROM dbo.ROZRACHUNEK_VIEW AS r
+LEFT JOIN dbo.KONTRAHENT AS k
+       ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
+LEFT JOIN cte_ostatni_monit AS mon
+       ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
+      AND mon.rn = 1
+WHERE
+    r.ID_KONTRAHENTA    IS NOT NULL
+    AND r.STRONA        = 'WN'
+    AND r.CZY_ROZLICZONY IN (0, 1)
 """
 
 _SKW_KONTRAHENCI_OLD = """
@@ -191,52 +247,80 @@ AS
 WITH cte_rozrachunki AS
 (
     SELECT
-        r.id_platnika,
-        SUM(ABS(r.pozostalo)) AS SumaDlugu,
-        COUNT(CASE WHEN r.typ_dok = 'h' THEN 1 END) AS LiczbaFaktur,
-        CAST(dbo.RM_Func_ClarionDateToDateTime(
-            MIN(CASE WHEN r.typ_dok = 'h' THEN r.data_wystawienia END)
-        ) AS DATE) AS NajstarszaFaktura,
-        MAX(CASE
-            WHEN r.termin_platnosci IS NOT NULL AND r.termin_platnosci > 0
-            THEN DATEDIFF(DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                CAST(GETDATE() AS DATE))
-            ELSE 0
-        END) AS DniPrzeterminowania
-    FROM dbo.ROZRACHUNEK_V AS r
-    WHERE r.id_platnika IS NOT NULL AND r.rozliczony = 0 AND r.pozostalo < 0
-    GROUP BY r.id_platnika
+        r.ID_KONTRAHENTA,
+        SUM(ISNULL(r.POZOSTALO_WN, 0))                               AS SumaDlugu,
+        COUNT(*)                                                      AS LiczbaFaktur,
+        CAST(
+            dbo.RM_Func_ClarionDateToDateTime(
+                MIN(r.DATA_DOK)
+            )
+        AS DATE)                                                      AS NajstarszaFaktura,
+        MAX(
+            CASE
+                WHEN r.TERMIN_PLATNOSCI IS NOT NULL AND r.TERMIN_PLATNOSCI > 0
+                THEN DATEDIFF(
+                    DAY,
+                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                    CAST(GETDATE() AS DATE)
+                )
+                ELSE 0
+            END
+        )                                                             AS DniPrzeterminowania
+    FROM dbo.ROZRACHUNEK_VIEW AS r
+    WHERE r.ID_KONTRAHENTA   IS NOT NULL
+      AND r.STRONA           = 'WN'
+      AND r.CZY_ROZLICZONY   IN (0, 1)
+    GROUP BY r.ID_KONTRAHENTA
 ),
 cte_monity_ranked AS
 (
-    SELECT m.ID_KONTRAHENTA, m.SentAt, m.MonitType,
-           COUNT(*) OVER (PARTITION BY m.ID_KONTRAHENTA) AS LiczbaMonitow,
-           ROW_NUMBER() OVER (
-               PARTITION BY m.ID_KONTRAHENTA
-               ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
-           ) AS rn
+    SELECT
+        m.ID_KONTRAHENTA,
+        m.SentAt,
+        m.MonitType,
+        COUNT(*)     OVER (PARTITION BY m.ID_KONTRAHENTA)            AS LiczbaMonitow,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.ID_KONTRAHENTA
+            ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
+        )                                                             AS rn
     FROM dbo_ext.skw_MonitHistory AS m
 ),
 cte_monity AS
 (
-    SELECT ID_KONTRAHENTA, SentAt AS OstatniMonitData,
-           MonitType AS OstatniMonitTyp, LiczbaMonitow
-    FROM cte_monity_ranked WHERE rn = 1
+    SELECT
+        ID_KONTRAHENTA,
+        SentAt      AS OstatniMonitData,
+        MonitType   AS OstatniMonitTyp,
+        LiczbaMonitow
+    FROM cte_monity_ranked
+    WHERE rn = 1
+),
+cte_monity_rozrachunki AS
+(
+    SELECT
+        mh.ID_KONTRAHENTA,
+        MAX(mi.CreatedAt)                                             AS OstatniMonitRozrachunku
+    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
+    JOIN dbo_ext.skw_MonitHistory          AS mh ON mh.ID_MONIT = mi.ID_MONIT
+    GROUP BY mh.ID_KONTRAHENTA
 )
 SELECT
     k.ID_KONTRAHENTA,
-    ISNULL(k.NAZWA_PELNA, k.NAZWA) AS NazwaKontrahenta,
-    k.ADRES_EMAIL AS Email, k.TELEFON_FIRMOWY AS Telefon,
-    ISNULL(roz.SumaDlugu, 0) AS SumaDlugu,
-    ISNULL(roz.LiczbaFaktur, 0) AS LiczbaFaktur,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)          AS NazwaKontrahenta,
+    k.ADRES_EMAIL                           AS Email,
+    k.TELEFON_FIRMOWY                       AS Telefon,
+    ISNULL(roz.SumaDlugu,          0)       AS SumaDlugu,
+    ISNULL(roz.LiczbaFaktur,       0)       AS LiczbaFaktur,
     roz.NajstarszaFaktura,
-    ISNULL(roz.DniPrzeterminowania, 0) AS DniPrzeterminowania,
-    mon.OstatniMonitData, mon.OstatniMonitTyp,
-    ISNULL(mon.LiczbaMonitow, 0) AS LiczbaMonitow
-FROM dbo.KONTRAHENT AS k
-LEFT JOIN cte_rozrachunki AS roz ON roz.id_platnika    = CAST(k.ID_KONTRAHENTA AS INT)
-LEFT JOIN cte_monity      AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT)
+    ISNULL(roz.DniPrzeterminowania, 0)      AS DniPrzeterminowania,
+    mon.OstatniMonitData,
+    mon.OstatniMonitTyp,
+    ISNULL(mon.LiczbaMonitow,      0)       AS LiczbaMonitow,
+    monr.OstatniMonitRozrachunku
+FROM      dbo.KONTRAHENT           AS k
+LEFT JOIN cte_rozrachunki          AS roz  ON roz.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity               AS mon  ON mon.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity_rozrachunki   AS monr ON monr.ID_KONTRAHENTA  = k.ID_KONTRAHENTA
 """
 
 

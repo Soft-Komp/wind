@@ -497,102 +497,149 @@ def _create_skw_comments() -> None:
     """)
 def _create_skw_kontrahenci() -> None:
     op.execute("""
-        CREATE OR ALTER VIEW [dbo].[skw_kontrahenci] AS
-        WITH cte_rozrachunki AS (
-            SELECT
-                r.id_platnika,
-                SUM(ABS(r.pozostalo))                                        AS SumaDlugu,
-                COUNT(CASE WHEN r.typ_dok = 'h' THEN 1 END)                  AS LiczbaFaktur,
-                CAST(
-                    dbo.RM_Func_ClarionDateToDateTime(
-                        MIN(CASE WHEN r.typ_dok = 'h' THEN r.data_wystawienia END)
-                    )
-                AS DATE)                                                      AS NajstarszaFaktura,
-                MAX(
-                    CASE
-                        WHEN r.termin_platnosci IS NOT NULL AND r.termin_platnosci > 0
-                        THEN DATEDIFF(
-                            DAY,
-                            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-                            CAST(GETDATE() AS DATE)
-                        )
-                        ELSE 0
-                    END
-                )                                                             AS DniPrzeterminowania
-            FROM ROZRACHUNEK_V AS r
-            WHERE r.id_platnika IS NOT NULL
-              AND r.rozliczony  = 0
-              AND r.pozostalo   < 0
-            GROUP BY r.id_platnika
-        ),
-        cte_monity_ranked AS (
-            SELECT
-                m.ID_KONTRAHENTA,
-                m.SentAt,
-                m.MonitType,
-                COUNT(*) OVER (PARTITION BY m.ID_KONTRAHENTA)     AS LiczbaMonitow,
-                ROW_NUMBER() OVER (
-                    PARTITION BY m.ID_KONTRAHENTA
-                    ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
-                )                                                  AS rn
-            FROM dbo_ext.skw_MonitHistory AS m
-        ),
-        cte_monity AS (
-            SELECT
-                ID_KONTRAHENTA,
-                SentAt      AS OstatniMonitData,
-                MonitType   AS OstatniMonitTyp,
-                LiczbaMonitow
-            FROM cte_monity_ranked
-            WHERE rn = 1
-        )
-        SELECT
-            k.ID_KONTRAHENTA,
-            ISNULL(k.NAZWA_PELNA, k.NAZWA)          AS NazwaKontrahenta,
-            k.ADRES_EMAIL                            AS Email,
-            k.TELEFON_FIRMOWY                        AS Telefon,
-            ISNULL(roz.SumaDlugu,          0)        AS SumaDlugu,
-            ISNULL(roz.LiczbaFaktur,       0)        AS LiczbaFaktur,
-            roz.NajstarszaFaktura,
-            ISNULL(roz.DniPrzeterminowania, 0)       AS DniPrzeterminowania,
-            mon.OstatniMonitData,
-            mon.OstatniMonitTyp,
-            ISNULL(mon.LiczbaMonitow,      0)        AS LiczbaMonitow
-        FROM      dbo.KONTRAHENT     AS k
-        LEFT JOIN cte_rozrachunki    AS roz ON roz.id_platnika = CAST(k.ID_KONTRAHENTA AS INT)
-        LEFT JOIN cte_monity         AS mon ON mon.ID_KONTRAHENTA = CAST(k.ID_KONTRAHENTA AS INT)
+        CREATE OR ALTER VIEW dbo.skw_kontrahenci
+AS
+WITH cte_rozrachunki AS
+(
+    SELECT
+        r.ID_KONTRAHENTA,
+        SUM(ISNULL(r.POZOSTALO_WN, 0))                               AS SumaDlugu,
+        COUNT(*)                                                      AS LiczbaFaktur,
+        CAST(
+            dbo.RM_Func_ClarionDateToDateTime(
+                MIN(r.DATA_DOK)
+            )
+        AS DATE)                                                      AS NajstarszaFaktura,
+        MAX(
+            CASE
+                WHEN r.TERMIN_PLATNOSCI IS NOT NULL AND r.TERMIN_PLATNOSCI > 0
+                THEN DATEDIFF(
+                    DAY,
+                    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                    CAST(GETDATE() AS DATE)
+                )
+                ELSE 0
+            END
+        )                                                             AS DniPrzeterminowania
+    FROM dbo.ROZRACHUNEK_VIEW AS r
+    WHERE r.ID_KONTRAHENTA   IS NOT NULL
+      AND r.STRONA           = 'WN'
+      AND r.CZY_ROZLICZONY   IN (0, 1)
+    GROUP BY r.ID_KONTRAHENTA
+),
+cte_monity_ranked AS
+(
+    SELECT
+        m.ID_KONTRAHENTA,
+        m.SentAt,
+        m.MonitType,
+        COUNT(*)     OVER (PARTITION BY m.ID_KONTRAHENTA)            AS LiczbaMonitow,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.ID_KONTRAHENTA
+            ORDER BY ISNULL(m.SentAt, m.CreatedAt) DESC
+        )                                                             AS rn
+    FROM dbo_ext.skw_MonitHistory AS m
+),
+cte_monity AS
+(
+    SELECT
+        ID_KONTRAHENTA,
+        SentAt      AS OstatniMonitData,
+        MonitType   AS OstatniMonitTyp,
+        LiczbaMonitow
+    FROM cte_monity_ranked
+    WHERE rn = 1
+),
+cte_monity_rozrachunki AS
+(
+    SELECT
+        mh.ID_KONTRAHENTA,
+        MAX(mi.CreatedAt)                                             AS OstatniMonitRozrachunku
+    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
+    JOIN dbo_ext.skw_MonitHistory          AS mh ON mh.ID_MONIT = mi.ID_MONIT
+    GROUP BY mh.ID_KONTRAHENTA
+)
+SELECT
+    k.ID_KONTRAHENTA,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)          AS NazwaKontrahenta,
+    k.ADRES_EMAIL                           AS Email,
+    k.TELEFON_FIRMOWY                       AS Telefon,
+    ISNULL(roz.SumaDlugu,          0)       AS SumaDlugu,
+    ISNULL(roz.LiczbaFaktur,       0)       AS LiczbaFaktur,
+    roz.NajstarszaFaktura,
+    ISNULL(roz.DniPrzeterminowania, 0)      AS DniPrzeterminowania,
+    mon.OstatniMonitData,
+    mon.OstatniMonitTyp,
+    ISNULL(mon.LiczbaMonitow,      0)       AS LiczbaMonitow,
+    monr.OstatniMonitRozrachunku
+FROM      dbo.KONTRAHENT           AS k
+LEFT JOIN cte_rozrachunki          AS roz  ON roz.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity               AS mon  ON mon.ID_KONTRAHENTA   = k.ID_KONTRAHENTA
+LEFT JOIN cte_monity_rozrachunki   AS monr ON monr.ID_KONTRAHENTA  = k.ID_KONTRAHENTA
     """)
 
 
 def _create_skw_rozrachunki_faktur() -> None:
     op.execute("""
-        CREATE OR ALTER VIEW [dbo].[skw_rozrachunki_faktur] AS
-        WITH cte_kontrahenci_aktywni AS (
-            SELECT
-                k.ID_KONTRAHENTA,
-                ISNULL(k.NAZWA_PELNA, k.NAZWA) AS NazwaKontrahenta,
-                k.NIP                          AS NIP
-            FROM dbo.KONTRAHENT AS k
-            WHERE k.RODO_ZANONIMIZOWANY = 0
-              AND k.ZABLOKOWANY = 0
-        )
-        SELECT
-            r.id_platnika                                              AS ID_KONTRAHENTA,
-            ka.NazwaKontrahenta,
-            ka.NIP,
-            r.numer                                                    AS NumerFaktury,
-            CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia) AS DATE) AS DataWystawienia,
-            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE) AS TerminPlatnosci,
-            ABS(r.wartosc_brutto)                                      AS KwotaBrutto,
-            ABS(r.pozostalo)                                           AS KwotaPozostala,
-            ABS(r.wartosc_brutto) - ABS(r.pozostalo)                  AS KwotaZaplacona,
-            CASE WHEN r.rozliczony = 1 THEN 1 ELSE 0 END              AS CzyZaplacona,
-            ISNULL(r.dni_przeterminowania, 0)                         AS DniPrzeterminowania,
-            r.forma_platnosci                                          AS FormaPlatnosci
-        FROM ROZRACHUNEK_V AS r
-        JOIN cte_kontrahenci_aktywni AS ka ON ka.ID_KONTRAHENTA = CAST(r.id_platnika AS INT)
-        WHERE r.typ_dok = 'h'
-          AND r.pozostalo < 0
+        CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
+AS
+WITH cte_ostatni_monit AS
+(
+    SELECT
+        mi.ID_ROZRACHUNKU,
+        mi.CreatedAt                                            AS OstatniMonitRozrachunku,
+        ROW_NUMBER() OVER (
+            PARTITION BY mi.ID_ROZRACHUNKU
+            ORDER BY mi.CreatedAt DESC
+        )                                                       AS rn
+    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
+)
+SELECT
+    r.ID_ROZRACHUNKU,
+    r.ID_KONTRAHENTA,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
+    r.NR_DOK                                                    AS NumerFaktury,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
+    r.KWOTA                                                     AS KwotaBrutto,
+    CAST(
+        CASE
+            WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
+            THEN 0
+            ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
+        END
+    AS DECIMAL(15,2))                                           AS KwotaZaplacona,
+    ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
+    r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
+    CASE
+        WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
+            THEN NULL
+        WHEN DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+             ) <= 0
+            THEN 0
+        ELSE
+            DATEDIFF(
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+            )
+    END                                                         AS DniPo,
+    r.CZY_ROZLICZONY,
+    r.ID_TYP_DOK,
+    mon.OstatniMonitRozrachunku
+FROM dbo.ROZRACHUNEK_VIEW AS r
+LEFT JOIN dbo.KONTRAHENT AS k
+       ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
+LEFT JOIN cte_ostatni_monit AS mon
+       ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
+      AND mon.rn = 1
+WHERE
+    r.ID_KONTRAHENTA    IS NOT NULL
+    AND r.STRONA        = 'WN'
+    AND r.CZY_ROZLICZONY IN (0, 1)
     """)
 
 

@@ -3,45 +3,60 @@
 -- =============================================================================
 CREATE OR ALTER VIEW dbo.skw_rozrachunki_faktur
 AS
+WITH cte_ostatni_monit AS
+(
+    SELECT
+        mi.ID_ROZRACHUNKU,
+        mi.CreatedAt                                            AS OstatniMonitRozrachunku,
+        ROW_NUMBER() OVER (
+            PARTITION BY mi.ID_ROZRACHUNKU
+            ORDER BY mi.CreatedAt DESC
+        )                                                       AS rn
+    FROM dbo_ext.skw_MonitHistory_Invoices AS mi
+)
 SELECT
-    r.id_platnika AS ID_KONTRAHENTA,
-    ISNULL(k.NAZWA_PELNA, k.NAZWA) AS NazwaKontrahenta,
-    r.numer AS NumerFaktury,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.data_wystawienia) AS DATE) AS DataWystawienia,
-    CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE) AS TerminPlatnosci,
-    ABS(r.wartosc_brutto) AS KwotaBrutto,
+    r.ID_ROZRACHUNKU,
+    r.ID_KONTRAHENTA,
+    ISNULL(k.NAZWA_PELNA, k.NAZWA)                              AS NazwaKontrahenta,
+    r.NR_DOK                                                    AS NumerFaktury,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.DATA_DOK)          AS DATE) AS DataWystawienia,
+    CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI)  AS DATE) AS TerminPlatnosci,
+    r.KWOTA                                                     AS KwotaBrutto,
     CAST(
         CASE
-            WHEN ABS(r.wartosc_brutto) - ABS(r.pozostalo) < 0
+            WHEN r.KWOTA - ISNULL(r.POZOSTALO_WN, 0) < 0
             THEN 0
-            ELSE ABS(r.wartosc_brutto) - ABS(r.pozostalo)
+            ELSE r.KWOTA - ISNULL(r.POZOSTALO_WN, 0)
         END
-    AS DECIMAL(15,2)) AS KwotaZaplacona,
-    ABS(r.pozostalo) AS KwotaPozostala,
-    r.forma_platnosci AS MetodaPlatnosci,
+    AS DECIMAL(15,2))                                           AS KwotaZaplacona,
+    ISNULL(r.POZOSTALO_WN, 0)                                   AS KwotaPozostala,
+    r.FORMA_PLATNOSCI                                           AS MetodaPlatnosci,
     CASE
-        WHEN r.rozliczony = 2
-        THEN 0
-        WHEN r.termin_platnosci IS NULL OR r.termin_platnosci = 0
-        THEN NULL
+        WHEN r.TERMIN_PLATNOSCI IS NULL OR r.TERMIN_PLATNOSCI = 0
+            THEN NULL
         WHEN DATEDIFF(
-            DAY,
-            CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
-            CAST(GETDATE() AS DATE)
-        ) <= 0
-        THEN 0
+                DAY,
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
+                CAST(GETDATE() AS DATE)
+             ) <= 0
+            THEN 0
         ELSE
             DATEDIFF(
                 DAY,
-                CAST(dbo.RM_Func_ClarionDateToDateTime(r.termin_platnosci) AS DATE),
+                CAST(dbo.RM_Func_ClarionDateToDateTime(r.TERMIN_PLATNOSCI) AS DATE),
                 CAST(GETDATE() AS DATE)
             )
-    END AS DniPo,
-    r.rozliczony,
-    r.typ_dok
-FROM ROZRACHUNEK_V AS r
+    END                                                         AS DniPo,
+    r.CZY_ROZLICZONY,
+    r.ID_TYP_DOK,
+    mon.OstatniMonitRozrachunku
+FROM dbo.ROZRACHUNEK_VIEW AS r
 LEFT JOIN dbo.KONTRAHENT AS k
-    ON CAST(k.ID_KONTRAHENTA AS INT) = r.id_platnika
+       ON k.ID_KONTRAHENTA = r.ID_KONTRAHENTA
+LEFT JOIN cte_ostatni_monit AS mon
+       ON mon.ID_ROZRACHUNKU = r.ID_ROZRACHUNKU
+      AND mon.rn = 1
 WHERE
-    r.id_platnika IS NOT NULL
-    AND r.pozostalo < 0;
+    r.ID_KONTRAHENTA    IS NOT NULL
+    AND r.STRONA        = 'WN'
+    AND r.CZY_ROZLICZONY IN (0, 1);

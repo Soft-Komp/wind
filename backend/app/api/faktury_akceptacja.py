@@ -440,7 +440,16 @@ async def confirm_reset(
             data=idem.cached_response,
         ).model_dump(mode="json")
 
-    result = await svc.confirm_reset_przypisania(...)
+    result = await svc.confirm_reset_przypisania(
+        db=db,
+        redis=redis,
+        faktura_id=faktura_id,
+        confirm_token=body.confirm_token,
+        actor_id=current_user.id_user,
+        actor_name=current_user.username,
+        actor_ip=client_ip,
+        request_id=request_id,
+    )
     result_dict = result.model_dump(mode="json")
     await idem.store_result(result_dict)
     return BaseResponse(
@@ -483,7 +492,16 @@ async def initiate_force_status(
             detail="Force-akceptacja jest tymczasowo wyłączona przez administratora.",
         )
 
-    result = await svc.initiate_force_status(...)
+    result = await svc.initiate_force_status(
+        db=db,
+        redis=redis,
+        faktura_id=faktura_id,
+        body=body,
+        actor_id=current_user.id_user,        
+        actor_name=current_user.username, 
+        actor_ip=client_ip,
+        request_id=request_id
+    )
     data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     return BaseResponse(
         code=202,
@@ -526,7 +544,17 @@ async def confirm_force_status(
             data=idem.cached_response,
         ).model_dump(mode="json")
 
-    result = await svc.confirm_force_status(...)
+    result = await svc.confirm_force_status(
+        db=db,
+        redis=redis,
+        faktura_id=faktura_id,
+        confirm_token=body.confirm_token,  # 1. Zmień "token" na "confirm_token"
+        actor_id=current_user.id_user,    # 2. Upewnij się, że pole to id_user lub user_id
+        actor_name=current_user.username,  # 3. DODAJ ten brakujący argument
+        actor_ip=client_ip,               # 4. DODAJ ten brakujący argument
+        request_id=request_id
+    )
+
     await idem.store_result(result)
     return BaseResponse(
         code=200,

@@ -264,7 +264,16 @@ async def zapisz_decyzje(
             data=idem.cached_response,
         ).model_dump(mode="json")
 
-    result = await svc.zapisz_decyzje(...)
+    result = await svc.zapisz_decyzje(
+        db=db,
+        redis=redis,
+        faktura_id=faktura_id,
+        body=body,
+        actor_id=current_user.id_user,
+        actor_name=current_user.username,
+        actor_ip=client_ip,
+        request_id=request_id,
+    )
     result_dict = result.model_dump(mode="json")
     await idem.store_result(result_dict)
     return BaseResponse(
