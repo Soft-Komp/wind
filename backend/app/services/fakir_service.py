@@ -457,6 +457,7 @@ async def _log_faktura_event(
     after:      Optional[dict],
     meta:       Optional[dict],
     actor_name: str,
+    actor_full_name: str = "",   # ← NOWE
     actor_ip:   str,
     request_id: str,
     endpoint:   str,
@@ -465,6 +466,7 @@ async def _log_faktura_event(
     details = FakturaLogDetails.build(
         user_id=user_id,
         username=actor_name,
+        full_name=actor_full_name,   # ← NOWE
         ip=actor_ip,
         before=before,
         after=after,

@@ -266,6 +266,7 @@ async def create_faktura(
         body=body,
         actor_id=current_user.id_user,
         actor_name=current_user.username,
+        actor_full_name=current_user.full_name or "",
         actor_ip=client_ip,
         request_id=request_id,
     )
@@ -343,6 +344,7 @@ async def patch_faktura(
         body=body,
         actor_id=current_user.id_user,
         actor_name=current_user.username,
+        actor_full_name=current_user.full_name or "",
         actor_ip=client_ip,
         request_id=request_id,
     )
@@ -447,6 +449,7 @@ async def confirm_reset(
         confirm_token=body.confirm_token,
         actor_id=current_user.id_user,
         actor_name=current_user.username,
+        actor_full_name=current_user.full_name or "",
         actor_ip=client_ip,
         request_id=request_id,
     )
@@ -551,6 +554,7 @@ async def confirm_force_status(
         confirm_token=body.confirm_token,  # 1. Zmień "token" na "confirm_token"
         actor_id=current_user.id_user,    # 2. Upewnij się, że pole to id_user lub user_id
         actor_name=current_user.username,  # 3. DODAJ ten brakujący argument
+        actor_full_name=current_user.full_name or "",
         actor_ip=client_ip,               # 4. DODAJ ten brakujący argument
         request_id=request_id
     )

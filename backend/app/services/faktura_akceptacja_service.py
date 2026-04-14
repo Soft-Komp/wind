@@ -595,6 +595,7 @@ async def create_faktura_akceptacja(
     body: FakturaCreateRequest,
     actor_id: int,
     actor_name: str,
+    actor_full_name: str = "",
     actor_ip: str,
     request_id: str,
 ) -> FakturaCreateResponse:
@@ -663,6 +664,7 @@ async def create_faktura_akceptacja(
         after={"status_wewnetrzny": "nowe", "priorytet": faktura.priorytet},
         meta={"numer_ksef": body.numer_ksef, "przypisani": body.user_ids},
         actor_name=actor_name,
+        actor_full_name=actor_full_name,
         actor_ip=actor_ip,
         request_id=request_id,
         endpoint="/faktury-akceptacja",
@@ -716,6 +718,7 @@ async def patch_faktura(
     body: FakturaPatchRequest,
     actor_id: int,
     actor_name: str,
+    actor_full_name: str = "",
     actor_ip: str,
     request_id: str,
 ) -> dict[str, Any]:
@@ -763,6 +766,7 @@ async def patch_faktura(
         after=changes,
         meta={"numer_ksef": faktura.numer_ksef},
         actor_name=actor_name,
+        actor_full_name=actor_full_name,
         actor_ip=actor_ip,
         request_id=request_id,
         endpoint=f"/faktury-akceptacja/{faktura_id}",
@@ -859,6 +863,7 @@ async def confirm_reset_przypisania(
     confirm_token: str,
     actor_id: int,
     actor_name: str,
+    actor_full_name: str = "",
     actor_ip: str,
     request_id: str,
 ) -> FakturaResetResponse:
@@ -924,6 +929,7 @@ async def confirm_reset_przypisania(
             "nowe": nowe_user_ids,
         },
         actor_name=actor_name,
+        actor_full_name=actor_full_name,
         actor_ip=actor_ip,
         request_id=request_id,
         endpoint=f"/faktury-akceptacja/{faktura_id}/reset/confirm",
@@ -1026,6 +1032,7 @@ async def confirm_force_status(
     confirm_token: str,
     actor_id: int,
     actor_name: str,
+    actor_full_name: str = "",
     actor_ip: str,
     request_id: str,
 ) -> dict[str, Any]:
@@ -1087,6 +1094,7 @@ async def confirm_force_status(
         after={"status_wewnetrzny": nowy_status},
         meta={"numer_ksef": faktura.numer_ksef, "powod": powod},
         actor_name=actor_name,
+        actor_full_name=actor_full_name,
         actor_ip=actor_ip,
         request_id=request_id,
         endpoint=f"/faktury-akceptacja/{faktura_id}/status/confirm",
