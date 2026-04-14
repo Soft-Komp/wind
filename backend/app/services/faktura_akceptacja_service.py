@@ -156,20 +156,65 @@ async def _get_wapro_naglowek(numer_ksef: str) -> Optional[WaproFakturaNaglowek]
         logger.warning(f"WAPRO nagłówek query error ksef_id={numer_ksef}: {exc}")
         return None
 
-async def _get_wapro_nowe_ksef_ids(db: AsyncSession) -> set[str]:
+async def _get_wapro_wszystkie_naglowki() -> dict[str, dict]:
     """
-    Pobiera KSEF_IDs faktur które są w WAPRO ale NIE w naszej tabeli.
-    Używane do budowania listy "NOWE" dla referenta.
+    Pobiera WSZYSTKIE wiersze z dbo.skw_faktury_akceptacja_naglowek.
+    Zwraca słownik keyed by KSEF_ID — O(1) lookup przy merge.
+
+    Jeden query zamiast N osobnych — wydajne do ~1000 faktur (decyzja D2).
     """
     try:
+        rows = await execute_query(
+            query_type="faktury_wszystkie_naglowki",
+            params={},
+        )
+        result: dict[str, dict] = {}
+        for r in rows:
+            ksef_id = r.get("KSEF_ID")
+            if ksef_id:
+                result[ksef_id] = r
+        logger.debug(
+            "WAPRO wszystkie_naglowki: pobrano %d wierszy z widoku",
+            len(result),
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "WAPRO wszystkie_naglowki ERROR: %s — lista faktur będzie pusta",
+            exc,
+            exc_info=True,
+        )
+        return {}
+
+
+async def _get_wapro_nowe_ksef_ids(db: AsyncSession) -> set[str]:
+    """
+    Pobiera KSEF_IDs faktur które są w WAPRO ale NIE w naszej tabeli (IsActive=True).
+    Naprawiona wersja — poprzednia nigdy nie wykonywała existing_stmt.
+    """
+    try:
+        # Krok 1: wszystkie KSEF_ID z WAPRO
         rows = await execute_query(
             query_type="faktury_nowe_ksef_ids",
             params={},
         )
-        existing_stmt = select(FakturaAkceptacja.numer_ksef).where(
-            FakturaAkceptacja.IsActive == True  # noqa: E712
+        wapro_ids = {r.get("KSEF_ID") for r in rows if r.get("KSEF_ID")}
+
+        # Krok 2: KSEF_IDs już w naszej tabeli — BRAKUJĄCY await w starej wersji
+        existing_result = await db.execute(
+            select(FakturaAkceptacja.numer_ksef).where(
+                FakturaAkceptacja.IsActive == True  # noqa: E712
+            )
         )
-        return {r.get("KSEF_ID") for r in rows if r.get("KSEF_ID")}
+        existing_ids = {row[0] for row in existing_result.fetchall()}
+
+        # Krok 3: różnica = faktury NOWE (w WAPRO, bez obiegu)
+        nowe = wapro_ids - existing_ids
+        logger.debug(
+            "WAPRO nowe_ksef_ids: wapro=%d, nasze=%d, nowe=%d",
+            len(wapro_ids), len(existing_ids), len(nowe),
+        )
+        return nowe
     except Exception as exc:
         logger.warning(f"WAPRO nowe_ksef_ids error: {exc}")
         return set()
@@ -188,6 +233,7 @@ async def _log_event(
     after: Optional[dict] = None,
     meta: Optional[dict] = None,
     actor_name: str = "",
+    actor_full_name: str = "",    # ← NOWE
     actor_ip: str = "",
     request_id: str = "",
     endpoint: str = "",
@@ -195,6 +241,7 @@ async def _log_event(
     details = FakturaLogDetails.build(
         user_id=user_id,
         username=actor_name,
+        full_name=actor_full_name,   # ← NOWE
         ip=actor_ip,
         before=before,
         after=after,
@@ -320,9 +367,21 @@ async def get_faktury_list(
     date_to: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    Lista faktur dla referenta: nasze (W_TOKU/NOWE) z filtrami.
-    Merge w pamięci Python — paginacja po złączeniu.
-    Cache Redis 60s.
+    Lista faktur dla referenta — implementacja decyzji D2 (merge w pamięci Python).
+
+    Logika:
+      1. Pobierz WSZYSTKIE wiersze z widoku WAPRO (jeden query)
+      2. Pobierz nasze rekordy z skw_faktura_akceptacja (IsActive=True)
+      3. NOWE = w WAPRO, brak wpisu w naszej tabeli
+      4. W_OBIEGU = w naszej tabeli (w_toku / zaakceptowana / anulowana / orphaned)
+      5. Złącz, zastosuj filtry, posortuj, paginuj
+      6. Cache Redis 60s
+
+    Filtry:
+      - priorytet:  dotyczy tylko rekordów z naszej tabeli (NOWE go nie mają)
+      - status:     "nowe" → tylko NOWE; inne → tylko z naszej tabeli
+      - search:     po numer_ksef i nazwa_kontrahenta (obie grupy)
+      - date_from/date_to: po DataWystawienia z widoku WAPRO
     """
     filters = {
         "priorytet": priorytet, "status": status,
@@ -330,69 +389,198 @@ async def get_faktury_list(
     }
     cache_key = _cache_key_list(page, limit, filters)
 
-    # Cache hit
+    # ── Cache hit ──────────────────────────────────────────────────────────
     try:
         cached = await redis.get(cache_key)
         if cached:
+            logger.debug("get_faktury_list: cache hit key=%s", cache_key)
             return orjson.loads(cached)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("get_faktury_list: cache read error: %s", exc)
 
-    # Buduj query
-    stmt = select(FakturaAkceptacja).where(
-        FakturaAkceptacja.IsActive == True  # noqa: E712
+    # ── Krok 1: Pobierz wszystkie nagłówki z WAPRO (jeden query) ──────────
+    wapro_wszystkie: dict[str, dict] = await _get_wapro_wszystkie_naglowki()
+
+    logger.info(
+        "get_faktury_list: WAPRO zwrócił %d faktur z widoku",
+        len(wapro_wszystkie),
     )
 
-    if priorytet:
-        stmt = stmt.where(FakturaAkceptacja.priorytet == priorytet)
-    if status:
-        stmt = stmt.where(FakturaAkceptacja.status_wewnetrzny == status)
+    # ── Krok 2: Pobierz nasze rekordy ─────────────────────────────────────
+    stmt = select(FakturaAkceptacja).where(
+        FakturaAkceptacja.IsActive == True  # noqa: E712
+    ).order_by(FakturaAkceptacja.CreatedAt.desc())
+    db_result = await db.execute(stmt)
+    nasze_rekordy: list[FakturaAkceptacja] = list(db_result.scalars().all())
+    nasze_ksef_ids: set[str] = {f.numer_ksef for f in nasze_rekordy}
 
-    stmt = stmt.order_by(FakturaAkceptacja.CreatedAt.desc())
-    result = await db.execute(stmt)
-    wszystkie = result.scalars().all()
+    logger.info(
+        "get_faktury_list: nasza tabela ma %d aktywnych rekordów",
+        len(nasze_rekordy),
+    )
 
-    # Filtr search (po numer_ksef i opis_skrocony)
-    if search:
-        search_lower = search.lower()
-        wszystkie = [
-            f for f in wszystkie
-            if search_lower in (f.numer_ksef or "").lower()
-            or search_lower in (f.opis_dokumentu or "").lower()
-        ]
-
-    total = len(wszystkie)
-    offset = (page - 1) * limit
-    strona = wszystkie[offset : offset + limit]
-
-    items = []
-    for f in strona:
-        # ET-01: sprawdź czy faktura nadal jest w WAPRO
-        orphaned = await _handle_orphan_if_needed(db=db, redis=redis, faktura=f)
-
-        wapro = await _get_wapro_naglowek(f.numer_ksef) if not orphaned else None
-        items.append({
-            "id":                f.id,
-            "numer_ksef":        f.numer_ksef,
-            "status_wewnetrzny": f.status_wewnetrzny,  # już 'orphaned' jeśli wykryto
-            "priorytet":         f.priorytet,
-            "opis_skrocony":     (f.opis_dokumentu or "")[:120] or None,
-            "is_active": f.IsActive,
-            "created_at":        f.CreatedAt.isoformat() if f.CreatedAt else None,
-            "updated_at":        f.UpdatedAt.isoformat() if f.UpdatedAt else None,
-            "numer":             wapro.numer if wapro else None,
-            "wartosc_brutto":    float(wapro.wartosc_brutto) if wapro and wapro.wartosc_brutto else None,
-            "nazwa_kontrahenta": wapro.nazwa_kontrahenta if wapro else None,
-            "termin_platnosci":  wapro.termin_platnosci.isoformat() if wapro and wapro.termin_platnosci else None,
-        })
-
-    response = {"items": items, "total": total}
-
-    # Cache write
+    # ── Krok 3: Buduj listę items ──────────────────────────────────────────
+    # Pomocnicze: parsowanie dat filtrów
+    date_from_parsed = None
+    date_to_parsed   = None
     try:
-        await redis.setex(cache_key, 60, orjson.dumps(response))
-    except Exception:
-        pass
+        if date_from:
+            date_from_parsed = datetime.fromisoformat(date_from).date()
+        if date_to:
+            date_to_parsed   = datetime.fromisoformat(date_to).date()
+    except ValueError as exc:
+        logger.warning("get_faktury_list: błąd parsowania dat filtrów: %s", exc)
+
+    search_lower = search.lower().strip() if search else None
+
+    items_all: list[dict] = []
+
+    # ── Grupa A: NOWE — w WAPRO, bez wpisu w naszej tabeli ────────────────
+    # Pomijamy jeśli filtr status jest ustawiony na coś innego niż "nowe"
+    if not status or status == "nowe":
+        for ksef_id, w in wapro_wszystkie.items():
+            if ksef_id in nasze_ksef_ids:
+                continue  # już w obiegu — obsłużone w Grupie B
+
+            # Filtr priorytet: NOWE nie mają priorytetu — pomijamy jeśli filtr aktywny
+            if priorytet:
+                continue
+
+            # Filtr search
+            if search_lower:
+                hay = (
+                    (ksef_id or "").lower()
+                    + " "
+                    + (w.get("NazwaKontrahenta") or "").lower()
+                    + " "
+                    + (w.get("NUMER") or "").lower()
+                )
+                if search_lower not in hay:
+                    continue
+
+            # Filtr dat po DataWystawienia
+            data_wyst = w.get("DataWystawienia")
+            if date_from_parsed and data_wyst and data_wyst < date_from_parsed:
+                continue
+            if date_to_parsed and data_wyst and data_wyst > date_to_parsed:
+                continue
+
+            wartosc_brutto = w.get("WARTOSC_BRUTTO")
+            termin         = w.get("TerminPlatnosci")
+
+            items_all.append({
+                "id":                None,   # jeszcze nie w naszej tabeli
+                "numer_ksef":        ksef_id,
+                "status_wewnetrzny": "nowe",
+                "priorytet":         None,
+                "opis_skrocony":     None,
+                "is_active":         True,
+                "created_at":        None,
+                "updated_at":        None,
+                # Dane z WAPRO
+                "numer":             w.get("NUMER"),
+                "wartosc_brutto":    float(wartosc_brutto) if wartosc_brutto is not None else None,
+                "nazwa_kontrahenta": w.get("NazwaKontrahenta"),
+                "termin_platnosci":  termin.isoformat() if termin else None,
+                "data_wystawienia":  data_wyst.isoformat() if data_wyst else None,
+                "kod_statusu":       w.get("KOD_STATUSU"),
+                "status_opis":       w.get("StatusOpis"),
+            })
+
+    # ── Grupa B: W OBIEGU — rekordy z naszej tabeli ────────────────────────
+    if not status or status != "nowe":
+        for faktura in nasze_rekordy:
+            # Filtr priorytet
+            if priorytet and faktura.priorytet != priorytet:
+                continue
+
+            # Filtr status
+            if status and faktura.status_wewnetrzny != status:
+                continue
+
+            # Dane z WAPRO (jeśli dostępne)
+            w = wapro_wszystkie.get(faktura.numer_ksef)
+
+            # ET-01: sprawdź orphan — async, nie blokujemy całej pętli
+            if not w and faktura.status_wewnetrzny not in ("orphaned", "anulowana"):
+                await _handle_orphan_if_needed(db=db, redis=redis, faktura=faktura)
+
+            # Filtr search
+            if search_lower:
+                hay = (
+                    (faktura.numer_ksef or "").lower()
+                    + " "
+                    + (faktura.opis_dokumentu or "").lower()
+                    + " "
+                    + (w.get("NazwaKontrahenta") or "").lower() if w else ""
+                    + " "
+                    + (w.get("NUMER") or "").lower() if w else ""
+                )
+                if search_lower not in hay:
+                    continue
+
+            # Filtr dat po DataWystawienia (z WAPRO)
+            if w:
+                data_wyst = w.get("DataWystawienia")
+                if date_from_parsed and data_wyst and data_wyst < date_from_parsed:
+                    continue
+                if date_to_parsed and data_wyst and data_wyst > date_to_parsed:
+                    continue
+
+            wartosc_brutto = w.get("WARTOSC_BRUTTO") if w else None
+            termin         = w.get("TerminPlatnosci") if w else None
+            data_wyst_item = w.get("DataWystawienia") if w else None
+
+            items_all.append({
+                "id":                faktura.id,
+                "numer_ksef":        faktura.numer_ksef,
+                "status_wewnetrzny": faktura.status_wewnetrzny,
+                "priorytet":         faktura.priorytet,
+                "opis_skrocony":     (faktura.opis_dokumentu or "")[:120] or None,
+                "is_active":         faktura.IsActive,
+                "created_at":        faktura.CreatedAt.isoformat() if faktura.CreatedAt else None,
+                "updated_at":        faktura.UpdatedAt.isoformat() if faktura.UpdatedAt else None,
+                # Dane z WAPRO
+                "numer":             w.get("NUMER") if w else None,
+                "wartosc_brutto":    float(wartosc_brutto) if wartosc_brutto is not None else None,
+                "nazwa_kontrahenta": w.get("NazwaKontrahenta") if w else None,
+                "termin_platnosci":  termin.isoformat() if termin else None,
+                "data_wystawienia":  data_wyst_item.isoformat() if data_wyst_item else None,
+                "kod_statusu":       w.get("KOD_STATUSU") if w else None,
+                "status_opis":       w.get("StatusOpis") if w else None,
+            })
+
+    logger.info(
+        "get_faktury_list: po filtrach — %d items (nowe=%d, w_obiegu=%d), page=%d, limit=%d",
+        len(items_all),
+        sum(1 for i in items_all if i["status_wewnetrzny"] == "nowe"),
+        sum(1 for i in items_all if i["status_wewnetrzny"] != "nowe"),
+        page,
+        limit,
+    )
+
+    # ── Krok 4: Sortowanie — NOWE na górze, potem wg daty wystawienia DESC ─
+    def _sort_key(item: dict):
+        # NOWE (id=None) mają priorytet wyświetlania
+        is_nowe = 0 if item["id"] is None else 1
+        # Następnie data wystawienia malejąco
+        data = item.get("data_wystawienia") or "0000-00-00"
+        return (is_nowe, data)
+
+    items_all.sort(key=_sort_key)
+
+    # ── Krok 5: Paginacja ──────────────────────────────────────────────────
+    total  = len(items_all)
+    offset = (page - 1) * limit
+    strona = items_all[offset : offset + limit]
+
+    response = {"items": strona, "total": total}
+
+    # ── Cache write ────────────────────────────────────────────────────────
+    try:
+        await redis.setex(cache_key, 60, orjson.dumps(response, default=str))
+    except Exception as exc:
+        logger.warning("get_faktury_list: cache write error: %s", exc)
 
     return response
 
@@ -970,6 +1158,7 @@ async def get_historia(
             akcja=AkcjaLog(log.akcja),
             created_at=log.created_at,
             actor_username=actor.get("username"),
+            actor_full_name=actor.get("full_name"),
             before_status=before.get("status_wewnetrzny") if before else None,
             after_status=after.get("status_wewnetrzny") if after else None,
         ))
@@ -1097,7 +1286,7 @@ async def get_faktura_detail(
         email_kontrahenta=wapro.email_kontrahenta if wapro else None,
         telefon_kontrahenta=wapro.telefon_kontrahenta if wapro else None,
         is_overdue=is_overdue,
-        pozycje=wapro_pozycje,
+        pozycje=[p.model_dump() for p in wapro_pozycje],
         przypisania=przypisania_resp,
     )
 

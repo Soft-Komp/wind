@@ -526,6 +526,7 @@ class FakturaLogItemResponse(FakturaBase):
     created_at: datetime
     # szczegoly: nie zwracamy surowego JSON — parsujemy wybrane pola
     actor_username: Optional[str] = None
+    actor_full_name: Optional[str] = None 
     before_status:  Optional[str] = None
     after_status:   Optional[str] = None
 
@@ -545,9 +546,10 @@ class DecyzjaResponse(FakturaBase):
 
 class FakturaLogActor(FakturaBase):
     """Kto wykonał akcję."""
-    user_id:  Optional[int] = None
-    username: Optional[str] = None
-    ip:       Optional[str] = None
+    user_id:   Optional[int] = None
+    username:  Optional[str] = None
+    full_name: Optional[str] = None   # ← NOWE: FullName z skw_Users
+    ip:        Optional[str] = None
 
 
 class FakturaLogDetails(FakturaBase):
@@ -577,6 +579,7 @@ class FakturaLogDetails(FakturaBase):
         *,
         user_id:    Optional[int],
         username:   Optional[str],
+        full_name:  Optional[str] = None,   # ← NOWE
         ip:         Optional[str],
         before:     Optional[dict[str, Any]] = None,
         after:      Optional[dict[str, Any]] = None,
@@ -586,7 +589,7 @@ class FakturaLogDetails(FakturaBase):
     ) -> "FakturaLogDetails":
         """Factory method — czytelne tworzenie wpisu logu."""
         return cls(
-            actor=FakturaLogActor(user_id=user_id, username=username, ip=ip),
+            actor=FakturaLogActor(user_id=user_id, username=username, full_name=full_name, ip=ip),
             before=before,
             after=after,
             meta=meta,

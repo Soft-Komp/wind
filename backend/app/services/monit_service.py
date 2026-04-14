@@ -454,27 +454,38 @@ async def _load_interval_config(db: AsyncSession, redis: Redis) -> dict:
     Ładuje konfigurację interwału z Redis (cache) lub DB (fallback).
 
     Cache key: cfg:monit_interval, TTL: 5 minut.
+    Gdy cache.bypass_enabled=true — pomija Redis, czyta prosto z DB.
 
     Returns:
         {"interval_days": int, "block_mode": str, "min_days_overdue": int}
     """
-    # Próba odczytu z cache Redis
-    try:
-        cached = await redis.get(_CONFIG_CACHE_KEY)
-        if cached:
-            parsed = orjson.loads(cached)
-            logger.debug(
-                "Konfiguracja interwalu z cache Redis",
-                extra={"config": parsed},
+    from app.core.cache_bypass import is_cache_bypassed
+
+    bypass = await is_cache_bypassed(db)
+
+    # Próba odczytu z cache Redis — pomijana gdy bypass aktywny
+    if not bypass:
+        try:
+            cached = await redis.get(_CONFIG_CACHE_KEY)
+            if cached:
+                parsed = orjson.loads(cached)
+                logger.debug(
+                    "Konfiguracja interwalu z cache Redis",
+                    extra={"config": parsed},
+                )
+                return parsed
+        except Exception as exc:
+            logger.warning(
+                "Blad odczytu cache interwalu z Redis — fallback do DB",
+                extra={"error": str(exc)},
             )
-            return parsed
-    except Exception as exc:
-        logger.warning(
-            "Blad odczytu cache interwalu z Redis — fallback do DB",
-            extra={"error": str(exc)},
+    else:
+        logger.debug(
+            "Interval config BYPASS — idę prosto do DB",
+            extra={"source": "db_bypass"},
         )
 
-    # Fallback do DB
+    # Odczyt z DB
     defaults = {
         "interval_days":    14,
         "block_mode":       "block",
@@ -516,14 +527,17 @@ async def _load_interval_config(db: AsyncSession, redis: Redis) -> dict:
         )
         config = dict(defaults)
 
-    # Zapisz do cache Redis
+    # Zapisz do cache Redis ZAWSZE — nawet gdy bypass aktywny
     try:
         await redis.setex(
             _CONFIG_CACHE_KEY,
             _CONFIG_CACHE_TTL,
             orjson.dumps(config),
         )
-        logger.debug("Konfiguracja interwalu zapisana do cache Redis", extra={"config": config})
+        logger.debug(
+            "Konfiguracja interwalu zapisana do cache Redis",
+            extra={"config": config, "bypass_byl_aktywny": bypass},
+        )
     except Exception as exc:
         logger.warning("Blad zapisu cache interwalu do Redis", extra={"error": str(exc)})
 

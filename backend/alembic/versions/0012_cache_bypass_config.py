@@ -14,15 +14,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("""
+    # Opis sklejony w Pythonie — pyodbc nie obsługuje implicit T-SQL
+    # string concatenation (N'...' N'...' N'...') w jednym execute()
+    description = (
+        "Globalny bypass cache Redis - true = dane prosto z DB, "
+        "false = normalne cache. Kolejki ARQ/SSE nienaruszane. "
+        "Zmiana aktywna w ciagu 5 sekund."
+    )
+
+    op.execute(
+        f"""
         MERGE [dbo_ext].[skw_SystemConfig] AS [target]
         USING (
             VALUES (
                 N'cache.bypass_enabled',
                 N'false',
-                N'Globalny bypass cache Redis — true = dane prosto z DB, '
-                N'false = normalne cache. Kolejki ARQ/SSE nienaruszane. '
-                N'Zmiana aktywna w ciągu 5 sekund.',
+                N'{description}',
                 1
             )
         ) AS [source] ([ConfigKey], [ConfigValue], [Description], [IsActive])
@@ -33,7 +40,8 @@ def upgrade() -> None:
                     [source].[Description], [source].[IsActive])
         WHEN MATCHED THEN
             UPDATE SET [Description] = [source].[Description];
-    """)
+        """
+    )
 
 
 def downgrade() -> None:

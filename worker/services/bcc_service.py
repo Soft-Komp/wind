@@ -101,9 +101,11 @@ async def get_bcc_config(redis) -> BccConfig:
     W najgorszym przypadku zwraca enabled=False (bezpieczna wartość).
     """
     settings = get_settings()
+# ── 0. Sprawdź bypass cache ───────────────────────────────────────────────
+    bypass = await _is_cache_bypassed_worker()
 
-    # ── 1. Redis cache ────────────────────────────────────────────────────────
-    if redis is not None:
+    # ── 1. Redis cache — pomijany gdy bypass aktywny ──────────────────────────
+    if not bypass and redis is not None:
         try:
             cached_raw = await redis.get(_CACHE_KEY)
             if cached_raw:
@@ -127,6 +129,11 @@ async def get_bcc_config(redis) -> BccConfig:
                 "BccConfig: błąd Redis cache — pomijam",
                 extra={"error": str(exc)},
             )
+    elif bypass:
+        logger.debug(
+            "BccConfig: BYPASS aktywny — idę prosto do DB",
+            extra={"source": "db_bypass"},
+        )
     else:
         logger.warning("BccConfig: redis=None — pomijam cache")
 
@@ -241,3 +248,30 @@ async def _load_from_db() -> BccConfig | None:
         emails=emails,
         source="database",
     )
+
+async def _is_cache_bypassed_worker() -> bool:
+    """
+    Sprawdza cache.bypass_enabled bezpośrednio z DB — wersja dla workera.
+    Worker nie używa FastAPI DI, więc otwiera własną sesję.
+    Nigdy nie rzuca wyjątku — przy błędzie zwraca False (bezpieczna wartość).
+    """
+    try:
+        async with get_session() as db:
+            result = await db.execute(
+                text("""
+                    SELECT [ConfigValue]
+                    FROM [dbo_ext].[skw_SystemConfig]
+                    WHERE [ConfigKey] = N'cache.bypass_enabled'
+                      AND [IsActive] = 1
+                """)
+            )
+            row = result.fetchone()
+            if row is None:
+                return False
+            return str(row[0]).strip().lower() in ("true", "1", "yes", "tak")
+    except Exception as exc:
+        logger.warning(
+            "Worker: błąd sprawdzenia cache bypass — domyślnie False",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        return False

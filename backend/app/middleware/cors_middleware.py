@@ -512,21 +512,27 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
     # Ładowanie origins — trójpoziomowy fallback
     # ------------------------------------------------------------------
     async def _get_allowed_origins(self, request: Request) -> frozenset[str]:
-        """
-        Pobiera aktualne allowed origins z cache / Redis / DB / env.
-
-        Kolejność:
-        1. Lokalny cache (w pamięci procesu) — jeśli nie wygasł
-        2. Redis cache — jeśli dostępny
-        3. Baza danych (SystemConfig) — przez config_service
-        4. Zmienna środowiskowa CORS_ORIGINS_FALLBACK
-        5. Hardcoded fallback (_ULTIMATE_FALLBACK_ORIGINS)
-        """
         import time
+        from app.core.cache_bypass import is_cache_bypassed
 
         now = time.monotonic()
 
-        # ---- Krok 1: Lokalny cache ----
+        # ---- Krok 0: Sprawdź bypass ----
+        bypass = False
+        try:
+            redis_client = getattr(request.app.state, "redis", None)
+            db_factory   = getattr(request.app.state, "get_db", None)
+            if db_factory is not None:
+                async with db_factory() as db:
+                    bypass = await is_cache_bypassed(db)
+        except Exception:
+            bypass = False  # Bezpieczna wartość gdy middleware nie może dostać sesji DB
+
+        if bypass:
+            # Bypass aktywny — pomijamy oba poziomy cache, idziemy prosto do DB
+            return await self._load_origins_from_db(request) or _ULTIMATE_FALLBACK_ORIGINS
+
+        # ---- Krok 1: Lokalny cache (tylko gdy bypass nieaktywny) ----
         async with self._cache_lock:
             if (
                 self._cached_origins is not None
@@ -534,7 +540,7 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
             ):
                 return self._cached_origins
 
-        # Cache wygasł — odśwież
+        # Cache wygasł — odśwież normalnie
         return await self._refresh_origins(request)
 
     async def _refresh_origins(self, request: Request) -> frozenset[str]:

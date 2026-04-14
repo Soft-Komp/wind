@@ -1475,6 +1475,19 @@ async def execute_query(
         )
         return raw
 
+    elif query_type == "faktury_wszystkie_naglowki":
+        # Pobiera WSZYSTKIE wiersze widoku — używany przez get_faktury_list (merge D2).
+        # Jeden query zamiast N osobnych zapytań po ksef_id.
+        sql = """
+            SELECT *
+            FROM dbo.skw_faktury_akceptacja_naglowek
+            ORDER BY ID_BUF_DOKUMENT DESC
+        """
+        raw = await _run_in_executor(
+            _execute_query_sync, sql, (), query_id, query_type
+        )
+        return raw
+
     else:
         logger.warning(f"execute_query: nieznany query_type={query_type!r}")
         return []

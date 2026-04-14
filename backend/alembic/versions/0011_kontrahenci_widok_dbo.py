@@ -194,18 +194,6 @@ def _assert_dependency(
     *,
     type_code: str,
 ) -> None:
-    """
-    Weryfikuje istnienie wymaganego obiektu bazy danych.
-
-    Przerywa migrację wyjątkiem RuntimeError jeśli obiekt nie istnieje.
-
-    Args:
-        bind:        połączenie SQLAlchemy (op.get_bind())
-        object_name: nazwa obiektu (bez schematu)
-        schema:      schemat właściciela
-        object_type: czytelna nazwa typu ('tabela', 'widok', 'funkcja')
-        type_code:   kod MSSQL z sys.objects.type — np. 'U', 'V', 'FN', 'TF'
-    """
     sql = textwrap.dedent(f"""
         SELECT COUNT(1)
         FROM   sys.objects  AS o
@@ -214,9 +202,7 @@ def _assert_dependency(
           AND  o.name    = '{object_name}'
           AND  o.type    = '{type_code}'
     """)
-    result = bind.execute(op.inline_literal(sql) if False else
-                          _raw_scalar(bind, sql))
-    count = result if isinstance(result, int) else (result.scalar() or 0)
+    count = _raw_scalar(bind, sql) or 0
 
     fq = f"[{schema}].[{object_name}]"
     if count == 0:
@@ -232,7 +218,6 @@ def _assert_dependency(
         "[%s] zależność OK — %s %s (type=%s)",
         revision, object_type, fq, type_code,
     )
-
 
 def _raw_scalar(bind, sql: str):
     """
@@ -315,53 +300,53 @@ def _register_checksum(bind) -> None:
     """
     Rejestruje / aktualizuje checksum widoku w dbo_ext.skw_SchemaChecksums.
 
-    Checksum pobierany z sys.sql_modules BEZPOŚREDNIO po CREATE OR ALTER VIEW
-    — musi być w tej samej sesji/transakcji, żeby był aktualny.
-
-    Wzorzec MERGE (UPSERT):
-        WHEN NOT MATCHED BY TARGET → INSERT  (nowy wpis)
-        WHEN MATCHED               → UPDATE  (re-run migracji)
-
-    LastVerifiedAt ustawione na NULL celowo:
-        Wymusza re-weryfikację przy następnym starcie aplikacji
-        (schema_integrity.py).
-
-    Checksum jest INT obliczany przez CHECKSUM() w SQL Server.
-    NIE wstawiamy tutaj MD5 / hex stringa — zgodnie z regułą projektu.
+    Uwaga: pyodbc nie obsługuje multi-statement batchy w jednym execute().
+    Dlatego operacja jest rozbita na 3 osobne wywołania:
+        1. SELECT checksum → Python
+        2. Walidacja NULL w Pythonie
+        3. MERGE do skw_SchemaChecksums
     """
-    logger.info(
-        "[%s] Rejestracja checksum widoku %s w [%s].[skw_SchemaChecksums] ...",
-        revision, FQVIEW, SCHEMA_EXT,
-    )
-
     import sqlalchemy as sa
 
-    merge_sql = textwrap.dedent(f"""
-        DECLARE @checksum INT;
+    logger.info(
+        "[%s] Rejestracja checksum widoku %s w skw_SchemaChecksums ...",
+        revision, FQVIEW,
+    )
 
-        SELECT @checksum = CHECKSUM(definition)
+    # ── Krok 1: Pobierz checksum z sys.sql_modules ────────────────────────────
+    checksum_sql = textwrap.dedent(f"""
+        SELECT CHECKSUM(definition)
         FROM   sys.sql_modules AS m
         JOIN   sys.objects     AS o ON o.object_id = m.object_id
         JOIN   sys.schemas     AS s ON s.schema_id = o.schema_id
         WHERE  s.name = N'{SCHEMA_WAPRO}'
-          AND  o.name = N'{VIEW_NAME}';
+          AND  o.name = N'{VIEW_NAME}'
+    """)
+    checksum = _raw_scalar(bind, checksum_sql)
 
-        IF @checksum IS NULL
-        BEGIN
-            RAISERROR(
-                N'[{revision}] Nie można odczytać definicji widoku {FQVIEW} '
-                N'z sys.sql_modules — rejestracja checksum niemożliwa.',
-                16, 1
-            );
-        END;
+    # ── Krok 2: Walidacja — Python zamiast RAISERROR ──────────────────────────
+    if checksum is None:
+        msg = (
+            f"[{revision}] Nie można odczytać definicji widoku {FQVIEW} "
+            f"z sys.sql_modules — rejestracja checksum niemożliwa."
+        )
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
+    logger.debug(
+        "[%s] Checksum widoku %s = %s",
+        revision, FQVIEW, checksum,
+    )
+
+    # ── Krok 3: MERGE do skw_SchemaChecksums ─────────────────────────────────
+    merge_sql = textwrap.dedent(f"""
         MERGE [{SCHEMA_EXT}].[skw_SchemaChecksums] AS tgt
         USING (
             SELECT
                 N'{SCHEMA_WAPRO}'  AS SchemaName,
                 N'{VIEW_NAME}'     AS ObjectName,
                 N'VIEW'            AS ObjectType,
-                @checksum          AS Checksum,
+                {checksum}         AS Checksum,
                 NULL               AS LastVerifiedAt,
                 GETDATE()          AS UpdatedAt
         ) AS src
@@ -377,14 +362,12 @@ def _register_checksum(bind) -> None:
                 tgt.LastVerifiedAt  = src.LastVerifiedAt,
                 tgt.UpdatedAt       = src.UpdatedAt;
     """)
-
     bind.execute(sa.text(merge_sql))
 
     logger.info(
         "[%s] SchemaChecksums MERGE → OK (widok %s zarejestrowany / zaktualizowany)",
         revision, FQVIEW,
     )
-
 
 # ===========================================================================
 # UPGRADE

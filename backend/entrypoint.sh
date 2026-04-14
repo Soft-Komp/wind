@@ -423,17 +423,19 @@ case "$ALEMBIC_MODE" in
                 -C -b -h -1 \
                 -Q "
                     SET NOCOUNT ON;
-                    IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NOT NULL
-                    BEGIN
-                        DELETE FROM [dbo_ext].[skw_SchemaChecksums]
-                        WHERE ObjectName NOT IN (
-                            SELECT s.name + '.' + o.name
-                            FROM sys.objects  o
-                            JOIN sys.schemas  s ON o.schema_id = s.schema_id
-                            WHERE o.type IN ('V', 'P', 'FN', 'IF', 'TF')
-                        );
-                        PRINT 'SchemaChecksums cleanup: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' wpisow usunieto.';
-                    END
+                        IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NOT NULL
+                        BEGIN
+                            DELETE FROM [dbo_ext].[skw_SchemaChecksums]
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM sys.objects  o
+                                JOIN sys.schemas  s ON s.schema_id = o.schema_id
+                                WHERE s.name = [dbo_ext].[skw_SchemaChecksums].[SchemaName]
+                                AND o.name = [dbo_ext].[skw_SchemaChecksums].[ObjectName]
+                                AND o.type IN ('V', 'P', 'FN', 'IF', 'TF')
+                            );
+                            PRINT 'SchemaChecksums cleanup: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' wpisow usunieto.';
+                        END
                 " 2>/dev/null \
                 && log_ok "SchemaChecksums cleanup — zakończony." \
                 || log_warn "SchemaChecksums cleanup — błąd (niekrytyczny, kontynuuję)."

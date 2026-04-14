@@ -339,46 +339,37 @@ async def get(
     key: str,
     default: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    Pobiera wartość konfiguracji.
+    from app.core.cache_bypass import is_cache_bypassed
 
-    Kolejność:
-        1. Redis cache (TTL zależny od klucza)
-        2. dbo_ext.skw_SystemConfig (fallback i cache fill)
-        3. `default` jeśli klucz nieistnieje
-
-    Args:
-        db:      AsyncSession SQLAlchemy
-        redis:   Redis client (None = tylko baza)
-        key:     Klucz konfiguracji (np. "otp.expiry_minutes")
-        default: Wartość domyślna gdy klucz nieistnieje
-
-    Returns:
-        Wartość jako string lub default
-    """
+    bypass = await is_cache_bypassed(db)
     cache_key = _cache_key(key)
 
-    # L1: Redis cache
-    cached = await _redis_get(redis, cache_key)
-    if cached is not None:
+    # L1: Redis cache — pomijany gdy bypass aktywny
+    if not bypass:
+        cached = await _redis_get(redis, cache_key)
+        if cached is not None:
+            logger.debug(
+                "Config cache HIT: key=%s",
+                key,
+                extra={"config_key": key, "source": "redis"},
+            )
+            return cached
         logger.debug(
-            "Config cache HIT: key=%s",
+            "Config cache MISS: key=%s — odpytuję DB",
             key,
-            extra={"config_key": key, "source": "redis"},
+            extra={"config_key": key, "source": "db"},
         )
-        return cached
+    else:
+        logger.debug(
+            "Config cache BYPASS: key=%s — idę prosto do DB",
+            key,
+            extra={"config_key": key, "source": "db_bypass"},
+        )
 
     # L2: Baza danych
-    logger.debug(
-        "Config cache MISS: key=%s — odpytuję DB",
-        key,
-        extra={"config_key": key, "source": "db"},
-    )
-
     try:
         value = await _fetch_from_db(db, key)
     except Exception:
-        # Baza też niedostępna — zwróć default
         logger.warning(
             "Config key=%s niedostępny z DB i Redis — używam default=%s",
             key, default,
@@ -394,7 +385,7 @@ async def get(
         )
         return default
 
-    # Wypełnij cache
+    # Wypełnij cache ZAWSZE — nawet gdy bypass aktywny (cache "cicho" się aktualizuje)
     ttl = _ttl_for_key(key)
     await _redis_set(redis, cache_key, value, ttl)
 
@@ -486,32 +477,37 @@ async def get_all(
     db: AsyncSession,
     redis: Optional[Redis],
 ) -> dict[str, str]:
-    """
-    Pobiera wszystkie aktywne klucze konfiguracji jako dict.
-    Cache: Redis TTL=300s klucz "config:__all__".
-    Wartości wrażliwe NIE są maskowane (surowe dane, security layer wyżej).
-    """
-    # L1: Redis cache
-    cached_raw = await _redis_get(redis, _ALL_CONFIGS_CACHE_KEY)
-    if cached_raw is not None:
-        try:
-            configs = json.loads(cached_raw)
-            logger.debug(
-                "Config get_all — cache HIT (%d kluczy)",
-                len(configs),
-                extra={"source": "redis", "count": len(configs)},
-            )
-            return configs
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning(
-                "Błąd deserializacji get_all z Redis: %s — odpytuję DB",
-                exc,
-            )
+    from app.core.cache_bypass import is_cache_bypassed
+
+    bypass = await is_cache_bypassed(db)
+
+    # L1: Redis cache — pomijany gdy bypass aktywny
+    if not bypass:
+        cached_raw = await _redis_get(redis, _ALL_CONFIGS_CACHE_KEY)
+        if cached_raw is not None:
+            try:
+                configs = json.loads(cached_raw)
+                logger.debug(
+                    "Config get_all — cache HIT (%d kluczy)",
+                    len(configs),
+                    extra={"source": "redis", "count": len(configs)},
+                )
+                return configs
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning(
+                    "Błąd deserializacji get_all z Redis: %s — odpytuję DB",
+                    exc,
+                )
+    else:
+        logger.debug(
+            "Config get_all BYPASS — idę prosto do DB",
+            extra={"source": "db_bypass"},
+        )
 
     # L2: Baza danych
     configs = await _fetch_all_from_db(db)
 
-    # Wypełnij cache
+    # Wypełnij cache ZAWSZE — nawet gdy bypass aktywny
     try:
         serialized = json.dumps(configs, ensure_ascii=False)
         await _redis_set(redis, _ALL_CONFIGS_CACHE_KEY, serialized, _ALL_CONFIGS_TTL)
