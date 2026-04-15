@@ -271,6 +271,7 @@ async def zapisz_decyzje(
         body=body,
         actor_id=current_user.id_user,
         actor_name=current_user.username,
+        actor_full_name=current_user.full_name or "",
         actor_ip=client_ip,
         request_id=request_id,
     )

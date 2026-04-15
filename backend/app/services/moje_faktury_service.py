@@ -272,6 +272,7 @@ async def zapisz_decyzje(
     body: DecyzjaRequest,
     actor_id: int,
     actor_name: str,
+    actor_full_name: str = "",
     actor_ip: str,
     request_id: str,
 ) -> DecyzjaResponse:
@@ -350,6 +351,7 @@ async def zapisz_decyzje(
             "komentarz_sha256": body.komentarz_hash(),
         },
         actor_name=actor_name,
+        actor_full_name=actor_full_name,
         actor_ip=actor_ip,
         request_id=request_id,
         endpoint=f"/moje-faktury/{faktura_id}/decyzja",
