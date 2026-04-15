@@ -96,7 +96,7 @@ _COLS_ROZRACHUNKI = """
     KwotaPozostala,
     MetodaPlatnosci,
     DniPo,
-    rozliczony,
+    CZY_ROZLICZONY,
     OstatniMonitRozrachunku
 """
 
@@ -1060,10 +1060,9 @@ def _build_invoices_query(
     conditions = ["ID_KONTRAHENTA = ?"]
     query_params: list[Any] = [params.kontrahent_id]
 
-    # Nowy widok używa kolumny 'rozliczony' (2 = w pełni rozliczony)
-    # zamiast CzyZaplacona (której już nie ma)
+    # CZY_ROZLICZONY tinyint: 0 = nieopłacona, 1 = opłacona
     if not params.include_paid:
-        conditions.append("rozliczony <> 2")
+        conditions.append("CZY_ROZLICZONY = 0")
 
     # Filtr: tylko faktury X+ dni po terminie (0 = wszystkie)
     if params.min_days_overdue > 0:
@@ -1121,7 +1120,7 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
             SELECT COUNT(*) AS TotalCount
             FROM {SKW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
-            {' AND rozliczony <> 2' if not params.include_paid else ''}
+            {' AND CZY_ROZLICZONY = 0' if not params.include_paid else ''}
             {'AND DniPo >= ' + str(params.min_days_overdue) if params.min_days_overdue > 0 else ''}
             """
 

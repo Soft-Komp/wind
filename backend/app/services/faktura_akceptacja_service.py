@@ -413,10 +413,16 @@ async def get_faktury_list(
     db_result = await db.execute(stmt)
     nasze_rekordy: list[FakturaAkceptacja] = list(db_result.scalars().all())
     nasze_ksef_ids: set[str] = {f.numer_ksef for f in nasze_rekordy}
+    nasze_ids: list[int]     = [f.id for f in nasze_rekordy if f.id]
 
     logger.info(
         "get_faktury_list: nasza tabela ma %d aktywnych rekordów",
         len(nasze_rekordy),
+    )
+
+    # Batch fetch przypisań — jeden query dla wszystkich faktur w obiegu
+    przypisania_batch: dict[int, list[dict]] = await _get_przypisania_batch(
+        db, nasze_ids
     )
 
     # ── Krok 3: Buduj listę items ──────────────────────────────────────────
@@ -485,6 +491,7 @@ async def get_faktury_list(
                 "data_wystawienia":  data_wyst.isoformat() if data_wyst else None,
                 "kod_statusu":       w.get("KOD_STATUSU"),
                 "status_opis":       w.get("StatusOpis"),
+                "przypisani":        [],
             })
 
     # ── Grupa B: W OBIEGU — rekordy z naszej tabeli ────────────────────────
@@ -548,6 +555,7 @@ async def get_faktury_list(
                 "data_wystawienia":  data_wyst_item.isoformat() if data_wyst_item else None,
                 "kod_statusu":       w.get("KOD_STATUSU") if w else None,
                 "status_opis":       w.get("StatusOpis") if w else None,
+                "przypisani":        przypisania_batch.get(faktura.id, []),
             })
 
     logger.info(
@@ -1513,3 +1521,286 @@ async def _archive_faktura(faktura: FakturaAkceptacja) -> None:
         logger.info(f"Faktura ID={faktura.id} zarchiwizowana: {path}")
     except Exception as exc:
         logger.error(f"Archiwizacja faktury ID={faktura.id} nieudana: {exc}")
+
+# =============================================================================
+# GET /faktury-akceptacja/ksef/{ksef_id} — szczegóły z maskowaniem pól
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stałe — mapowanie uprawnień na pola
+# ---------------------------------------------------------------------------
+
+# Nagłówek: (nazwa_uprawnienia, klucz_w_response, klucz_w_wapro_row)
+_NAGLOWEK_POLE_MAP: Final[list[tuple[str, str, str]]] = [
+    ("faktury.pole.status_wewnetrzny",  "status_wewnetrzny",  "StatusOpis"),
+    ("faktury.pole.priorytet",          "priorytet",          "_priorytet"),
+    ("faktury.pole.data_wystawienia",   "data_wystawienia",   "DataWystawienia"),
+    ("faktury.pole.data_otrzymania",    "data_otrzymania",    "DataOtrzymania"),
+    ("faktury.pole.termin_platnosci",   "termin_platnosci",   "TerminPlatnosci"),
+    ("faktury.pole.wartosc_netto",      "wartosc_netto",      "WARTOSC_NETTO"),
+    ("faktury.pole.wartosc_brutto",     "wartosc_brutto",     "WARTOSC_BRUTTO"),
+    ("faktury.pole.kwota_vat",          "kwota_vat",          "KWOTA_VAT"),
+    ("faktury.pole.forma_platnosci",    "forma_platnosci",    "FORMA_PLATNOSCI"),
+    ("faktury.pole.nazwa_kontrahenta",  "nazwa_kontrahenta",  "NazwaKontrahenta"),
+    ("faktury.pole.email_kontrahenta",  "email_kontrahenta",  "EmailKontrahenta"),
+    ("faktury.pole.telefon_kontrahenta","telefon_kontrahenta","TelefonKontrahenta"),
+]
+
+# Pozycje: (nazwa_uprawnienia, klucz_w_response, klucz_w_wapro_row)
+_POZYCJE_POLE_MAP: Final[list[tuple[str, str, str]]] = [
+    ("faktury.pole.nazwa_towaru",           "nazwa_towaru",   "NazwaTowaru"),
+    ("faktury.pole.ilosc",                  "ilosc",          "Ilosc"),
+    ("faktury.pole.jednostka",              "jednostka",      "Jednostka"),
+    ("faktury.pole.cena_netto",             "cena_netto",     "CenaNetto"),
+    ("faktury.pole.cena_brutto",            "cena_brutto",    "CenaBrutto"),
+    ("faktury.pole.pozycja_wartosc_netto",  "wartosc_netto",  "WartoscNetto"),
+    ("faktury.pole.pozycja_wartosc_brutto", "wartosc_brutto", "WartoscBrutto"),
+    ("faktury.pole.stawka_vat",             "stawka_vat",     "StawkaVAT"),
+    ("faktury.pole.opis",                   "opis",           "Opis"),
+]
+
+
+def _cache_key_ksef(ksef_id: str, perms_hash: str) -> str:
+    return f"faktura:ksef:{ksef_id}:{perms_hash}"
+
+
+def _hash_permissions(permissions: list[str]) -> str:
+    """Hash zestawu uprawnień usera — klucz cache per rola."""
+    pole_perms = sorted(p for p in permissions if p.startswith("faktury.pole."))
+    return hashlib.md5("|".join(pole_perms).encode()).hexdigest()[:12]
+
+
+def _mask_naglowek(
+    wapro_row: dict,
+    nasz_rekord: Optional["FakturaAkceptacja"],
+    permissions: set[str],
+) -> dict:
+    """
+    Buduje nagłówek faktury z maskowaniem pól wg uprawnień.
+    Zawsze widoczne: numer_ksef, numer.
+    Priorytet pochodzi z naszej tabeli (jeśli faktura w obiegu).
+    """
+    # Zawsze widoczne — bez sprawdzania uprawnień
+    result: dict = {
+        "numer_ksef": wapro_row.get("KSEF_ID"),
+        "numer":      wapro_row.get("NUMER"),
+    }
+
+    # Pola z WAPRO — whitelist
+    for perm, response_key, wapro_key in _NAGLOWEK_POLE_MAP:
+        if perm not in permissions:
+            continue  # brak uprawnienia — pole pominięte
+
+        if response_key == "priorytet":
+            # Priorytet z naszej tabeli, nie z WAPRO
+            val = nasz_rekord.priorytet if nasz_rekord else None
+        else:
+            val = wapro_row.get(wapro_key)
+            # Konwersja wartości numerycznych
+            if val is not None and response_key in (
+                "wartosc_netto", "wartosc_brutto", "kwota_vat"
+            ):
+                try:
+                    val = float(val)
+                except (TypeError, ValueError):
+                    val = None
+            # Konwersja dat
+            if val is not None and hasattr(val, "isoformat"):
+                val = val.isoformat()
+
+        result[response_key] = val
+
+    # Dodatkowe pola z naszej tabeli (zawsze jeśli istnieją — nie są finansowe)
+    if nasz_rekord:
+        result["id_wewnetrzny"]    = nasz_rekord.id
+        result["status_obiegu"]    = nasz_rekord.status_wewnetrzny
+        result["opis_dokumentu"]   = nasz_rekord.opis_dokumentu
+        result["uwagi_referenta"]  = nasz_rekord.uwagi
+        result["utworzony_przez"]  = nasz_rekord.utworzony_przez
+        result["is_active"]        = nasz_rekord.IsActive
+        result["created_at"]       = (
+            nasz_rekord.CreatedAt.isoformat() if nasz_rekord.CreatedAt else None
+        )
+
+    return result
+
+
+def _mask_pozycja(row: dict, permissions: set[str]) -> dict:
+    """
+    Buduje pojedynczą pozycję faktury z maskowaniem pól wg uprawnień.
+    Zawsze widoczne: id_buf_dokument, numer_pozycji.
+    """
+    result: dict = {
+        "id_buf_dokument": row.get("ID_BUF_DOKUMENT"),
+        "numer_pozycji":   int(row.get("NumerPozycji") or 0),
+    }
+
+    for perm, response_key, wapro_key in _POZYCJE_POLE_MAP:
+        if perm not in permissions:
+            continue
+
+        val = row.get(wapro_key)
+        if val is not None and response_key in (
+            "ilosc", "cena_netto", "cena_brutto", "wartosc_netto", "wartosc_brutto"
+        ):
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                val = None
+
+        result[response_key] = val
+
+    return result
+
+
+async def get_faktura_ksef_detail(
+    *,
+    db:          AsyncSession,
+    redis:       Redis,
+    ksef_id:     str,
+    permissions: list[str],
+) -> dict:
+    """
+    Szczegóły faktury po KSEF_ID z granularnym maskowaniem pól.
+
+    Logika whitelist:
+      - Endpoint wymaga faktury.view_details (sprawdzone w routerze)
+      - Każde pole dodatkowo wymaga faktury.pole.{nazwa_pola}
+      - Brak uprawnienia → pole nieobecne w response (nie null — po prostu brak)
+      - Zawsze widoczne: numer_ksef, numer, id_buf_dokument, numer_pozycji
+
+    Cache: faktura:ksef:{ksef_id}:{hash_uprawnień} TTL 60s
+    Różne role → różne klucze cache → różne widoki tych samych danych.
+
+    Args:
+        ksef_id:     Identyfikator KSeF faktury
+        permissions: Lista uprawnień zalogowanego usera (z JWT)
+    """
+    perms_set  = set(permissions)
+    perms_hash = _hash_permissions(permissions)
+    cache_key  = _cache_key_ksef(ksef_id, perms_hash)
+
+    # ── Cache hit ─────────────────────────────────────────────────────────────
+    try:
+        cached = await redis.get(cache_key)
+        if cached:
+            logger.debug(
+                "get_faktura_ksef_detail: cache hit ksef_id=%s hash=%s",
+                ksef_id, perms_hash,
+            )
+            return orjson.loads(cached)
+    except Exception as exc:
+        logger.warning("get_faktura_ksef_detail: cache read error: %s", exc)
+
+    # ── Krok 1: Nagłówek z WAPRO ──────────────────────────────────────────────
+    wapro_rows = await execute_query(
+        query_type="faktura_naglowek",
+        params={"ksef_id": ksef_id},
+    )
+    if not wapro_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Faktura z KSEF_ID={ksef_id!r} nie istnieje w WAPRO.",
+        )
+    wapro_row = wapro_rows[0]
+
+    logger.info(
+        orjson.dumps({
+            "event":      "ksef_detail_fetch",
+            "ksef_id":    ksef_id,
+            "perms_hash": perms_hash,
+            "pole_perms": [p for p in perms_set if p.startswith("faktury.pole.")],
+        }).decode()
+    )
+
+    # ── Krok 2: Nasz rekord (jeśli faktura w obiegu) ───────────────────────────
+    nasz_wynik = await db.execute(
+        select(FakturaAkceptacja).where(
+            FakturaAkceptacja.numer_ksef == ksef_id,
+            FakturaAkceptacja.IsActive   == True,  # noqa: E712
+        )
+    )
+    nasz_rekord: Optional[FakturaAkceptacja] = nasz_wynik.scalar_one_or_none()
+
+    # ── Krok 3: Pozycje z WAPRO ───────────────────────────────────────────────
+    pozycje_rows = await execute_query(
+        query_type="faktura_pozycje",
+        params={"ksef_id": ksef_id},
+    )
+
+    # ── Krok 4: Maskowanie pól ────────────────────────────────────────────────
+    naglowek = _mask_naglowek(wapro_row, nasz_rekord, perms_set)
+    pozycje  = [_mask_pozycja(r, perms_set) for r in pozycje_rows]
+
+    response = {
+        "naglowek":     naglowek,
+        "pozycje":      pozycje,
+        "liczba_pozycji": len(pozycje),
+        # Meta — zawsze widoczne
+        "w_obiegu":     nasz_rekord is not None,
+        "pola_widoczne": sorted(
+            p.replace("faktury.pole.", "")
+            for p in perms_set
+            if p.startswith("faktury.pole.")
+        ),
+    }
+
+    # ── Cache write ───────────────────────────────────────────────────────────
+    try:
+        await redis.setex(cache_key, 60, orjson.dumps(response, default=str))
+    except Exception as exc:
+        logger.warning("get_faktura_ksef_detail: cache write error: %s", exc)
+
+    return response
+
+async def _get_przypisania_batch(
+    db: AsyncSession,
+    faktura_ids: list[int],
+) -> dict[int, list[dict]]:
+    """
+    Pobiera aktywne przypisania dla listy faktura_id w jednym query.
+    Zwraca: {faktura_id: [{user_id, status, decided_at}, ...]}
+    Tylko is_active=True — dezaktywowane przez reset są pomijane.
+    """
+    if not faktura_ids:
+        return {}
+
+    from app.db.models.user import User
+
+    # Batch query — JOIN z Users żeby od razu mieć imię i nazwisko
+    result = await db.execute(
+        select(
+            FakturaPrzypisanie.faktura_id,
+            FakturaPrzypisanie.user_id,
+            FakturaPrzypisanie.status,
+            FakturaPrzypisanie.decided_at,
+            User.username,
+            User.full_name,
+        )
+        .join(User, User.id_user == FakturaPrzypisanie.user_id)
+        .where(
+            FakturaPrzypisanie.faktura_id.in_(faktura_ids),
+            FakturaPrzypisanie.is_active == True,  # noqa: E712
+        )
+        .order_by(FakturaPrzypisanie.faktura_id, FakturaPrzypisanie.CreatedAt)
+    )
+    rows = result.all()
+
+    przypisania: dict[int, list[dict]] = {}
+    for row in rows:
+        fid = row.faktura_id
+        if fid not in przypisania:
+            przypisania[fid] = []
+        przypisania[fid].append({
+            "user_id":    row.user_id,
+            "username":   row.username,
+            "full_name":  row.full_name,
+            "status":     row.status,
+            "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        })
+
+    logger.debug(
+        "get_przypisania_batch: pobrano przypisania dla %d/%d faktur",
+        len(przypisania), len(faktura_ids),
+    )
+    return przypisania

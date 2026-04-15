@@ -644,3 +644,72 @@ async def get_pdf_referent(
             "Cache-Control": "no-store",
         },
     )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /faktury-akceptacja/ksef/{ksef_id} — szczegóły faktury po KSEF_ID
+# z granularnym maskowaniem pól (whitelist faktury.pole.*)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/ksef/{ksef_id}",
+    summary="Szczegóły faktury po KSEF_ID z granularnym maskowaniem pól",
+    description=(
+        "Zwraca nagłówek i pozycje faktury z WAPRO. "
+        "Widoczność każdego pola kontrolowana osobnym uprawnieniem faktury.pole.*. "
+        "Logika whitelist: pole widoczne tylko gdy rola MA uprawnienie. "
+        "Zawsze widoczne: numer_ksef, numer, id_buf_dokument, numer_pozycji. "
+        "Wymaga: faktury.view_details + faktury.referent."
+    ),
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+)
+async def get_faktura_by_ksef(
+    ksef_id:      Annotated[str, Path(
+        min_length=10,
+        max_length=100,
+        description="Identyfikator KSeF faktury",
+    )],
+    db:           DB,
+    redis:        RedisClient,
+    client_ip:    ClientIP,
+    request_id:   RequestID,
+    current_user: Annotated[Any, require_permission("faktury.view_details")],
+) -> dict:
+    await _require_referent(current_user, db, redis)
+    await _require_module_enabled(redis, db)
+
+    # Pobierz uprawnienia roli z cache Redis / bazy
+    # current_user to ORM User — nie ma .permissions
+    # używamy tego samego helpera co require_permission()
+    from app.core.dependencies import _get_role_permissions
+    role_permissions: set[str] = await _get_role_permissions(
+        current_user.role_id, db, redis
+    )
+
+    logger.info(
+        orjson.dumps({
+            "event":      "ksef_detail_request",
+            "user_id":    current_user.id_user,
+            "ksef_id":    ksef_id,
+            "ip":         client_ip,
+            "request_id": request_id,
+            "pole_perms": [
+                p for p in role_permissions
+                if p.startswith("faktury.pole.")
+            ],
+        }).decode()
+    )
+
+    result = await svc.get_faktura_ksef_detail(
+        db=db,
+        redis=redis,
+        ksef_id=ksef_id,
+        permissions=list(role_permissions),
+    )
+
+    return BaseResponse(
+        code=200,
+        app_code="faktury.view_details",
+        errors=[],
+        data=result,
+    ).model_dump(mode="json")
