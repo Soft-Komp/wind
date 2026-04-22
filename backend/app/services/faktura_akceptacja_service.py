@@ -1277,6 +1277,66 @@ async def get_historia(
 # 9. GET /pdf
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _invalidate_faktura_detail_caches(
+    redis: Redis,
+    faktura_id: int,
+    actor_user_id: int,
+) -> None:
+    """
+    Unieważnia cache szczegółów faktury po zapisaniu decyzji pracownika.
+    Unieważniane klucze:
+      - faktura:detail:{faktura_id}          (widok referenta)
+      - faktura:moje_detail:*:{faktura_id}   (widoki wszystkich pracowników)
+    Błąd Redis → WARNING i kontynuacja, nigdy nie blokuje zapisu decyzji.
+    """
+    _ts = datetime.utcnow().isoformat()
+
+    # 1. Klucz referenta
+    ref_key = f"faktura:detail:{faktura_id}"
+    try:
+        deleted = await redis.delete(ref_key)
+        logger.info(
+            orjson.dumps({
+                "event": "cache_invalidated", "key": ref_key,
+                "deleted": bool(deleted), "faktura_id": faktura_id,
+                "actor_id": actor_user_id, "ts": _ts,
+            }).decode()
+        )
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps({
+                "event": "cache_invalidate_warning", "key": ref_key,
+                "error": str(exc)[:200], "faktura_id": faktura_id, "ts": _ts,
+            }).decode()
+        )
+
+    # 2. Klucze per-user (SCAN + batch DELETE)
+    pattern = f"faktura:moje_detail:*:{faktura_id}"
+    try:
+        cursor = 0
+        keys_to_delete: list = []
+        while True:
+            cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=50)
+            keys_to_delete.extend(keys)
+            if cursor == 0:
+                break
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.info(
+            orjson.dumps({
+                "event": "cache_invalidated_moje", "pattern": pattern,
+                "deleted_count": len(keys_to_delete),
+                "faktura_id": faktura_id, "actor_id": actor_user_id, "ts": _ts,
+            }).decode()
+        )
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps({
+                "event": "cache_invalidate_moje_warning", "pattern": pattern,
+                "error": str(exc)[:200], "faktura_id": faktura_id, "ts": _ts,
+            }).decode()
+        )
+
 async def get_faktura_detail(
     *,
     db: AsyncSession,
@@ -1305,10 +1365,17 @@ async def get_faktura_detail(
     await _handle_orphan_if_needed(db=db, redis=redis, faktura=faktura)
     wapro = await _get_wapro_naglowek(faktura.numer_ksef)
 
+    from app.db.models.user import User
+    from sqlalchemy.orm import selectinload
+
     res_p = await db.execute(
-        select(FakturaPrzypisanie).where(
-            FakturaPrzypisanie.faktura_id == faktura_id
-        ).order_by(FakturaPrzypisanie.CreatedAt)
+        select(FakturaPrzypisanie)
+        .options(selectinload(FakturaPrzypisanie.pracownik))
+        .where(
+            FakturaPrzypisanie.faktura_id == faktura_id,
+            FakturaPrzypisanie.is_active  == True,  # noqa: E712
+        )
+        .order_by(FakturaPrzypisanie.CreatedAt)
     )
     przypisania = res_p.scalars().all()
 
@@ -1339,13 +1406,14 @@ async def get_faktura_detail(
     for p in przypisania:
         przypisania_resp.append(PrzypisanieResponse(
             id=p.id,
-            faktura_id=p.faktura_id,
             user_id=p.user_id,
             status=StatusPrzypisania(p.status),
             komentarz=p.komentarz,
             is_active=bool(p.is_active),
             created_at=p.CreatedAt,
             decided_at=p.decided_at,
+            actor_username=p.pracownik.username   if p.pracownik else None,
+            actor_full_name=p.pracownik.full_name if p.pracownik else None,
         ))
 
     is_overdue = False
@@ -1435,13 +1503,19 @@ async def get_faktura_pdf(
     wapro = await _get_wapro_naglowek(faktura.numer_ksef)
 
     # Pobierz przypisania
+    from sqlalchemy.orm import selectinload
+
     res_p = await db.execute(
-        select(FakturaPrzypisanie).where(
-            FakturaPrzypisanie.faktura_id == faktura_id
-        ).order_by(FakturaPrzypisanie.CreatedAt)
+        select(FakturaPrzypisanie)
+        .options(selectinload(FakturaPrzypisanie.pracownik))
+        .where(
+            FakturaPrzypisanie.faktura_id == faktura_id,
+            FakturaPrzypisanie.is_active  == True,  # noqa: E712
+        )
+        .order_by(FakturaPrzypisanie.CreatedAt)
     )
     przypisania = res_p.scalars().all()
-
+    
     # Generuj PDF przez faktura_pdf_service
     from app.services.faktura_pdf_service import generate_pdf
     pdf_bytes = await generate_pdf(

@@ -66,6 +66,7 @@ from app.services.config_service import get_config_value
 from app.services.event_service import publish_faktura_event
 from app.services.faktura_akceptacja_service import (
     _get_wapro_naglowek,
+    _invalidate_faktura_detail_caches,
     _log_event,
 )
 
@@ -204,10 +205,34 @@ async def get_moja_faktura_detail(
     try:
         cached = await redis.get(cache_key)
         if cached:
+            from sqlalchemy.orm import selectinload
             data = orjson.loads(cached)
-            # Dodaj mój status z przypisania (nie cachujemy per-user)
+            # Dane per-user nie są w cache — doczytaj je osobno
             moje_przypisanie = await _get_moje_przypisanie(db, faktura_id, user_id)
             data["moj_status"] = moje_przypisanie.status if moje_przypisanie else None
+            # Przypisania z komentarzem tylko własnym
+            res_p2 = await db.execute(
+                select(FakturaPrzypisanie)
+                .options(selectinload(FakturaPrzypisanie.pracownik))
+                .where(
+                    FakturaPrzypisanie.faktura_id == faktura_id,
+                    FakturaPrzypisanie.is_active  == True,  # noqa: E712
+                )
+                .order_by(FakturaPrzypisanie.CreatedAt)
+            )
+            p_list = res_p2.scalars().all()
+            data["przypisania"] = [
+                {
+                    "user_id":        p.user_id,
+                    "status":         p.status,
+                    "is_active":      bool(p.is_active),
+                    "decided_at":     p.decided_at.isoformat() if p.decided_at else None,
+                    "actor_username": p.pracownik.username   if p.pracownik else None,
+                    "actor_full_name":p.pracownik.full_name  if p.pracownik else None,
+                    "komentarz":      p.komentarz if p.user_id == user_id else None,
+                }
+                for p in p_list
+            ]
             return data
     except Exception:
         pass
@@ -225,9 +250,17 @@ async def get_moja_faktura_detail(
     # Pozycje WAPRO
     pozycje = await _get_wapro_pozycje(faktura.numer_ksef)
 
-    # Przypisania
+    # Przypisania — tylko aktywne, z danymi usera
+    from sqlalchemy.orm import selectinload
+
     res_p = await db.execute(
-        select(FakturaPrzypisanie).where(FakturaPrzypisanie.faktura_id == faktura_id)
+        select(FakturaPrzypisanie)
+        .options(selectinload(FakturaPrzypisanie.pracownik))
+        .where(
+            FakturaPrzypisanie.faktura_id == faktura_id,
+            FakturaPrzypisanie.is_active  == True,  # noqa: E712
+        )
+        .order_by(FakturaPrzypisanie.CreatedAt)
     )
     wszystkie_przypisania = res_p.scalars().all()
 
@@ -254,10 +287,24 @@ async def get_moja_faktura_detail(
         "termin_platnosci":  wapro.termin_platnosci.isoformat() if wapro and wapro.termin_platnosci else None,
         "nazwa_kontrahenta": wapro.nazwa_kontrahenta if wapro else None,
         "pozycje":           pozycje,
+        # Przypisania: pracownik widzi wszystkich (status, kto) ale komentarz tylko swój
+        "przypisania": [
+            {
+                "user_id":        p.user_id,
+                "status":         p.status,
+                "is_active":      bool(p.is_active),
+                "decided_at":     p.decided_at.isoformat() if p.decided_at else None,
+                "actor_username": p.pracownik.username   if p.pracownik else None,
+                "actor_full_name":p.pracownik.full_name  if p.pracownik else None,
+                # Komentarz widoczny TYLKO dla własnego przypisania
+                "komentarz":      p.komentarz if p.user_id == user_id else None,
+            }
+            for p in wszystkie_przypisania
+        ],
     }
 
-    # Cache (bez moj_status — jest per-user)
-    cache_data = {k: v for k, v in detail.items() if k != "moj_status"}
+    # Cache (bez moj_status i przypisania — są per-user)
+    cache_data = {k: v for k, v in detail.items() if k not in ("moj_status", "przypisania")}
     try:
         await redis.setex(cache_key, 120, orjson.dumps(cache_data))
     except Exception:
@@ -366,10 +413,11 @@ async def zapisz_decyzje(
 
     # Inwalidacja cache
     await _invalidate_user_cache(redis, actor_id)
-    try:
-        await redis.delete(_cache_key_detail(faktura_id))
-    except Exception:
-        pass
+    await _invalidate_faktura_detail_caches(
+        redis=redis,
+        faktura_id=faktura_id,
+        actor_user_id=actor_id,
+    )
 
     logger.info(orjson.dumps({
         "event":       "decyzja_zapisana",

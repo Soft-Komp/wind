@@ -95,7 +95,7 @@ class FakturaAkceptacja(Base):
         ),
         # Constraints walidacyjne — zwalidowane też na poziomie DB CHECK
         CheckConstraint(
-            "status_wewnetrzny IN ('nowe','w_toku','zaakceptowana','anulowana')",
+            "status_wewnetrzny IN ('nowe','w_toku','zaakceptowana','anulowana','orphaned')",
             name="CK_skw_faktura_akceptacja_status",
         ),
         CheckConstraint(

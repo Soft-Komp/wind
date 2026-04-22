@@ -389,7 +389,12 @@ class PrzypisanieResponse(FakturaBase):
     is_active:  bool
     created_at: datetime
     decided_at: Optional[datetime] = None
-    # Komentarz NIE jest zwracany w API (prywatność) — tylko status
+    # Komentarz — widoczność kontrolowana w serwisie:
+    #   referent (GET /faktury-akceptacja/{id}): wszystkich aktywnych
+    #   pracownik (GET /moje-faktury/{id}):      tylko własny
+    komentarz:       Optional[str] = None
+    actor_username:  Optional[str] = None
+    actor_full_name: Optional[str] = None
 
 
 class FakturaListItem(FakturaBase):
