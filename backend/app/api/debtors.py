@@ -389,7 +389,16 @@ async def get_debtor_invoices(
     redis: RedisClient,
     db: DB,
     request_id: RequestID,
-    min_days_overdue: int = Query(0, ge=0, le=3650, description="Tylko faktury >= N dni po terminie. 0 = wszystkie."),
+    min_days_overdue: int = Query(0, ge=0, le=3650,
+        description="Tylko faktury >= N dni po terminie. 0 = wszystkie."),
+    page: int = Query(1, ge=1,
+        description="Numer strony (1-based)."),
+    page_size: int = Query(50, ge=1, le=200,
+        description="Liczba faktur na stronie (max 200)."),
+    order_by: str = Query("DataWystawienia",
+        description="Pole sortowania: DataWystawienia | TerminPlatnosci | KwotaBrutto | KwotaPozostala | DniPo"),
+    order_dir: str = Query("desc", pattern="^(asc|desc)$",
+        description="Kierunek: asc | desc. Domyślnie desc (najnowsze pierwsze)."),
 ):
     from app.services import debtor_service
 
@@ -400,6 +409,10 @@ async def get_debtor_invoices(
             db=db,
             debtor_id=debtor_id,
             min_days_overdue=min_days_overdue,
+            page=page,
+            page_size=page_size,
+            order_by=order_by,
+            order_dir=order_dir,
         )
     except Exception as exc:
         _raise_from_debtor_error(exc)

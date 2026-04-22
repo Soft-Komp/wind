@@ -1062,7 +1062,7 @@ def _build_invoices_query(
 
     # CZY_ROZLICZONY tinyint: 0 = nieopłacona, 1 = opłacona
     if not params.include_paid:
-        conditions.append("CZY_ROZLICZONY = 0")
+        conditions.append("CZY_ROZLICZONY <> 2")
 
     # Filtr: tylko faktury X+ dni po terminie (0 = wszystkie)
     if params.min_days_overdue > 0:
@@ -1112,17 +1112,30 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
     )
 
     t_start = time.monotonic()
+# ── Logger dedykowany do pliku diagnostycznego ────────────────────────────
+    _diag_logger = logging.getLogger("windykacja.invoices_diag")
 
     try:
         data_sql, data_params = _build_invoices_query(params)
+
+        # ── LOG: dokładne SQL wysyłane do bazy ───────────────────────────────
+        logger.debug(
+            "get_invoices_for_debtor SQL [%s]:\n  DATA SQL: %s\n  DATA PARAMS: %s",
+            query_id, data_sql, data_params,
+        )
 
         count_sql = f"""
             SELECT COUNT(*) AS TotalCount
             FROM {SKW_ROZRACHUNKI_FAKTUR}
             WHERE ID_KONTRAHENTA = ?
-            {' AND CZY_ROZLICZONY = 0' if not params.include_paid else ''}
+            {' AND CZY_ROZLICZONY <> 2' if not params.include_paid else ''}
             {'AND DniPo >= ' + str(params.min_days_overdue) if params.min_days_overdue > 0 else ''}
             """
+
+        _diag_logger.info(
+            "[%s] COUNT SQL: %s | PARAMS: %s",
+            query_id, count_sql.strip(), (params.kontrahent_id,),
+        )
 
         rows_task = _run_in_executor(
             _execute_query_sync,
@@ -1136,10 +1149,51 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
             "invoices_count",
         )
 
-        rows_raw, count_raw = await asyncio.gather(rows_task, count_task)
+        rows_raw, count_raw = await asyncio.gather(
+            rows_task, count_task,
+            return_exceptions=True,  # ← NIE tłumi wyjątków, ale je przechwytuje
+        )
+
+        # ── LOG: surowe wyniki obu zapytań ───────────────────────────────────
+        _diag_logger.info(
+            "[%s] rows_raw type=%s, len=%s | count_raw type=%s, value=%s",
+            query_id,
+            type(rows_raw).__name__,
+            len(rows_raw) if isinstance(rows_raw, list) else "N/A (EXCEPTION?)",
+            type(count_raw).__name__,
+            count_raw if not isinstance(count_raw, list) else count_raw[:1],
+        )
+
+        # ── Wykryj czy któreś z zadań zwróciło wyjątek ──────────────────────
+        if isinstance(rows_raw, Exception):
+            _diag_logger.error(
+                "[%s] rows_task RZUCIŁ WYJĄTEK: %s",
+                query_id, rows_raw, exc_info=rows_raw,
+            )
+            raise rows_raw
+
+        if isinstance(count_raw, Exception):
+            _diag_logger.error(
+                "[%s] count_task RZUCIŁ WYJĄTEK: %s",
+                query_id, count_raw, exc_info=count_raw,
+            )
+            raise count_raw
 
         result.rows = rows_raw
         result.total_count = count_raw[0]["TotalCount"] if count_raw else 0
+
+        # ── LOG: ostateczny wynik ────────────────────────────────────────────
+        _diag_logger.info(
+            "[%s] WYNIK: rows=%d, total_count=%d, include_paid=%s, "
+            "min_days_overdue=%d, count_raw_raw=%s",
+            query_id,
+            len(result.rows),
+            result.total_count,
+            params.include_paid,
+            params.min_days_overdue,
+            count_raw,
+        )
+
         result.duration_ms = (time.monotonic() - t_start) * 1000
         result.success = True
 
@@ -1156,6 +1210,11 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
         result.error = str(exc)
         result.success = False
 
+        _diag_logger.error(
+            "[%s] WYJĄTEK w get_invoices_for_debtor: kontrahent_id=%d, błąd=%s",
+            query_id, params.kontrahent_id, exc,
+            exc_info=True,
+        )
         logger.error(
             "get_invoices_for_debtor BŁĄD [%s]: kontrahent_id=%d, %s",
             query_id, params.kontrahent_id, exc,
@@ -1164,7 +1223,6 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
         raise
 
     return result
-
 
 # ---------------------------------------------------------------------------
 # ZAPYTANIE 4: Walidacja bulk — czy lista ID_KONTRAHENTA istnieje w WAPRO

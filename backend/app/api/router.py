@@ -193,3 +193,12 @@ _register_router(
     prefix="/moje-faktury",
     tags=["Faktury — Pracownik"],
 )
+
+# 15. DASHBOARD
+_register_router(
+    api_router,
+    module_path="app.api.dashboard",
+    attr="router",
+    prefix="/dashboard",
+    tags=["Dashboard"],
+)

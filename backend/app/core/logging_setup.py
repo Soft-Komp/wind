@@ -478,6 +478,20 @@ def setup_logging(log_dir: Optional[Path] = None, debug: bool = False) -> None:
     worker_file_handler.setLevel(log_level)
     worker_file_handler.addFilter(redaction_filter)
 
+    # ── Handler diagnostyczny: faktury (invoices_diag.log) ───────────────────
+    invoices_diag_handler = NonDeletingTimedRotatingFileHandler(
+        log_dir=_log_dir,
+        log_name="invoices_diag",
+    )
+    invoices_diag_handler.setFormatter(json_formatter)
+    invoices_diag_handler.setLevel(logging.DEBUG)
+    invoices_diag_handler.addFilter(redaction_filter)
+
+    invoices_diag_logger = logging.getLogger("windykacja.invoices_diag")
+    invoices_diag_logger.setLevel(logging.DEBUG)
+    invoices_diag_logger.addHandler(invoices_diag_handler)
+    invoices_diag_logger.propagate = False
+
     # ---- Konfiguracja root loggera ----
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
@@ -498,6 +512,20 @@ def setup_logging(log_dir: Optional[Path] = None, debug: bool = False) -> None:
     worker_logger.setLevel(log_level)
     worker_logger.addHandler(worker_file_handler)
     worker_logger.propagate = True
+
+    # ── Handler diagnostyczny: faktury (invoices_diag.log) ───────────────────
+    invoices_diag_handler = NonDeletingTimedRotatingFileHandler(
+        log_dir=_log_dir,
+        log_name="invoices_diag",
+    )
+    invoices_diag_handler.setFormatter(json_formatter)
+    invoices_diag_handler.setLevel(logging.DEBUG)
+    invoices_diag_handler.addFilter(redaction_filter)
+
+    invoices_diag_logger = logging.getLogger("windykacja.invoices_diag")
+    invoices_diag_logger.setLevel(logging.DEBUG)
+    invoices_diag_logger.addHandler(invoices_diag_handler)
+    invoices_diag_logger.propagate = False
 
     # ---- Wyciszenie nadmiernie gadatliwych bibliotek ----
     _configure_third_party_loggers(debug=_debug)

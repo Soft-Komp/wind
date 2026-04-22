@@ -354,6 +354,21 @@ async def _handle_orphan_if_needed(
 # 1. GET lista faktur
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Dozwolone pola sortowania — whitelist (ochrona przed injection)
+_ALLOWED_ORDER_BY: frozenset[str] = frozenset({
+    "data_wystawienia",   # DataWystawienia z WAPRO
+    "termin_platnosci",   # TerminPlatnosci z WAPRO
+    "wartosc_brutto",     # WARTOSC_BRUTTO z WAPRO (kwota)
+    "wartosc_netto",      # WARTOSC_NETTO z WAPRO
+    "kwota_vat",          # KWOTA_VAT z WAPRO
+    "status_wewnetrzny",  # status w naszej tabeli
+    "priorytet",          # priorytet w naszej tabeli
+    "created_at",         # kiedy wpuszczono do obiegu
+    "updated_at",         # ostatnia zmiana
+    "nazwa_kontrahenta",  # NazwaKontrahenta z WAPRO (alfabetycznie)
+    "numer",              # NUMER dokumentu z WAPRO
+})
+
 async def get_faktury_list(
     *,
     db: AsyncSession,
@@ -365,6 +380,8 @@ async def get_faktury_list(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    order_by: str = "data_wystawienia",
+    order_dir: str = "desc",
 ) -> dict[str, Any]:
     """
     Lista faktur dla referenta — implementacja decyzji D2 (merge w pamięci Python).
@@ -383,9 +400,20 @@ async def get_faktury_list(
       - search:     po numer_ksef i nazwa_kontrahenta (obie grupy)
       - date_from/date_to: po DataWystawienia z widoku WAPRO
     """
+    # Walidacja order_by — whitelist
+    if order_by not in _ALLOWED_ORDER_BY:
+        logger.warning(
+            "get_faktury_list: niedozwolone order_by=%r, fallback na data_wystawienia",
+            order_by,
+        )
+        order_by = "data_wystawienia"
+
+    order_dir_clean = "desc" if order_dir.lower() not in ("asc", "desc") else order_dir.lower()
+
     filters = {
         "priorytet": priorytet, "status": status,
         "search": search, "date_from": date_from, "date_to": date_to,
+        "order_by": order_by, "order_dir": order_dir_clean,
     }
     cache_key = _cache_key_list(page, limit, filters)
 
@@ -423,6 +451,11 @@ async def get_faktury_list(
     # Batch fetch przypisań — jeden query dla wszystkich faktur w obiegu
     przypisania_batch: dict[int, list[dict]] = await _get_przypisania_batch(
         db, nasze_ids
+    )
+    logger.info(
+        "DIAGNOSTYKA przypisania_batch: nasze_ids=%s, wynik=%s",
+        nasze_ids,
+        {k: len(v) for k, v in przypisania_batch.items()},
     )
 
     # ── Krok 3: Buduj listę items ──────────────────────────────────────────
@@ -568,14 +601,62 @@ async def get_faktury_list(
     )
 
     # ── Krok 4: Sortowanie — NOWE na górze, potem wg daty wystawienia DESC ─
-    def _sort_key(item: dict):
-        # NOWE (id=None) mają priorytet wyświetlania
-        is_nowe = 0 if item["id"] is None else 1
-        # Następnie data wystawienia malejąco
-        data = item.get("data_wystawienia") or "0000-00-00"
-        return (is_nowe, data)
+    # Mapowanie nazw pól API → kluczy w słowniku item
+    _FIELD_MAP: dict[str, str] = {
+        "data_wystawienia":  "data_wystawienia",
+        "termin_platnosci":  "termin_platnosci",
+        "wartosc_brutto":    "wartosc_brutto",
+        "wartosc_netto":     "wartosc_netto",
+        "kwota_vat":         "kwota_vat",
+        "status_wewnetrzny": "status_wewnetrzny",
+        "priorytet":         "priorytet",
+        "created_at":        "created_at",
+        "updated_at":        "updated_at",
+        "nazwa_kontrahenta": "nazwa_kontrahenta",
+        "numer":             "numer",
+    }
 
-    items_all.sort(key=_sort_key)
+    sort_field = _FIELD_MAP.get(order_by, "data_wystawienia")
+    reverse    = (order_dir_clean == "desc")
+
+    # Wartości fallback dla None przy sortowaniu
+    _NONE_FALLBACK: dict[str, Any] = {
+        "data_wystawienia":  "0000-00-00",
+        "termin_platnosci":  "0000-00-00",
+        "wartosc_brutto":    -1 if reverse else float("inf"),
+        "wartosc_netto":     -1 if reverse else float("inf"),
+        "kwota_vat":         -1 if reverse else float("inf"),
+        "status_wewnetrzny": "",
+        "priorytet":         "",
+        "created_at":        "0000-00-00",
+        "updated_at":        "0000-00-00",
+        "nazwa_kontrahenta": "" if reverse else "żżżżż",
+        "numer":             "" if reverse else "żżżżż",
+    }
+
+    def _sort_key(item: dict) -> tuple:
+        # NOWE (id=None) zawsze na górze — niezależnie od sortowania
+        is_nowe = 0 if item["id"] is None else 1
+        val = item.get(sort_field)
+        if val is None:
+            val = _NONE_FALLBACK.get(sort_field, "")
+        return (is_nowe, val)
+
+    items_all.sort(key=_sort_key, reverse=reverse)
+    # Korekta: NOWE zawsze na górze — reverse nie może ich zepchnąć na dół
+    # is_nowe=0 < is_nowe=1, więc przy reverse=True NOWE trafiłyby na dół
+    # Rozwiązanie: sortujemy dwuetapowo
+    nowe    = [i for i in items_all if i["id"] is None]
+    w_obiegu = [i for i in items_all if i["id"] is not None]
+    w_obiegu.sort(
+        key=lambda i: i.get(sort_field) or _NONE_FALLBACK.get(sort_field, ""),
+        reverse=reverse,
+    )
+    nowe.sort(
+        key=lambda i: i.get(sort_field) or _NONE_FALLBACK.get(sort_field, ""),
+        reverse=reverse,
+    )
+    items_all = nowe + w_obiegu
 
     # ── Krok 5: Paginacja ──────────────────────────────────────────────────
     total  = len(items_all)
@@ -642,7 +723,7 @@ async def create_faktura_akceptacja(
     # Utwórz fakturę
     faktura = FakturaAkceptacja(
         numer_ksef=body.numer_ksef,
-        status_wewnetrzny="nowe",
+        status_wewnetrzny="w_toku", 
         priorytet=body.priorytet if isinstance(body.priorytet, str) else body.priorytet.value,
         opis_dokumentu=body.opis_dokumentu,
         uwagi=body.uwagi,
@@ -1747,7 +1828,7 @@ async def get_faktura_ksef_detail(
 
     # ── Cache write ───────────────────────────────────────────────────────────
     try:
-        await redis.setex(cache_key, 60, orjson.dumps(response, default=str))
+        await redis.setex(cache_key, 2, orjson.dumps(response, default=str))
     except Exception as exc:
         logger.warning("get_faktura_ksef_detail: cache write error: %s", exc)
 

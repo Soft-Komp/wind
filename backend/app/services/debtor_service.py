@@ -674,6 +674,21 @@ async def get_by_id(
     return result
 
 
+# Mapowanie przyjaznych nazw → kolumny SQL widoku (whitelist)
+_INVOICE_SORT_MAP: dict[str, str] = {
+    "datawystawienia":  "DataWystawienia",
+    "terminplatnosci":  "TerminPlatnosci",
+    "kwotabrutto":      "KwotaBrutto",
+    "kwotapozostala":   "KwotaPozostala",
+    "dnipo":            "DniPo",
+    # pass-through — frontend może podać dokładną nazwę kolumny
+    "DataWystawienia":  "DataWystawienia",
+    "TerminPlatnosci":  "TerminPlatnosci",
+    "KwotaBrutto":      "KwotaBrutto",
+    "KwotaPozostala":   "KwotaPozostala",
+    "DniPo":            "DniPo",
+}
+
 async def get_invoices(
     wapro: WaproConnectionPool,
     redis: Redis,
@@ -683,6 +698,8 @@ async def get_invoices(
     page_size: int = 50,
     paid: Optional[bool] = None,
     min_days_overdue: int = 0,
+    order_by: str = "DataWystawienia",
+    order_dir: str = "desc",
     requesting_user_id: Optional[int] = None,
 ) -> dict:
     """
@@ -719,18 +736,29 @@ async def get_invoices(
     cache_key = _REDIS_KEY_INVOICES.format(debtor_id=debtor_id, page=page)
     if min_days_overdue:
         cache_key = f"{cache_key}:mdo{min_days_overdue}"
+    # Sortowanie wpływa na wynik — musi być częścią klucza cache
+    cache_key = f"{cache_key}:s{order_by}_{order_dir}"
     cached = await _get_redis_cache(redis, cache_key)
     if cached is not None:
         logger.debug("Faktury dłużnika pobrane z cache", extra={"debtor_id": debtor_id})
         return cached
 
     try:
+        # Normalizacja sortowania — whitelist + fallback bezpieczny
+        order_by_sql = _INVOICE_SORT_MAP.get(
+            order_by,
+            _INVOICE_SORT_MAP.get(order_by.lower().replace("_", ""), "DataWystawienia")
+        )
+        order_dir_sql = "DESC" if order_dir.lower() != "asc" else "ASC"
+
         invoice_params = InvoiceFilterParams(
             kontrahent_id=debtor_id,
             include_paid=paid if paid is not None else False,
             min_days_overdue=min_days_overdue,
             limit=page_size,
             offset=(page - 1) * page_size,
+            order_by=order_by_sql,
+            order_dir=order_dir_sql,
         )
         wapro_result = await get_invoices_for_debtor(invoice_params)
     except Exception as exc:

@@ -155,6 +155,8 @@ async def list_faktury(
     search:       Optional[str] = Query(default=None, max_length=100),
     date_from:    Optional[str] = Query(default=None),
     date_to:      Optional[str] = Query(default=None),
+    order_by:     Optional[str] = Query(default="data_wystawienia"),
+    order_dir:    Optional[str] = Query(default="desc"),
 ) -> dict:
     # Sprawdź uprawnienie referenta
     await _require_referent(current_user, db, redis)
@@ -184,6 +186,8 @@ async def list_faktury(
         search=search,
         date_from=date_from,
         date_to=date_to,
+        order_by=order_by,
+        order_dir=order_dir,
     )
 
     logger.debug(

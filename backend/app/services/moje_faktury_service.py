@@ -146,6 +146,11 @@ async def get_moje_faktury_list(
         if not faktura:
             continue
 
+        # Pomiń faktury zakończone (force_accept / anulowana przez admina)
+        # Pracownik nie powinien widzieć faktur gdzie nie ma już nic do zrobienia
+        if faktura.status_wewnetrzny in ("zaakceptowana", "anulowana"):
+            continue
+
         wapro = await _get_wapro_naglowek(faktura.numer_ksef)
 
         items.append({
