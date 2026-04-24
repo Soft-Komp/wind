@@ -46,7 +46,7 @@ import hashlib
 import logging
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 import orjson
@@ -133,8 +133,12 @@ class DebtorListParams:
     overdue_min_days: Optional[int] = None
     overdue_max_days: Optional[int] = None
     has_active_monit: Optional[bool] = None
-    min_days_overdue: Optional[int] = None       
+    min_days_overdue: Optional[int] = None
     max_last_monit_days_ago: Optional[int] = None
+    # Filtr daty terminu płatności
+    due_date: Optional[date] = None      # None = brak filtra; date = filtruj po TerminPlatnosci
+    due_date_mode: str = "up_to"         # "exact" (=) | "up_to" (<=)
+    paid_filter: str = "unpaid_only"     # "unpaid_only" | "all"
     page: int = 1
     page_size: int = 50
     sort_by: str = "total_debt"
@@ -180,6 +184,35 @@ class DebtorListParams:
         if self.max_last_monit_days_ago is not None and self.max_last_monit_days_ago < 0:
             object.__setattr__(self, "max_last_monit_days_ago", None)
 
+        # Walidacja due_date_mode — whitelist
+        if self.due_date_mode not in ("exact", "up_to"):
+            logger.warning(
+                "DebtorListParams: nieprawidłowy due_date_mode=%r → fallback 'up_to'",
+                self.due_date_mode,
+            )
+            object.__setattr__(self, "due_date_mode", "up_to")
+
+        # Walidacja paid_filter — whitelist
+        if self.paid_filter not in ("unpaid_only", "all"):
+            logger.warning(
+                "DebtorListParams: nieprawidłowy paid_filter=%r → fallback 'unpaid_only'",
+                self.paid_filter,
+            )
+            object.__setattr__(self, "paid_filter", "unpaid_only")
+
+        # Walidacja due_date — zakres i typ
+        if self.due_date is not None:
+            if not isinstance(self.due_date, date):
+                raise DebtorValidationError(
+                    f"due_date musi być datetime.date, otrzymano: {type(self.due_date)}"
+                )
+            _min = date(1990, 1, 1)
+            _max = date(2100, 12, 31)
+            if not (_min <= self.due_date <= _max):
+                raise DebtorValidationError(
+                    f"due_date={self.due_date} poza dopuszczalnym zakresem [{_min} … {_max}]"
+                )
+
     def to_wapro_params(self) -> DebtorFilterParams:
         # Mapowanie przyjaznych nazw frontendu → kolumny SQL widoku
         _SORT_MAP: dict[str, str] = {
@@ -208,6 +241,9 @@ class DebtorListParams:
             overdue_days_max=self.overdue_max_days,
             min_days_overdue=self.min_days_overdue,
             max_last_monit_days_ago=self.max_last_monit_days_ago,
+            due_date=self.due_date,
+            due_date_mode=self.due_date_mode,
+            paid_filter=self.paid_filter,
             limit=self.page_size,
             offset=(self.page - 1) * self.page_size,
             order_by=order_by_sql,
@@ -230,6 +266,9 @@ class DebtorListParams:
             "ham": self.has_active_monit,
             "mdo": self.min_days_overdue,
             "mlma": self.max_last_monit_days_ago,
+            "dd": self.due_date.isoformat() if self.due_date else None,
+            "ddm": self.due_date_mode,
+            "pf": self.paid_filter,
             "p": self.page,
             "ps": self.page_size,
             "sb": self.sort_by,
@@ -700,6 +739,9 @@ async def get_invoices(
     min_days_overdue: int = 0,
     order_by: str = "DataWystawienia",
     order_dir: str = "desc",
+    due_date: Optional[date] = None,
+    due_date_mode: str = "up_to",
+    paid_filter: str = "unpaid_only",
     requesting_user_id: Optional[int] = None,
 ) -> dict:
     """
@@ -738,6 +780,10 @@ async def get_invoices(
         cache_key = f"{cache_key}:mdo{min_days_overdue}"
     # Sortowanie wpływa na wynik — musi być częścią klucza cache
     cache_key = f"{cache_key}:s{order_by}_{order_dir}"
+    # Filtr daty — wpływa na wynik, musi być w kluczu
+    if due_date is not None:
+        cache_key = f"{cache_key}:dd{due_date.isoformat()}_{due_date_mode}"
+    cache_key = f"{cache_key}:pf{paid_filter}"
     cached = await _get_redis_cache(redis, cache_key)
     if cached is not None:
         logger.debug("Faktury dłużnika pobrane z cache", extra={"debtor_id": debtor_id})
@@ -755,10 +801,28 @@ async def get_invoices(
             kontrahent_id=debtor_id,
             include_paid=paid if paid is not None else False,
             min_days_overdue=min_days_overdue,
+            due_date=due_date,
+            due_date_mode=due_date_mode,
+            paid_filter=paid_filter,
             limit=page_size,
             offset=(page - 1) * page_size,
             order_by=order_by_sql,
             order_dir=order_dir_sql,
+        )
+
+        logger.info(
+            "get_invoices: debtor_id=%d due_date=%s mode=%s paid_filter=%s "
+            "min_overdue=%d page=%d/%d order=%s %s",
+            debtor_id, due_date, due_date_mode, paid_filter,
+            min_days_overdue, page, page_size, order_by_sql, order_dir_sql,
+            extra={
+                "debtor_id": debtor_id,
+                "filtr_daty": {
+                    "due_date":      due_date.isoformat() if due_date else None,
+                    "due_date_mode": due_date_mode,
+                    "paid_filter":   paid_filter,
+                },
+            },
         )
         wapro_result = await get_invoices_for_debtor(invoice_params)
     except Exception as exc:

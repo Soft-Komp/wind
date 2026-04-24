@@ -29,7 +29,7 @@ PDF: StreamingResponse z Content-Type: application/pdf.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import orjson
@@ -83,8 +83,38 @@ async def list_debtors(
     overdue_only: bool = Query(False, description="Tylko przeterminowani dłużnicy"),
     sort_by: str = Query("total_debt", description="Pole sortowania: total_debt | name | overdue_days"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="Kierunek: asc | desc"),
-    min_days_overdue: Optional[int] = Query(None, ge=0, le=3650, description="Minimalna liczba dni po terminie (DniPrzeterminowania >= N)"),
-    max_last_monit_days_ago: Optional[int] = Query(None, ge=1, le=3650, description="Ostatni monit do rozrachunku starszy niż N dni (OstatniMonitRozrachunku)"),
+    min_days_overdue: Optional[int] = Query(
+        None, ge=0, le=3650,
+        description="Minimalna liczba dni po terminie (DniPrzeterminowania >= N).",
+    ),
+    max_last_monit_days_ago: Optional[int] = Query(
+        None, ge=1, le=3650,
+        description="Ostatni monit do rozrachunku starszy niż N dni.",
+    ),
+    due_date: Optional[date] = Query(
+        None,
+        description=(
+            "Filtr po terminie płatności rozrachunków (TerminPlatnosci). "
+            "Format ISO: YYYY-MM-DD. None = brak filtra. "
+            "Pokaż tylko kontrahentów mających min. 1 rozrachunek spełniający kryterium."
+        ),
+    ),
+    due_date_mode: str = Query(
+        "up_to",
+        pattern="^(exact|up_to)$",
+        description=(
+            "'exact' → TerminPlatnosci = due_date; "
+            "'up_to' → TerminPlatnosci ≤ due_date."
+        ),
+    ),
+    paid_filter: str = Query(
+        "unpaid_only",
+        pattern="^(unpaid_only|all)$",
+        description=(
+            "'unpaid_only' → tylko niezapłacone (CZY_ROZLICZONY <> 2); "
+            "'all' → zapłacone i niezapłacone."
+        ),
+    ),
 ):
     from app.services import debtor_service
     from app.services.debtor_service import DebtorListParams
@@ -102,6 +132,9 @@ async def list_debtors(
             has_active_monit=None,
             min_days_overdue=min_days_overdue,
             max_last_monit_days_ago=max_last_monit_days_ago,
+            due_date=due_date,
+            due_date_mode=due_date_mode,
+            paid_filter=paid_filter,
             page=pagination.page,
             page_size=pagination.per_page,
             sort_by=sort_by,
@@ -395,10 +428,32 @@ async def get_debtor_invoices(
         description="Numer strony (1-based)."),
     page_size: int = Query(50, ge=1, le=200,
         description="Liczba faktur na stronie (max 200)."),
-    order_by: str = Query("DataWystawienia",
-        description="Pole sortowania: DataWystawienia | TerminPlatnosci | KwotaBrutto | KwotaPozostala | DniPo"),
-    order_dir: str = Query("desc", pattern="^(asc|desc)$",
-        description="Kierunek: asc | desc. Domyślnie desc (najnowsze pierwsze)."),
+    order_by: str = Query(
+        "DataWystawienia",
+        description="Sortowanie: DataWystawienia | TerminPlatnosci | KwotaBrutto | KwotaPozostala | DniPo",
+    ),
+    order_dir: str = Query(
+        "desc",
+        pattern="^(asc|desc)$",
+        description="Kierunek: asc | desc.",
+    ),
+    due_date: Optional[date] = Query(
+        None,
+        description=(
+            "Filtr po terminie płatności (TerminPlatnosci). "
+            "Format ISO: YYYY-MM-DD. None = brak filtra."
+        ),
+    ),
+    due_date_mode: str = Query(
+        "up_to",
+        pattern="^(exact|up_to)$",
+        description="'exact' → TerminPlatnosci = due_date; 'up_to' → TerminPlatnosci ≤ due_date.",
+    ),
+    paid_filter: str = Query(
+        "unpaid_only",
+        pattern="^(unpaid_only|all)$",
+        description="'unpaid_only' → tylko niezapłacone; 'all' → wszystkie faktury.",
+    ),
 ):
     from app.services import debtor_service
 
@@ -413,6 +468,9 @@ async def get_debtor_invoices(
             page_size=page_size,
             order_by=order_by,
             order_dir=order_dir,
+            due_date=due_date,
+            due_date_mode=due_date_mode,
+            paid_filter=paid_filter,
         )
     except Exception as exc:
         _raise_from_debtor_error(exc)

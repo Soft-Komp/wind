@@ -122,8 +122,12 @@ class DebtorFilterParams:
     age_category: Optional[str] = None          # KategoriaWieku = X
     has_email: Optional[bool] = None            # Email IS NOT NULL AND Email != ''
     has_phone: Optional[bool] = None            # Telefon IS NOT NULL AND Telefon != ''
-    min_days_overdue: Optional[int] = None      # DniPrzeterminowania >= X (filtr z widoku kontrahenci)
-    max_last_monit_days_ago: Optional[int] = None  # OstatniMonitRozrachunku starszy niż X dni
+    min_days_overdue: Optional[int] = None
+    max_last_monit_days_ago: Optional[int] = None
+    # Filtr daty terminu płatności
+    due_date: Optional[date] = None         # filtr po TerminPlatnosci; None = brak filtra
+    due_date_mode: str = "up_to"            # "exact" → = | "up_to" → <=
+    paid_filter: str = "unpaid_only"        # "unpaid_only" → CZY_ROZLICZONY<>2 | "all" → brak filtra
     # Paginacja
     limit: int = 50
     offset: int = 0
@@ -208,13 +212,59 @@ class DebtorFilterParams:
             )
         object.__setattr__(self, "order_dir", self.order_dir.upper())
 
+        # due_date_mode — whitelist
+        if self.due_date_mode not in ("exact", "up_to"):
+            logger.warning(
+                "DebtorFilterParams: nieprawidłowy due_date_mode=%r → fallback 'up_to'",
+                self.due_date_mode,
+            )
+            object.__setattr__(self, "due_date_mode", "up_to")
+
+        # paid_filter — whitelist
+        if self.paid_filter not in ("unpaid_only", "all"):
+            logger.warning(
+                "DebtorFilterParams: nieprawidłowy paid_filter=%r → fallback 'unpaid_only'",
+                self.paid_filter,
+            )
+            object.__setattr__(self, "paid_filter", "unpaid_only")
+
+        # due_date — sanity check zakresu
+        if self.due_date is not None:
+            if not isinstance(self.due_date, date):
+                raise ValueError(
+                    f"DebtorFilterParams: due_date musi być datetime.date, "
+                    f"otrzymano: {type(self.due_date)}"
+                )
+            _min_date = date(1990, 1, 1)
+            _max_date = date(2100, 12, 31)
+            if not (_min_date <= self.due_date <= _max_date):
+                raise ValueError(
+                    f"DebtorFilterParams: due_date={self.due_date} poza dopuszczalnym "
+                    f"zakresem [{_min_date} … {_max_date}]"
+                )
+
+# Whitelisty dla filtrów daty — używane w obu dataclassach
+_VALID_DUE_DATE_MODES: frozenset[str] = frozenset({"exact", "up_to"})
+_VALID_PAID_FILTERS: frozenset[str] = frozenset({"unpaid_only", "all"})
+
 
 @dataclass(frozen=True)
 class InvoiceFilterParams:
-    """Parametry filtrowania faktur dla konkretnego kontrahenta."""
+    """
+    Parametry filtrowania faktur dla konkretnego kontrahenta.
+
+    Pola nowe (filtr daty terminu płatności):
+        due_date      — filtr po TerminPlatnosci; None = brak filtra
+        due_date_mode — "exact" (TerminPlatnosci = ?) | "up_to" (TerminPlatnosci <= ?)
+        paid_filter   — "unpaid_only" (CZY_ROZLICZONY <> 2) | "all" (wszystkie faktury)
+    """
     kontrahent_id: int
     include_paid: bool = False      # False = tylko nieopłacone (rozliczony != 2)
-    min_days_overdue: int = 0       # DniPo >= X; 0 = wszystkie (w tym nieprzetarminowane)
+    min_days_overdue: int = 0       # DniPo >= X; 0 = wszystkie (w tym nieprzeterminowane)
+    # Filtr daty terminu płatności
+    due_date: Optional[date] = None
+    due_date_mode: str = "up_to"
+    paid_filter: str = "unpaid_only"
     limit: int = 100
     offset: int = 0
     order_by: str = "TerminPlatnosci"
@@ -247,6 +297,83 @@ class InvoiceFilterParams:
         if self.order_dir.upper() not in ("ASC", "DESC"):
             raise ValueError(f"Niedozwolone order_dir: {self.order_dir!r}")
         object.__setattr__(self, "order_dir", self.order_dir.upper())
+
+        # due_date_mode — whitelist (NIGDY interpolacja z zewnątrz do SQL)
+        if self.due_date_mode not in _VALID_DUE_DATE_MODES:
+            logger.warning(
+                "InvoiceFilterParams: nieprawidłowy due_date_mode=%r → fallback 'up_to'",
+                self.due_date_mode,
+            )
+            object.__setattr__(self, "due_date_mode", "up_to")
+
+        # paid_filter — whitelist
+        if self.paid_filter not in _VALID_PAID_FILTERS:
+            logger.warning(
+                "InvoiceFilterParams: nieprawidłowy paid_filter=%r → fallback 'unpaid_only'",
+                self.paid_filter,
+            )
+            object.__setattr__(self, "paid_filter", "unpaid_only")
+
+        # due_date — sanity check zakresu dat
+        if self.due_date is not None:
+            if not isinstance(self.due_date, date):
+                raise ValueError(
+                    f"InvoiceFilterParams: due_date musi być datetime.date, "
+                    f"otrzymano: {type(self.due_date)}"
+                )
+            _min_date = date(1990, 1, 1)
+            _max_date = date(2100, 12, 31)
+            if not (_min_date <= self.due_date <= _max_date):
+                raise ValueError(
+                    f"InvoiceFilterParams: due_date={self.due_date} poza dopuszczalnym "
+                    f"zakresem [{_min_date} … {_max_date}]"
+                )
+
+    def to_log_dict(self) -> dict:
+        """Serializacja do logów — JSON-safe."""
+        return {
+            "kontrahent_id":    self.kontrahent_id,
+            "include_paid":     self.include_paid,
+            "min_days_overdue": self.min_days_overdue,
+            "due_date":         self.due_date.isoformat() if self.due_date else None,
+            "due_date_mode":    self.due_date_mode,
+            "paid_filter":      self.paid_filter,
+            "limit":            self.limit,
+            "offset":           self.offset,
+            "order_by":         self.order_by,
+            "order_dir":        self.order_dir,
+        }
+
+        # due_date_mode — whitelist
+        if self.due_date_mode not in ("exact", "up_to"):
+            logger.warning(
+                "DebtorFilterParams: nieprawidłowy due_date_mode=%r → fallback 'up_to'",
+                self.due_date_mode,
+            )
+            object.__setattr__(self, "due_date_mode", "up_to")
+
+        # paid_filter — whitelist
+        if self.paid_filter not in ("unpaid_only", "all"):
+            logger.warning(
+                "DebtorFilterParams: nieprawidłowy paid_filter=%r → fallback 'unpaid_only'",
+                self.paid_filter,
+            )
+            object.__setattr__(self, "paid_filter", "unpaid_only")
+
+        # due_date — sanity check zakresu
+        if self.due_date is not None:
+            if not isinstance(self.due_date, date):
+                raise ValueError(
+                    f"DebtorFilterParams: due_date musi być datetime.date, "
+                    f"otrzymano: {type(self.due_date)}"
+                )
+            _min_date = date(1990, 1, 1)
+            _max_date = date(2100, 12, 31)
+            if not (_min_date <= self.due_date <= _max_date):
+                raise ValueError(
+                    f"DebtorFilterParams: due_date={self.due_date} poza dopuszczalnym "
+                    f"zakresem [{_min_date} … {_max_date}]"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +895,33 @@ def _build_debtors_query(
         )
         query_params.append(params.max_last_monit_days_ago)
 
+    # ── Filtr daty terminu płatności ──────────────────────────────────────────
+    # Subquery EXISTS na skw_rozrachunki_faktur — widok ma już skonwertowane
+    # daty Clarion na DATE, więc porównanie z parametrem date jest bezpieczne.
+    # Operator pochodzi WYŁĄCZNIE z _VALID_DUE_DATE_MODES (walidacja w __post_init__).
+    if params.due_date is not None:
+        # Bezpieczna interpolacja — due_date_mode pochodzi TYLKO z frozenset whitelist
+        date_op = "=" if params.due_date_mode == "exact" else "<="
+
+        # Klauzula opłacenia wewnątrz subquery
+        paid_clause = "" if params.paid_filter == "all" else "AND CZY_ROZLICZONY <> 2"
+
+        conditions.append(
+            f"ID_KONTRAHENTA IN ("
+            f"  SELECT DISTINCT ID_KONTRAHENTA"
+            f"  FROM {SKW_ROZRACHUNKI_FAKTUR}"
+            f"  WHERE TerminPlatnosci IS NOT NULL"
+            f"    AND TerminPlatnosci {date_op} ?"
+            f"    {paid_clause}"
+            f")"
+        )
+        query_params.append(params.due_date)
+
+        logger.debug(
+            "_build_debtors_query: filtr due_date=%s mode=%s paid_filter=%s op=%s",
+            params.due_date, params.due_date_mode, params.paid_filter, date_op,
+        )
+
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     # Sortowanie — bezpieczna interpolacja tylko z whitelisted kolumny
@@ -1060,14 +1214,33 @@ def _build_invoices_query(
     conditions = ["ID_KONTRAHENTA = ?"]
     query_params: list[Any] = [params.kontrahent_id]
 
-    # CZY_ROZLICZONY tinyint: 0 = nieopłacona, 1 = opłacona
-    if not params.include_paid:
+    # ── Filtr opłacenia ────────────────────────────────────────────────────
+    # paid_filter ma priorytet — include_paid zachowany dla zgodności wstecznej
+    # (używany przez monit_service który nie przekazuje paid_filter).
+    if params.paid_filter == "unpaid_only":
         conditions.append("CZY_ROZLICZONY <> 2")
+    elif not params.include_paid:
+        conditions.append("CZY_ROZLICZONY <> 2")
+    # paid_filter == "all" → brak klauzuli → wyświetlamy wszystkie
 
-    # Filtr: tylko faktury X+ dni po terminie (0 = wszystkie)
+    # ── Filtr: tylko faktury X+ dni po terminie ────────────────────────────
     if params.min_days_overdue > 0:
         conditions.append("DniPo >= ?")
         query_params.append(params.min_days_overdue)
+
+    # ── Filtr daty terminu płatności ──────────────────────────────────────
+    # Operator pochodzi WYŁĄCZNIE z _VALID_DUE_DATE_MODES (walidacja
+    # w __post_init__) — zero interpolacji stringa z frontendu do SQL.
+    if params.due_date is not None:
+        date_op = "=" if params.due_date_mode == "exact" else "<="
+        conditions.append(f"TerminPlatnosci IS NOT NULL AND TerminPlatnosci {date_op} ?")
+        query_params.append(params.due_date)
+
+        logger.debug(
+            "_build_invoices_query: filtr due_date=%s mode=%s op=%s paid=%s kontrahent=%d",
+            params.due_date, params.due_date_mode, date_op,
+            params.paid_filter, params.kontrahent_id,
+        )
 
     where_clause = "WHERE " + " AND ".join(conditions)
     order_clause = f"ORDER BY {params.order_by} {params.order_dir}"
