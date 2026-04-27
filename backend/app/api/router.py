@@ -202,3 +202,12 @@ _register_router(
     prefix="/dashboard",
     tags=["Dashboard"],
 )
+
+# 16. KOSZTY DODATKOWE
+_register_router(
+    api_router,
+    module_path="app.api.koszty",
+    attr="router",
+    prefix="/koszty-dodatkowe",
+    tags=["Koszty Dodatkowe"],
+)

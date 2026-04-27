@@ -35,6 +35,7 @@ from typing import Optional
 import orjson
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from app.db.wapro import _FUNC_ODSETKI_SQL
 
 from app.core.dependencies import (
     DB,
@@ -454,8 +455,34 @@ async def get_debtor_invoices(
         pattern="^(unpaid_only|all)$",
         description="'unpaid_only' → tylko niezapłacone; 'all' → wszystkie faktury.",
     ),
+    overdue_filter: str = Query(
+        "all",
+        pattern="^(all|overdue_only|not_overdue)$",
+        description=(
+            "'all' → wszystkie (domyślnie); "
+            "'overdue_only' → tylko przeterminowane (DniPo > 0); "
+            "'not_overdue' → tylko nieprzeteminowane (DniPo = 0). "
+            "Błąd 422 przy jednoczesnym overdue_filter='not_overdue' i min_days_overdue > 0."
+        ),
+    ),
 ):
     from app.services import debtor_service
+
+    # Walidacja konfliktu parametrów — zwracamy 422 zanim trafi do serwisu
+    if overdue_filter == "not_overdue" and min_days_overdue > 0:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "konflikt_parametrow",
+                "message": (
+                    f"overdue_filter='not_overdue' jest sprzeczny z "
+                    f"min_days_overdue={min_days_overdue}. "
+                    "Usuń min_days_overdue lub zmień overdue_filter."
+                ),
+                "fields": ["overdue_filter", "min_days_overdue"],
+            },
+        )
 
     try:
         invoices = await debtor_service.get_invoices(
@@ -471,6 +498,7 @@ async def get_debtor_invoices(
             due_date=due_date,
             due_date_mode=due_date_mode,
             paid_filter=paid_filter,
+            overdue_filter=overdue_filter,
         )
     except Exception as exc:
         _raise_from_debtor_error(exc)
@@ -480,6 +508,187 @@ async def get_debtor_invoices(
         app_code="debtors.invoices",
     )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT: POST /debtors/{id}/monit-cost-preview
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{debtor_id}/monit-cost-preview",
+    summary="Kalkulacja kosztów monitu przed wysyłką",
+    description=(
+        "Zwraca pełne podsumowanie finansowe przed wysłaniem monitu: "
+        "kwoty faktur, odsetki per faktura, koszty dodatkowe dla kanału, "
+        "łączna kwota do żądania. "
+        "Wymaga podania invoice_ids (min. 1). "
+        "**Wymaga uprawnienia:** `monits.preview`"
+    ),
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_permission("monits.preview")],
+)
+async def monit_cost_preview(
+    request: Request,
+    debtor_id: int,
+    current_user: CurrentUser,
+    wapro: WaproDB,
+    redis: RedisClient,
+    db: DB,
+    request_id: RequestID,
+):
+    from app.services import koszt_service
+    from app.db.wapro import get_odsetki_for_rozrachunki, get_invoices_for_debtor, InvoiceFilterParams
+
+    body = await _parse_body(request)
+
+    channel     = (body.get("channel") or "").strip().lower()
+    invoice_ids = body.get("invoice_ids") or []
+
+    # ── Walidacja wejścia ────────────────────────────────────────────────────
+    _errors = []
+    if channel not in ("email", "sms", "print"):
+        _errors.append({"field": "channel", "message": "Dozwolone: email, sms, print"})
+    if not invoice_ids:
+        _errors.append({"field": "invoice_ids", "message": "Wymagana niepusta lista faktur"})
+    if _errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "validation.error", "message": "Błąd walidacji", "errors": _errors},
+        )
+
+    # Sanityzacja invoice_ids
+    clean_ids: list[int] = []
+    for raw in invoice_ids:
+        try:
+            v = int(raw)
+            if v > 0:
+                clean_ids.append(v)
+        except (TypeError, ValueError):
+            pass
+    clean_ids = list(dict.fromkeys(clean_ids))  # deduplikacja
+
+    if not clean_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "validation.error", "message": "Brak prawidłowych ID faktur",
+                    "errors": [{"field": "invoice_ids", "message": "Wszystkie ID muszą być > 0"}]},
+        )
+
+    try:
+        # ── Pobierz faktury dłużnika z WAPRO ─────────────────────────────────
+        params = InvoiceFilterParams(
+            kontrahent_id=debtor_id,
+            paid_filter="all",
+            limit=500,
+            offset=0,
+        )
+        wapro_result = await get_invoices_for_debtor(params)
+
+        # Zbuduj słownik ID_ROZRACHUNKU → dane faktury
+        faktura_map = {
+            row["ID_ROZRACHUNKU"]: row
+            for row in wapro_result.rows
+            if row.get("ID_ROZRACHUNKU") in clean_ids
+        }
+
+        # Sprawdź czy wszystkie żądane faktury należą do tego dłużnika
+        nieznane = [i for i in clean_ids if i not in faktura_map]
+        if nieznane:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code":    "preview.invoice_not_found",
+                    "message": f"Faktury nie należą do dłużnika {debtor_id} lub nie istnieją.",
+                    "errors":  [{"field": "invoice_ids",
+                                 "message": f"Nieznane ID: {nieznane}"}],
+                },
+            )
+
+        # ── Oblicz odsetki per faktura ────────────────────────────────────────
+        odsetki_map = await get_odsetki_for_rozrachunki(clean_ids)
+
+        # ── Pobierz aktywne koszty dodatkowe dla kanału ───────────────────────
+        koszty_dodatkowe = await koszt_service.get_active_for_channel(db, redis, channel)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Błąd monit-cost-preview debtor_id=%d: %s",
+            debtor_id, exc,
+            extra={"debtor_id": debtor_id, "error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "preview.error", "message": f"Błąd kalkulacji: {exc}"},
+        )
+
+    # ── Buduj pozycje faktur ──────────────────────────────────────────────────
+    from decimal import Decimal as D
+
+    pozycje = []
+    suma_dlugu    = D("0.00")
+    suma_odsetek  = D("0.00")
+
+    for id_roz in clean_ids:
+        row      = faktura_map[id_roz]
+        pozostala = D(str(row.get("KwotaPozostala") or "0"))
+        odsetki   = odsetki_map.get(id_roz, D("0.00"))
+
+        suma_dlugu   += pozostala
+        suma_odsetek += odsetki
+
+        pozycje.append({
+            "id_rozrachunku": id_roz,
+            "numer_faktury":  row.get("NumerFaktury"),
+            "data_wystawienia": (
+                row["DataWystawienia"].isoformat()
+                if row.get("DataWystawienia") else None
+            ),
+            "termin_platnosci": (
+                row["TerminPlatnosci"].isoformat()
+                if row.get("TerminPlatnosci") else None
+            ),
+            "kwota_brutto":   float(row.get("KwotaBrutto") or 0),
+            "kwota_pozostala": float(pozostala),
+            "dni_po":         row.get("DniPo"),
+            "odsetki":        float(odsetki),
+        })
+
+    suma_kosztow = D(str(sum(k["kwota"] for k in koszty_dodatkowe)))
+    kwota_calkowita = suma_dlugu + suma_odsetek + suma_kosztow
+
+    logger.info(
+        "monit-cost-preview: debtor=%d channel=%s faktury=%d "
+        "dlug=%.2f odsetki=%.2f koszty=%.2f calkowita=%.2f",
+        debtor_id, channel, len(clean_ids),
+        suma_dlugu, suma_odsetek, suma_kosztow, kwota_calkowita,
+        extra={
+            "debtor_id":       debtor_id,
+            "channel":         channel,
+            "invoice_count":   len(clean_ids),
+            "suma_dlugu":      float(suma_dlugu),
+            "suma_odsetek":    float(suma_odsetek),
+            "suma_kosztow":    float(suma_kosztow),
+            "kwota_calkowita": float(kwota_calkowita),
+            "user_id":         current_user.id_user,
+        },
+    )
+
+    return BaseResponse.ok(
+        data={
+            "debtor_id":              debtor_id,
+            "channel":                channel,
+            "faktury":                pozycje,
+            "suma_dlugu":             float(suma_dlugu),
+            "suma_odsetek":           float(suma_odsetek),
+            "koszty_dodatkowe":       koszty_dodatkowe,
+            "suma_kosztow_dodatkowych": float(suma_kosztow),
+            "kwota_calkowita":        float(kwota_calkowita),
+            "odsetki_placeholder":    _FUNC_ODSETKI_SQL is None,
+            "obliczono_at":           datetime.now(timezone.utc).isoformat(),
+        },
+        app_code="debtors.monit_cost_preview",
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 7: GET /debtors/{id}/monit-history

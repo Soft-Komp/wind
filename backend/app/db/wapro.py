@@ -99,7 +99,66 @@ _COLS_ROZRACHUNKI = """
     CZY_ROZLICZONY,
     OstatniMonitRozrachunku
 """
+# ─────────────────────────────────────────────────────────────────────────────
+# Funkcja odsetek z bazy WAPRO
+#
+# TODO: Uzupełnij _FUNC_ODSETKI_SQL po otrzymaniu nazwy funkcji od szefa.
+#       Sygnatura oczekiwana: dbo.NazwaFunkcji(@ID_ROZRACHUNKU INT) → DECIMAL
+#       Przykład: _FUNC_ODSETKI_SQL = "dbo.FN_ObliczOdsetki"
+# ─────────────────────────────────────────────────────────────────────────────
+_FUNC_ODSETKI_SQL: str | None = None  # TODO: "dbo.NazwaFunkcjiOdsetek"
 
+_odsetki_logger = logging.getLogger(f"{__name__}.odsetki")
+
+
+async def get_odsetki_for_rozrachunki(
+    ids: list[int],
+) -> dict[int, Decimal]:
+    """
+    Wywołuje funkcję SQL dla każdego ID_ROZRACHUNKU i zwraca słownik
+    {id_rozrachunku: kwota_odsetek}.
+
+    Jeśli _FUNC_ODSETKI_SQL is None (placeholder niezapełniony) →
+    zwraca {id: Decimal("0.00")} dla wszystkich i loguje WARNING.
+
+    Jeśli funkcja SQL rzuci błąd dla konkretnego ID →
+    loguje ERROR i zwraca Decimal("0.00") dla tego ID (nie przerywa pętli).
+    """
+    if not ids:
+        return {}
+
+    if _FUNC_ODSETKI_SQL is None:
+        _odsetki_logger.warning(
+            "PLACEHOLDER: _FUNC_ODSETKI_SQL nie jest ustawiony — "
+            "odsetki zwracane jako 0.00 dla %d rozrachunków. "
+            "Ustaw nazwę funkcji SQL gdy szef ją poda.",
+            len(ids),
+        )
+        return {id_: Decimal("0.00") for id_ in ids}
+
+    wyniki: dict[int, Decimal] = {}
+
+    async with _pool.acquire() as conn:
+        for id_rozrachunku in ids:
+            try:
+                row = await conn.fetchrow(
+                    f"SELECT {_FUNC_ODSETKI_SQL}(?) AS Odsetki",
+                    id_rozrachunku,
+                )
+                odsetki = Decimal(str(row["Odsetki"] or "0")) if row else Decimal("0.00")
+                wyniki[id_rozrachunku] = odsetki
+                _odsetki_logger.debug(
+                    "Odsetki ID_ROZRACHUNKU=%d: %s", id_rozrachunku, odsetki
+                )
+            except Exception as exc:
+                _odsetki_logger.error(
+                    "Błąd obliczania odsetek dla ID_ROZRACHUNKU=%d: %s — "
+                    "zwracam 0.00",
+                    id_rozrachunku, exc,
+                )
+                wyniki[id_rozrachunku] = Decimal("0.00")
+
+    return wyniki
 
 # ---------------------------------------------------------------------------
 # Typy wejściowe dla zapytań — immutable dataclasses
@@ -244,8 +303,10 @@ class DebtorFilterParams:
                 )
 
 # Whitelisty dla filtrów daty — używane w obu dataclassach
-_VALID_DUE_DATE_MODES: frozenset[str] = frozenset({"exact", "up_to"})
-_VALID_PAID_FILTERS: frozenset[str] = frozenset({"unpaid_only", "all"})
+_VALID_DUE_DATE_MODES: frozenset[str]    = frozenset({"exact", "up_to"})
+_VALID_PAID_FILTERS: frozenset[str]      = frozenset({"unpaid_only", "all"})
+# Whitelist filtra przeterminowania — używana w InvoiceFilterParams
+_VALID_OVERDUE_FILTERS: frozenset[str]   = frozenset({"all", "overdue_only", "not_overdue"})
 
 
 @dataclass(frozen=True)
@@ -254,9 +315,12 @@ class InvoiceFilterParams:
     Parametry filtrowania faktur dla konkretnego kontrahenta.
 
     Pola nowe (filtr daty terminu płatności):
-        due_date      — filtr po TerminPlatnosci; None = brak filtra
-        due_date_mode — "exact" (TerminPlatnosci = ?) | "up_to" (TerminPlatnosci <= ?)
-        paid_filter   — "unpaid_only" (CZY_ROZLICZONY <> 2) | "all" (wszystkie faktury)
+        due_date       — filtr po TerminPlatnosci; None = brak filtra
+        due_date_mode  — "exact" (TerminPlatnosci = ?) | "up_to" (TerminPlatnosci <= ?)
+        paid_filter    — "unpaid_only" (CZY_ROZLICZONY <> 2) | "all" (wszystkie faktury)
+        overdue_filter — "all" (domyślnie) | "overdue_only" (DniPo > 0) |
+                         "not_overdue" (DniPo = 0 OR DniPo IS NULL)
+                         KONFLIKT z min_days_overdue > 0 → ValueError (HTTP 422)
     """
     kontrahent_id: int
     include_paid: bool = False      # False = tylko nieopłacone (rozliczony != 2)
@@ -265,6 +329,8 @@ class InvoiceFilterParams:
     due_date: Optional[date] = None
     due_date_mode: str = "up_to"
     paid_filter: str = "unpaid_only"
+    # Filtr kategoryczny przeterminowania
+    overdue_filter: str = "all"
     limit: int = 100
     offset: int = 0
     order_by: str = "TerminPlatnosci"
@@ -314,6 +380,23 @@ class InvoiceFilterParams:
             )
             object.__setattr__(self, "paid_filter", "unpaid_only")
 
+        # overdue_filter — whitelist
+        if self.overdue_filter not in _VALID_OVERDUE_FILTERS:
+            logger.warning(
+                "InvoiceFilterParams: nieprawidłowy overdue_filter=%r → fallback 'all'",
+                self.overdue_filter,
+            )
+            object.__setattr__(self, "overdue_filter", "all")
+
+        # Konflikt: not_overdue + min_days_overdue > 0 — logicznie sprzeczne
+        if self.overdue_filter == "not_overdue" and self.min_days_overdue > 0:
+            raise ValueError(
+                f"Konflikt parametrów: overdue_filter='not_overdue' jest sprzeczny "
+                f"z min_days_overdue={self.min_days_overdue}. "
+                "Faktury nieprzeteminowane mają DniPo=0 — nie mogą spełnić DniPo >= N>0. "
+                "Usuń min_days_overdue lub zmień overdue_filter."
+            )
+
         # due_date — sanity check zakresu dat
         if self.due_date is not None:
             if not isinstance(self.due_date, date):
@@ -338,6 +421,7 @@ class InvoiceFilterParams:
             "due_date":         self.due_date.isoformat() if self.due_date else None,
             "due_date_mode":    self.due_date_mode,
             "paid_filter":      self.paid_filter,
+            "overdue_filter":   self.overdue_filter,
             "limit":            self.limit,
             "offset":           self.offset,
             "order_by":         self.order_by,
@@ -1208,20 +1292,19 @@ async def get_debtors_stats() -> QueryResult:
 # ZAPYTANIE 3: Faktury kontrahenta (skw_rozrachunki_faktur)
 # ---------------------------------------------------------------------------
 
-def _build_invoices_query(
-    params: InvoiceFilterParams,
-) -> tuple[str, tuple[Any, ...]]:
-    conditions = ["ID_KONTRAHENTA = ?"]
+def _build_invoices_query(params: InvoiceFilterParams) -> tuple[str, tuple]:
+    """
+    Buduje zapytanie SELECT dla faktur dłużnika.
+    ...
+    """
+    conditions: list[str] = ["ID_KONTRAHENTA = ?"]
     query_params: list[Any] = [params.kontrahent_id]
 
     # ── Filtr opłacenia ────────────────────────────────────────────────────
-    # paid_filter ma priorytet — include_paid zachowany dla zgodności wstecznej
-    # (używany przez monit_service który nie przekazuje paid_filter).
     if params.paid_filter == "unpaid_only":
         conditions.append("CZY_ROZLICZONY <> 2")
     elif not params.include_paid:
         conditions.append("CZY_ROZLICZONY <> 2")
-    # paid_filter == "all" → brak klauzuli → wyświetlamy wszystkie
 
     # ── Filtr: tylko faktury X+ dni po terminie ────────────────────────────
     if params.min_days_overdue > 0:
@@ -1229,8 +1312,6 @@ def _build_invoices_query(
         query_params.append(params.min_days_overdue)
 
     # ── Filtr daty terminu płatności ──────────────────────────────────────
-    # Operator pochodzi WYŁĄCZNIE z _VALID_DUE_DATE_MODES (walidacja
-    # w __post_init__) — zero interpolacji stringa z frontendu do SQL.
     if params.due_date is not None:
         date_op = "=" if params.due_date_mode == "exact" else "<="
         conditions.append(f"TerminPlatnosci IS NOT NULL AND TerminPlatnosci {date_op} ?")
@@ -1255,6 +1336,89 @@ def _build_invoices_query(
     query_params.extend([params.offset, params.limit])
     return sql.strip(), tuple(query_params)
 
+def _build_invoices_where(
+    params: InvoiceFilterParams,
+) -> tuple[str, list[Any]]:
+    """
+    Buduje klauzulę WHERE i listę parametrów wspólną dla zapytań
+    data i count.  Wywoływana przez _build_invoices_query i _build_count_query.
+
+    Nigdy nie interpoluje wartości z frontendu do SQL — tylko operatory
+    z whitelistów (_VALID_DUE_DATE_MODES, _VALID_OVERDUE_FILTERS).
+    """
+    conditions: list[str] = ["ID_KONTRAHENTA = ?"]
+    query_params: list[Any] = [params.kontrahent_id]
+
+    # ── Filtr opłacenia ────────────────────────────────────────────────────
+    # paid_filter ma priorytet nad include_paid (backward compat dla monit_service)
+    if params.paid_filter == "unpaid_only":
+        conditions.append("CZY_ROZLICZONY <> 2")
+    elif not params.include_paid:
+        conditions.append("CZY_ROZLICZONY <> 2")
+    # paid_filter == "all" → brak klauzuli → wszystkie
+
+    # ── Filtr: tylko faktury X+ dni po terminie ────────────────────────────
+    if params.min_days_overdue > 0:
+        conditions.append("DniPo >= ?")
+        query_params.append(params.min_days_overdue)
+
+    # ── Filtr kategoryczny przeterminowania ───────────────────────────────
+    # Wartości chronione whitelistą _VALID_OVERDUE_FILTERS w __post_init__
+    # — zero interpolacji stringa z frontendu do SQL.
+    if params.overdue_filter == "overdue_only":
+        conditions.append("DniPo > 0")
+    elif params.overdue_filter == "not_overdue":
+        conditions.append("(DniPo = 0 OR DniPo IS NULL)")
+    # "all" → brak klauzuli
+
+    # ── Filtr daty terminu płatności ──────────────────────────────────────
+    # Operator pochodzi WYŁĄCZNIE z _VALID_DUE_DATE_MODES — walidacja
+    # w __post_init__. Zero interpolacji z frontendu do SQL.
+    if params.due_date is not None:
+        date_op = "=" if params.due_date_mode == "exact" else "<="
+        conditions.append(f"TerminPlatnosci IS NOT NULL AND TerminPlatnosci {date_op} ?")
+        query_params.append(params.due_date)
+
+    logger.debug(
+        "_build_invoices_where: kontrahent=%d paid=%s overdue_filter=%s "
+        "min_overdue=%d due_date=%s mode=%s — %d warunków",
+        params.kontrahent_id, params.paid_filter, params.overdue_filter,
+        params.min_days_overdue, params.due_date, params.due_date_mode,
+        len(conditions),
+    )
+
+    return "WHERE " + " AND ".join(conditions), query_params
+
+
+def _build_invoices_query(params: InvoiceFilterParams) -> tuple[str, tuple]:
+    """Buduje zapytanie SELECT (dane + paginacja) dla faktur dłużnika."""
+    where_clause, query_params = _build_invoices_where(params)
+    order_clause = f"ORDER BY {params.order_by} {params.order_dir}"
+
+    sql = f"""
+        SELECT {_COLS_ROZRACHUNKI}
+        FROM {SKW_ROZRACHUNKI_FAKTUR}
+        {where_clause}
+        {order_clause}
+        OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+    """
+    query_params.extend([params.offset, params.limit])
+    return sql.strip(), tuple(query_params)
+
+
+def _build_count_query(params: InvoiceFilterParams) -> tuple[str, tuple]:
+    """
+    Buduje zapytanie COUNT(*) dla faktur dłużnika — identyczne filtry co data query.
+    Używane przez get_invoices_for_debtor do obliczenia total_count.
+    """
+    where_clause, query_params = _build_invoices_where(params)
+
+    sql = f"""
+        SELECT COUNT(*) AS TotalCount
+        FROM {SKW_ROZRACHUNKI_FAKTUR}
+        {where_clause}
+    """
+    return sql.strip(), tuple(query_params)
 
 async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
     """
@@ -1289,25 +1453,20 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
     _diag_logger = logging.getLogger("windykacja.invoices_diag")
 
     try:
-        data_sql, data_params = _build_invoices_query(params)
+        data_sql, data_params   = _build_invoices_query(params)
+        count_sql, count_params = _build_count_query(params)
 
         # ── LOG: dokładne SQL wysyłane do bazy ───────────────────────────────
         logger.debug(
-            "get_invoices_for_debtor SQL [%s]:\n  DATA SQL: %s\n  DATA PARAMS: %s",
-            query_id, data_sql, data_params,
+            "get_invoices_for_debtor SQL [%s]:\n"
+            "  DATA SQL:    %s\n  DATA PARAMS:  %s\n"
+            "  COUNT SQL:   %s\n  COUNT PARAMS: %s",
+            query_id, data_sql, data_params, count_sql, count_params,
         )
-
-        count_sql = f"""
-            SELECT COUNT(*) AS TotalCount
-            FROM {SKW_ROZRACHUNKI_FAKTUR}
-            WHERE ID_KONTRAHENTA = ?
-            {' AND CZY_ROZLICZONY <> 2' if not params.include_paid else ''}
-            {'AND DniPo >= ' + str(params.min_days_overdue) if params.min_days_overdue > 0 else ''}
-            """
 
         _diag_logger.info(
             "[%s] COUNT SQL: %s | PARAMS: %s",
-            query_id, count_sql.strip(), (params.kontrahent_id,),
+            query_id, count_sql, count_params,
         )
 
         rows_task = _run_in_executor(
@@ -1316,8 +1475,8 @@ async def get_invoices_for_debtor(params: InvoiceFilterParams) -> QueryResult:
         )
         count_task = _run_in_executor(
             _execute_query_sync,
-            count_sql.strip(),
-            (params.kontrahent_id,),
+            count_sql,
+            count_params,
             f"{query_id}_count",
             "invoices_count",
         )

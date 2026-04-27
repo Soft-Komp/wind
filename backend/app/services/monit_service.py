@@ -1007,17 +1007,60 @@ async def send_bulk(
                 extra={"debtor_id": debtor_id, "error": str(exc)}
             )
             debtor_contacts[debtor_id] = ""
-    # Krok 3: INSERT pending records do MonitHistory
+    # Krok 3: Pobierz koszty dodatkowe dla kanału (raz dla całego bulk)
+    from app.services import koszt_service as _koszt_service
+    from app.db.wapro import get_odsetki_for_rozrachunki as _get_odsetki
+    from decimal import Decimal as _D
+
+    try:
+        koszty_dla_kanalu = await _koszt_service.get_active_for_channel(
+            db, redis, request.monit_type
+        )
+        suma_kosztow_dodatkowych = _D(str(
+            sum(k["kwota"] for k in koszty_dla_kanalu)
+        ))
+    except Exception as exc:
+        logger.warning(
+            "Nie udało się pobrać kosztów dodatkowych dla kanału %s: %s — "
+            "zapisuję 0.00",
+            request.monit_type, exc,
+        )
+        suma_kosztow_dodatkowych = _D("0.00")
+        
     now = datetime.now(timezone.utc)
     monit_ids: list[int] = []
     for debtor_id in valid_ids:
         subject = request.custom_subject or template_subject
-        new_monit = MonitHistory(
+            # Oblicz odsetki dla faktur tego dłużnika
+        debtor_invoice_ids = (
+            {int(k): v for k, v in request.invoice_ids_per_debtor.items()}
+            .get(debtor_id, [])
+            if request.invoice_ids_per_debtor else []
+        )
+        odsetki_map = {}
+        if debtor_invoice_ids:
+            try:
+                odsetki_map = await _get_odsetki(debtor_invoice_ids)
+            except Exception as exc:
+                logger.warning(
+                    "Błąd obliczania odsetek dla debtor=%d: %s — "
+                    "zapisuję 0.00",
+                    debtor_id, exc,
+                )
+        odsetki_total = _D(str(sum(odsetki_map.values()))) if odsetki_map else _D("0.00")
+        total_debt    = _D(str(debtor_info.get("SumaDlugu") or "0"))
+        kwota_calkowita = total_debt + odsetki_total + suma_kosztow_dodatkowych
+
+        monit = MonitHistory(
             id_kontrahenta=debtor_id,
             id_user=triggered_by_user_id,
             monit_type=request.monit_type,
             template_id=request.template_id,
             status="pending",
+            total_debt=float(total_debt),
+            odsetki_total=float(odsetki_total),
+            koszty_dodatkowe_total=float(suma_kosztow_dodatkowych),
+            kwota_calkowita=float(kwota_calkowita),
             recipient=debtor_contacts.get(debtor_id, ""),
             subject=subject,
             scheduled_at=request.scheduled_at,

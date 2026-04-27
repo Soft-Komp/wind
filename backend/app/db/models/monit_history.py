@@ -115,8 +115,17 @@ class MonitHistory(Base):
         "RetryCount", Integer, nullable=False, default=0, server_default="0",
     )
     cost: Mapped[Decimal | None] = mapped_column(
-        "Cost", Numeric(10, 4), nullable=True,
-        comment="Koszt wysyłki SMS/email",
+        "Cost", Numeric(10, 4), nullable=True
+    )
+    # ── Kalkulacja kosztów przy wysyłce (wypełniane przez monit_service) ────
+    odsetki_total: Mapped[Decimal | None] = mapped_column(
+        "OdsetkiTotal", Numeric(18, 2), nullable=True
+    )
+    koszty_dodatkowe_total: Mapped[Decimal | None] = mapped_column(
+        "KosztyDodatkoweTotal", Numeric(18, 2), nullable=True
+    )
+    kwota_calkowita: Mapped[Decimal | None] = mapped_column(
+        "KwotaCalkowita", Numeric(18, 2), nullable=True
     )
     # ── DODANE ────────────────────────────────────────────────────────────────
     is_active: Mapped[bool] = mapped_column(

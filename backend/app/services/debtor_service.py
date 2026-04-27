@@ -742,6 +742,7 @@ async def get_invoices(
     due_date: Optional[date] = None,
     due_date_mode: str = "up_to",
     paid_filter: str = "unpaid_only",
+    overdue_filter: str = "all",
     requesting_user_id: Optional[int] = None,
 ) -> dict:
     """
@@ -784,6 +785,9 @@ async def get_invoices(
     if due_date is not None:
         cache_key = f"{cache_key}:dd{due_date.isoformat()}_{due_date_mode}"
     cache_key = f"{cache_key}:pf{paid_filter}"
+    # Filtr przeterminowania — wpływa na wynik
+    if overdue_filter != "all":
+        cache_key = f"{cache_key}:of{overdue_filter}"
     cached = await _get_redis_cache(redis, cache_key)
     if cached is not None:
         logger.debug("Faktury dłużnika pobrane z cache", extra={"debtor_id": debtor_id})
@@ -804,6 +808,7 @@ async def get_invoices(
             due_date=due_date,
             due_date_mode=due_date_mode,
             paid_filter=paid_filter,
+            overdue_filter=overdue_filter,
             limit=page_size,
             offset=(page - 1) * page_size,
             order_by=order_by_sql,
