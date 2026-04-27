@@ -55,7 +55,10 @@ _SQL_LIVE_CHECKSUMS = """
 SELECT
     SCHEMA_NAME(o.schema_id)        AS schema_name,
     o.name                          AS object_name,
-    o.type_desc                     AS object_type,
+    CASE
+        WHEN o.type_desc = 'SQL_SCALAR_FUNCTION' THEN N'FUNCTION'
+        ELSE o.type_desc
+    END                 AS object_type,
     CHECKSUM(m.definition)          AS checksum_value,
     o.modify_date                   AS last_modified,
     LEN(m.definition)               AS definition_length,
@@ -67,13 +70,17 @@ WHERE (
     SCHEMA_NAME(o.schema_id) = 'dbo_ext'
 )
 OR (
-    /* dbo: nasze widoki VIEW_* i skw_* — wyklucza setki procedur WAPRO */
     SCHEMA_NAME(o.schema_id) = 'dbo'
     AND o.type_desc = 'VIEW'
     AND (
         o.name LIKE 'VIEW[_]%'
         OR o.name LIKE 'skw[_]%'
     )
+)
+OR (
+    SCHEMA_NAME(o.schema_id) = 'dbo'
+    AND o.type_desc = 'SQL_SCALAR_FUNCTION'
+    AND o.name LIKE 'skw[_]%'
 )
 ORDER BY schema_name, object_name
 """

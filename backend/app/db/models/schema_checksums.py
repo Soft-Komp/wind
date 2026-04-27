@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Literal type dla ObjectType — kompletna lista dozwolonych wartości
 # Zmiana tutaj = zmiana w DDL (CHECK constraint) + schema_integrity.py
-ObjectTypeEnum = Literal["VIEW", "PROCEDURE", "INDEX"]
+ObjectTypeEnum = Literal["VIEW", "PROCEDURE", "INDEX", "FUNCTION"]
 
 # Literal type dla SchemaName — tylko te dwa schematy są monitorowane
 SchemaNameEnum = Literal["dbo", "dbo_ext"]

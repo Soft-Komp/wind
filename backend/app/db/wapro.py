@@ -106,58 +106,116 @@ _COLS_ROZRACHUNKI = """
 #       Sygnatura oczekiwana: dbo.NazwaFunkcji(@ID_ROZRACHUNKU INT) → DECIMAL
 #       Przykład: _FUNC_ODSETKI_SQL = "dbo.FN_ObliczOdsetki"
 # ─────────────────────────────────────────────────────────────────────────────
-_FUNC_ODSETKI_SQL: str | None = None  # TODO: "dbo.NazwaFunkcjiOdsetek"
+# Funkcja SQL odsetek — dbo.skw_Func_OdsetkiRozrachunku(@idrozrachunku, @do_daty)
+# Parametry: NUMERIC(18,0), DATE nullable → zwraca DECIMAL(15,2)
+_FUNC_ODSETKI: str = "dbo.skw_Func_OdsetkiRozrachunku"
 
 _odsetki_logger = logging.getLogger(f"{__name__}.odsetki")
 
 
-async def get_odsetki_for_rozrachunki(
+def _execute_odsetki_sync(
     ids: list[int],
+    do_daty: "date | None",
+    query_id: str,
 ) -> dict[int, Decimal]:
     """
-    Wywołuje funkcję SQL dla każdego ID_ROZRACHUNKU i zwraca słownik
-    {id_rozrachunku: kwota_odsetek}.
+    Synchroniczne wywołanie funkcji SQL odsetek dla listy ID_ROZRACHUNKU.
+    Jedno zapytanie dla wszystkich ID — nie N razy.
+    Wywoływane w thread pool executor.
 
-    Jeśli _FUNC_ODSETKI_SQL is None (placeholder niezapełniony) →
-    zwraca {id: Decimal("0.00")} dla wszystkich i loguje WARNING.
-
-    Jeśli funkcja SQL rzuci błąd dla konkretnego ID →
-    loguje ERROR i zwraca Decimal("0.00") dla tego ID (nie przerywa pętli).
+    SQL:
+        SELECT r.ID_ROZRACHUNKU,
+               dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?) AS Odsetki
+        FROM dbo.skw_rozrachunki_faktur AS r
+        WHERE r.ID_ROZRACHUNKU IN (?, ?, ...)
     """
     if not ids:
         return {}
 
-    if _FUNC_ODSETKI_SQL is None:
-        _odsetki_logger.warning(
-            "PLACEHOLDER: _FUNC_ODSETKI_SQL nie jest ustawiony — "
-            "odsetki zwracane jako 0.00 dla %d rozrachunków. "
-            "Ustaw nazwę funkcji SQL gdy szef ją poda.",
-            len(ids),
+    # Buduj IN (?, ?, ...) — pyodbc nie obsługuje list bezpośrednio
+    placeholders = ", ".join("?" for _ in ids)
+    sql = (
+        f"SELECT r.ID_ROZRACHUNKU, "
+        f"{_FUNC_ODSETKI}(r.ID_ROZRACHUNKU, ?) AS Odsetki "
+        f"FROM dbo.skw_rozrachunki_faktur AS r "
+        f"WHERE r.ID_ROZRACHUNKU IN ({placeholders})"
+    )
+    # Parametry: najpierw @do_daty (NULL = do dziś), potem lista ID
+    params = (do_daty,) + tuple(ids)
+
+    try:
+        rows = _execute_query_sync(sql, params, query_id, "odsetki")
+    except Exception as exc:
+        _odsetki_logger.error(
+            "Błąd zapytania odsetek [%s]: %s — zwracam 0.00 dla wszystkich",
+            query_id, exc,
+            extra={"query_id": query_id, "ids_count": len(ids), "error": str(exc)},
         )
         return {id_: Decimal("0.00") for id_ in ids}
 
+    # Buduj słownik wyników
     wyniki: dict[int, Decimal] = {}
+    for row in rows:
+        id_roz   = int(row.get("ID_ROZRACHUNKU") or 0)
+        odsetki  = Decimal(str(row.get("Odsetki") or "0.00"))
+        wyniki[id_roz] = odsetki
+        _odsetki_logger.debug(
+            "Odsetki ID_ROZRACHUNKU=%d do_daty=%s: %s PLN",
+            id_roz, do_daty, odsetki,
+        )
 
-    async with _pool.acquire() as conn:
-        for id_rozrachunku in ids:
-            try:
-                row = await conn.fetchrow(
-                    f"SELECT {_FUNC_ODSETKI_SQL}(?) AS Odsetki",
-                    id_rozrachunku,
-                )
-                odsetki = Decimal(str(row["Odsetki"] or "0")) if row else Decimal("0.00")
-                wyniki[id_rozrachunku] = odsetki
-                _odsetki_logger.debug(
-                    "Odsetki ID_ROZRACHUNKU=%d: %s", id_rozrachunku, odsetki
-                )
-            except Exception as exc:
-                _odsetki_logger.error(
-                    "Błąd obliczania odsetek dla ID_ROZRACHUNKU=%d: %s — "
-                    "zwracam 0.00",
-                    id_rozrachunku, exc,
-                )
-                wyniki[id_rozrachunku] = Decimal("0.00")
+    # Uzupełnij brakujące (np. ID_ROZRACHUNKU nie znaleziony w widoku)
+    for id_ in ids:
+        if id_ not in wyniki:
+            _odsetki_logger.warning(
+                "ID_ROZRACHUNKU=%d nie zwrócił odsetki — ustawiam 0.00 "
+                "(możliwe: faktura nie w skw_rozrachunki_faktur)",
+                id_,
+            )
+            wyniki[id_] = Decimal("0.00")
 
+    return wyniki
+
+
+async def get_odsetki_for_rozrachunki(
+    ids: list[int],
+    do_daty: "date | None" = None,
+) -> dict[int, Decimal]:
+    """
+    Oblicza odsetki dla listy ID_ROZRACHUNKU.
+
+    Parametry:
+        ids:     Lista ID_ROZRACHUNKU z dbo.skw_rozrachunki_faktur
+        do_daty: Data końcowa liczenia odsetek. None = do dziś (GETDATE()).
+
+    Zwraca:
+        Słownik {id_rozrachunku: kwota_odsetek_decimal}
+
+    Implementacja:
+        Jedno zapytanie SQL dla wszystkich IDs naraz.
+        Uruchamiane w thread pool executor (pyodbc synchroniczne).
+    """
+    if not ids:
+        return {}
+
+    query_id = f"odsetki_{id(ids):x}"
+    _odsetki_logger.info(
+        "Obliczanie odsetek: %d rozrachunków, do_daty=%s [%s]",
+        len(ids), do_daty, query_id,
+    )
+
+    wyniki = await _run_in_executor(
+        _execute_odsetki_sync,
+        ids,
+        do_daty,
+        query_id,
+    )
+
+    suma = sum(wyniki.values())
+    _odsetki_logger.info(
+        "Odsetki obliczone [%s]: %d rozrachunków, suma=%.2f PLN",
+        query_id, len(wyniki), float(suma),
+    )
     return wyniki
 
 # ---------------------------------------------------------------------------

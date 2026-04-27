@@ -35,7 +35,7 @@ from typing import Optional
 import orjson
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from app.db.wapro import _FUNC_ODSETKI_SQL
+from app.db.wapro import _FUNC_ODSETKI
 
 from app.core.dependencies import (
     DB,
@@ -543,6 +543,23 @@ async def monit_cost_preview(
     channel     = (body.get("channel") or "").strip().lower()
     invoice_ids = body.get("invoice_ids") or []
 
+    # Opcjonalna data końcowa odsetek — None = do dziś
+    do_daty_raw = body.get("do_daty")
+    do_daty: "date | None" = None
+    if do_daty_raw:
+        try:
+            from datetime import date as _date
+            do_daty = _date.fromisoformat(str(do_daty_raw))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code":    "validation.error",
+                    "message": "Nieprawidłowy format do_daty — oczekiwany ISO 8601 (YYYY-MM-DD)",
+                    "errors":  [{"field": "do_daty", "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+
     # ── Walidacja wejścia ────────────────────────────────────────────────────
     _errors = []
     if channel not in ("email", "sms", "print"):
@@ -604,7 +621,7 @@ async def monit_cost_preview(
             )
 
         # ── Oblicz odsetki per faktura ────────────────────────────────────────
-        odsetki_map = await get_odsetki_for_rozrachunki(clean_ids)
+        odsetki_map = await get_odsetki_for_rozrachunki(clean_ids, do_daty=do_daty)
 
         # ── Pobierz aktywne koszty dodatkowe dla kanału ───────────────────────
         koszty_dodatkowe = await koszt_service.get_active_for_channel(db, redis, channel)
@@ -684,7 +701,8 @@ async def monit_cost_preview(
             "koszty_dodatkowe":       koszty_dodatkowe,
             "suma_kosztow_dodatkowych": float(suma_kosztow),
             "kwota_calkowita":        float(kwota_calkowita),
-            "odsetki_placeholder":    _FUNC_ODSETKI_SQL is None,
+            "odsetki_placeholder":    False,
+            "do_daty":                do_daty.isoformat() if do_daty else None,
             "obliczono_at":           datetime.now(timezone.utc).isoformat(),
         },
         app_code="debtors.monit_cost_preview",
