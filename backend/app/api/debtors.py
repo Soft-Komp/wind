@@ -53,6 +53,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# =============================================================================
+# Pomocniki sanityzacji danych wejściowych
+# =============================================================================
+
+import re as _re
+import orjson as _orjson
+
+# Regex dla numerów faktur: litery, cyfry, /, -, \, spacja, kropka, podkreślenie
+_INVOICE_NUMBER_RE = _re.compile(r"^[\w\s/\\.,-]{1,100}$", _re.UNICODE)
+_MAX_INVOICE_NUMBERS = 100   # limit per żądanie
+
+
+def _sanitize_invoice_numbers(raw_list: list) -> tuple[list[str], list[str]]:
+    """
+    Sanityzuje i waliduje listę numerów faktur z frontendu.
+
+    Returns:
+        (clean_list, rejected_list)
+        - clean_list:    zaakceptowane, oczyszczone numery
+        - rejected_list: odrzucone (puste, za długie, niedozwolone znaki)
+    """
+    clean: list[str] = []
+    rejected: list[str] = []
+
+    for item in raw_list:
+        if not isinstance(item, (str, int, float)):
+            rejected.append(str(item)[:50])
+            continue
+        s = str(item).strip()
+        if not s:
+            continue  # pomiń puste cichy
+        if len(s) > 100:
+            rejected.append(s[:50] + "…")
+            continue
+        if not _INVOICE_NUMBER_RE.match(s):
+            rejected.append(s[:50])
+            continue
+        clean.append(s)
+
+    # Deduplikacja — zachowaj kolejność
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for n in clean:
+        if n not in seen:
+            seen.add(n)
+            deduped.append(n)
+
+    return deduped, rejected
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 1: GET /debtors
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,12 +348,148 @@ async def send_bulk_monits(
             detail={"code": "validation.error", "message": "Błąd walidacji", "errors": _errors},
         )
 
+    # ── Obsługa invoice_numbers_per_debtor (alternatywa dla invoice_ids_per_debtor) ──
+    _raw_ids_per_debtor    = body.get("invoice_ids_per_debtor") or None
+    _raw_nums_per_debtor   = body.get("invoice_numbers_per_debtor")
+    _final_ids_per_debtor  = _raw_ids_per_debtor  # domyślnie — może zostać None
+
+    if _raw_nums_per_debtor is not None:
+        if _raw_ids_per_debtor:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.conflict",
+                    "message": "Nie można podać jednocześnie invoice_ids_per_debtor "
+                               "i invoice_numbers_per_debtor.",
+                },
+            )
+        if not isinstance(_raw_nums_per_debtor, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "invoice_numbers_per_debtor musi być słownikiem "
+                               "{debtor_id: [NumerFaktury, ...]}",
+                },
+            )
+
+        # Normalizuj klucze str → int + sanityzuj numery
+        _nums_map: dict[int, list[str]] = {}
+        try:
+            for _k, _v in _raw_nums_per_debtor.items():
+                _did = int(_k)
+                if isinstance(_v, list):
+                    _clean, _rej = _sanitize_invoice_numbers(_v)
+                    if _rej:
+                        logger.warning(
+                            "send_bulk: odrzucone invoice_numbers dla dłużnika",
+                            extra={"debtor_id": _did, "rejected": _rej},
+                        )
+                    if _clean:
+                        _nums_map[_did] = _clean
+        except (ValueError, TypeError) as _ke:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": f"invoice_numbers_per_debtor: nieprawidłowy klucz: {_ke}",
+                },
+            )
+
+        if not _nums_map:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "invoice_numbers_per_debtor nie zawiera prawidłowych danych",
+                },
+            )
+
+        # Rozwiąż wszystkich dłużników współbieżnie
+        from app.db.wapro import resolve_invoice_numbers as _resolve_nums
+        import asyncio as _asyncio
+
+        _gather_results = await _asyncio.gather(
+            *[
+                _resolve_nums(debtor_id=_did, invoice_numbers=_nums)
+                for _did, _nums in _nums_map.items()
+            ],
+            return_exceptions=True,
+        )
+
+        _resolved_map: dict[int, list[int]] = {}
+        _resolution_errors: list[dict] = []
+
+        for _did, _res in zip(_nums_map.keys(), _gather_results):
+            if isinstance(_res, Exception):
+                logger.error(
+                    "send_bulk: resolve_invoice_numbers błąd dla dłużnika",
+                    extra={"debtor_id": _did, "error": str(_res)},
+                )
+                _resolution_errors.append({"debtor_id": _did, "error": str(_res)})
+                continue
+            _r_ids, _r_not_found, _ = _res
+            if not _r_ids:
+                _resolution_errors.append({
+                    "debtor_id":       _did,
+                    "error":           "Żadna faktura nie znaleziona",
+                    "invoice_numbers": _nums_map[_did],
+                })
+                continue
+            if _r_not_found:
+                logger.warning(
+                    "send_bulk: część invoice_numbers nie znaleziona",
+                    extra={"debtor_id": _did, "not_found": _r_not_found},
+                )
+            _resolved_map[_did] = _r_ids
+
+        if _resolution_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "send_bulk.invoice_resolution_failed",
+                    "message": "Część faktur nie mogła zostać rozwiązana.",
+                    "errors":  _resolution_errors,
+                },
+            )
+
+        _final_ids_per_debtor = _resolved_map
+        logger.info(
+            "send_bulk: invoice_numbers_per_debtor rozwiązane",
+            extra={
+                "debtors_resolved": len(_resolved_map),
+                "total_ids":        sum(len(v) for v in _resolved_map.values()),
+            },
+        )
+
     try:
+        # Parsuj flagi opcjonalne
+        _inc_odsetki_bulk = bool(body.get("include_odsetki", True))
+        _inc_koszty_bulk  = bool(body.get("include_koszty", True))
+        _do_daty_bulk: "date | None" = None
+        _do_daty_raw_bulk = body.get("do_daty")
+        if _do_daty_raw_bulk:
+            try:
+                from datetime import date as _date_cls
+                _do_daty_bulk = _date_cls.fromisoformat(str(_do_daty_raw_bulk))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format do_daty — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "do_daty", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+
         bulk_request = monit_service.MonitBulkRequest(
             debtor_ids=debtor_ids,
             monit_type=channel,
             template_id=template_id,
-            invoice_ids_per_debtor=body.get("invoice_ids_per_debtor") or None,
+            invoice_ids_per_debtor=_final_ids_per_debtor,
+            include_odsetki=_inc_odsetki_bulk,
+            include_koszty=_inc_koszty_bulk,
+            do_daty=_do_daty_bulk,
         )
         result = await monit_service.send_bulk(
             db=db,
@@ -555,10 +741,14 @@ async def monit_cost_preview(
                 status_code=422,
                 detail={
                     "code":    "validation.error",
-                    "message": "Nieprawidłowy format do_daty — oczekiwany ISO 8601 (YYYY-MM-DD)",
+                    "message": "Nieprawidłowy format do_daty — oczekiwany ISO: YYYY-MM-DD",
                     "errors":  [{"field": "do_daty", "message": "Format: YYYY-MM-DD"}],
                 },
             )
+
+    # Flagi — czy uwzględniać odsetki i koszty w kalkulacji
+    _include_odsetki = bool(body.get("include_odsetki", True))
+    _include_koszty  = bool(body.get("include_koszty", True))
 
     # ── Walidacja wejścia ────────────────────────────────────────────────────
     _errors = []
@@ -620,11 +810,18 @@ async def monit_cost_preview(
                 },
             )
 
-        # ── Oblicz odsetki per faktura ────────────────────────────────────────
-        odsetki_map = await get_odsetki_for_rozrachunki(clean_ids, do_daty=do_daty)
+        # ── Oblicz odsetki per faktura (tylko gdy flaga włączona) ─────────────
+        if _include_odsetki:
+            odsetki_map = await get_odsetki_for_rozrachunki(clean_ids, do_daty=do_daty)
+        else:
+            from decimal import Decimal as _Dec
+            odsetki_map = {id_: _Dec("0.00") for id_ in clean_ids}
 
         # ── Pobierz aktywne koszty dodatkowe dla kanału ───────────────────────
-        koszty_dodatkowe = await koszt_service.get_active_for_channel(db, redis, channel)
+        if _include_koszty:
+            koszty_dodatkowe = await koszt_service.get_active_for_channel(db, redis, channel)
+        else:
+            koszty_dodatkowe = []
 
     except HTTPException:
         raise
@@ -671,14 +868,16 @@ async def monit_cost_preview(
             "odsetki":        float(odsetki),
         })
 
-    suma_kosztow = D(str(sum(k["kwota"] for k in koszty_dodatkowe)))
+    suma_kosztow    = D(str(sum(k["kwota"] for k in koszty_dodatkowe)))
     kwota_calkowita = suma_dlugu + suma_odsetek + suma_kosztow
 
     logger.info(
         "monit-cost-preview: debtor=%d channel=%s faktury=%d "
-        "dlug=%.2f odsetki=%.2f koszty=%.2f calkowita=%.2f",
+        "dlug=%.2f odsetki=%.2f koszty=%.2f calkowita=%.2f "
+        "include_odsetki=%s include_koszty=%s",
         debtor_id, channel, len(clean_ids),
         suma_dlugu, suma_odsetek, suma_kosztow, kwota_calkowita,
+        _include_odsetki, _include_koszty,
         extra={
             "debtor_id":       debtor_id,
             "channel":         channel,
@@ -687,23 +886,42 @@ async def monit_cost_preview(
             "suma_odsetek":    float(suma_odsetek),
             "suma_kosztow":    float(suma_kosztow),
             "kwota_calkowita": float(kwota_calkowita),
+            "include_odsetki": _include_odsetki,
+            "include_koszty":  _include_koszty,
+            "do_daty":         str(do_daty) if do_daty else None,
             "user_id":         current_user.id_user,
         },
     )
 
     return BaseResponse.ok(
         data={
-            "debtor_id":              debtor_id,
-            "channel":                channel,
-            "faktury":                pozycje,
-            "suma_dlugu":             float(suma_dlugu),
-            "suma_odsetek":           float(suma_odsetek),
-            "koszty_dodatkowe":       koszty_dodatkowe,
-            "suma_kosztow_dodatkowych": float(suma_kosztow),
-            "kwota_calkowita":        float(kwota_calkowita),
-            "odsetki_placeholder":    False,
-            "do_daty":                do_daty.isoformat() if do_daty else None,
-            "obliczono_at":           datetime.now(timezone.utc).isoformat(),
+            "debtor_id":   debtor_id,
+            "channel":     channel,
+            "obliczono_at": datetime.now(timezone.utc).isoformat(),
+            # Parametry kalkulacji
+            "parametry": {
+                "include_odsetki": _include_odsetki,
+                "include_koszty":  _include_koszty,
+                "do_daty":         do_daty.isoformat() if do_daty else None,
+            },
+            # Pozycje faktur ze szczegółami
+            "pozycje": pozycje,
+            # Koszty dodatkowe kanału (pusta lista gdy include_koszty=false)
+            "koszty_dodatkowe": [
+                {
+                    "nazwa": k.get("nazwa") or k.get("NazwaKosztu") or "",
+                    "kwota": float(k["kwota"]),
+                    "typ":   k.get("typ_monitu") or k.get("TypMonitu") or channel,
+                }
+                for k in koszty_dodatkowe
+            ],
+            # Podsumowanie finansowe
+            "podsumowanie": {
+                "suma_dlugu":      float(suma_dlugu),
+                "suma_odsetek":    float(suma_odsetek) if _include_odsetki else None,
+                "suma_kosztow":    float(suma_kosztow) if _include_koszty  else None,
+                "kwota_calkowita": float(kwota_calkowita),
+            },
         },
         app_code="debtors.monit_cost_preview",
     )
@@ -812,15 +1030,117 @@ async def preview_monit_pdf(
     from app.services import monit_service
 
     body = await _parse_body(request)
-    template_id = body.get("template_id")
-    channel = (body.get("channel") or "email").strip().lower()
 
+    # ── Walidacja pól wymaganych ──────────────────────────────────────────────
+    template_id = body.get("template_id")
+    channel     = (body.get("channel") or "email").strip().lower()
+
+    _errors: list[dict] = []
     if not template_id:
+        _errors.append({"field": "template_id", "message": "Pole wymagane"})
+    if channel not in ("email", "sms", "print"):
+        _errors.append({"field": "channel",
+                        "message": "Dozwolone: email, sms, print"})
+    if _errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "validation.error", "message": "Brak wymaganych pól",
-                    "errors": [{"field": "template_id", "message": "Pole wymagane"}]},
+            detail={"code": "validation.error",
+                    "message": "Brak lub błędne wymagane pola",
+                    "errors": _errors},
         )
+
+    # ── Sanityzacja invoice_numbers (opcjonalne) ──────────────────────────────
+    _raw_numbers = body.get("invoice_numbers")
+    _invoice_numbers: list[str] | None = None
+
+    if _raw_numbers is not None:
+        if not isinstance(_raw_numbers, list):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "invoice_numbers musi być listą",
+                    "errors":  [{"field": "invoice_numbers",
+                                 "message": "Oczekiwana lista stringów"}],
+                },
+            )
+        if len(_raw_numbers) > _MAX_INVOICE_NUMBERS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": f"invoice_numbers: max {_MAX_INVOICE_NUMBERS} elementów",
+                    "errors":  [{"field": "invoice_numbers",
+                                 "message": f"Podano {len(_raw_numbers)}, "
+                                            f"limit: {_MAX_INVOICE_NUMBERS}"}],
+                },
+            )
+        _clean, _rejected = _sanitize_invoice_numbers(_raw_numbers)
+
+        if _rejected:
+            logger.warning(
+                "preview_monit_pdf: odrzucone invoice_numbers po sanityzacji",
+                extra={
+                    "debtor_id":  debtor_id,
+                    "rejected":   _rejected,
+                    "accepted":   _clean,
+                    "request_id": request_id,
+                },
+            )
+
+        if not _clean and _raw_numbers:
+            # Podano listę, ale wszystkie elementy były nieprawidłowe
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.invoice_numbers_invalid",
+                    "message": "Wszystkie podane numery faktur mają nieprawidłowy format",
+                    "errors":  [{"field": "invoice_numbers",
+                                 "message": "Dozwolone znaki: litery, cyfry, "
+                                            "/, -, \\, spacja, kropka. Max 100 znaków."}],
+                    "rejected": _rejected,
+                },
+            )
+
+        _invoice_numbers = _clean if _clean else None
+
+    # ── Parsowanie flag opcjonalnych ──────────────────────────────────────────
+    _include_odsetki = bool(body.get("include_odsetki", True))
+    _include_koszty  = bool(body.get("include_koszty", True))
+
+    # data końcowa odsetek — format ISO: "2026-05-01"
+    _do_daty_preview: "date | None" = None
+    _do_daty_raw = body.get("do_daty")
+    if _do_daty_raw:
+        try:
+            from datetime import date as _date_cls
+            _do_daty_preview = _date_cls.fromisoformat(str(_do_daty_raw))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "Nieprawidłowy format do_daty — oczekiwany ISO: YYYY-MM-DD",
+                    "errors":  [{"field": "do_daty",
+                                 "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+
+    logger.info(
+        "preview_monit_pdf żądanie",
+        extra={
+            "debtor_id":        debtor_id,
+            "template_id":      template_id,
+            "channel":          channel,
+            "invoice_numbers":  _invoice_numbers,
+            "invoice_count":    len(_invoice_numbers) if _invoice_numbers else None,
+            "include_odsetki":  _include_odsetki,
+            "include_koszty":   _include_koszty,
+            "do_daty":          str(_do_daty_preview) if _do_daty_preview else None,
+            "user_id":          current_user.id if hasattr(current_user, "id") else None,
+            "request_id":       request_id,
+        },
+    )
 
     try:
         pdf_bytes = await monit_service.generate_pdf_preview(
@@ -830,8 +1150,24 @@ async def preview_monit_pdf(
             debtor_id=debtor_id,
             template_id=template_id,
             channel=channel,
+            invoice_numbers=_invoice_numbers,
+            include_odsetki=_include_odsetki,
+            include_koszty=_include_koszty,
+            do_daty=_do_daty_preview,
         )
     except Exception as exc:
+        # MonitValidationError z powodu invoice_numbers → 422 ze szczegółami
+        from app.services.monit_service import MonitValidationError
+        if isinstance(exc, MonitValidationError) and _invoice_numbers:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":            "preview.invoice_not_found",
+                    "message":         str(exc),
+                    "invoice_numbers": _invoice_numbers,
+                    "debtor_id":       debtor_id,
+                },
+            )
         _raise_from_monit_error(exc)
 
     filename = f"monit_preview_{debtor_id}_{template_id}.pdf"
@@ -894,6 +1230,108 @@ async def send_monit(
             pass
     invoice_ids = list(dict.fromkeys(invoice_ids))  # deduplikacja z zachowaniem kolejności
 
+    # ── Alternatywa: invoice_numbers (NumerFaktury jako stringi) ─────────────
+    # Nie można podać obu jednocześnie. Jeśli invoice_numbers podane,
+    # rozwiązujemy je do ID_ROZRACHUNKU i nadpisujemy invoice_ids.
+    _raw_invoice_numbers = body.get("invoice_numbers")
+    if _raw_invoice_numbers is not None:
+        if invoice_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.conflict",
+                    "message": "Nie można podać jednocześnie invoice_ids i invoice_numbers.",
+                },
+            )
+        if not isinstance(_raw_invoice_numbers, list):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "invoice_numbers musi być listą stringów",
+                    "errors":  [{"field": "invoice_numbers",
+                                 "message": "Oczekiwana lista NumerFaktury"}],
+                },
+            )
+
+        _clean_nums, _rejected_nums = _sanitize_invoice_numbers(_raw_invoice_numbers)
+
+        if _rejected_nums:
+            logger.warning(
+                "send_monit: odrzucone invoice_numbers po sanityzacji",
+                extra={
+                    "debtor_id": debtor_id,
+                    "rejected":  _rejected_nums,
+                    "accepted":  _clean_nums,
+                    "request_id": request_id,
+                },
+            )
+
+        if not _clean_nums:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":     "validation.invoice_numbers_invalid",
+                    "message":  "Brak prawidłowych numerów faktur po sanityzacji",
+                    "rejected": _rejected_nums,
+                    "errors":   [{"field": "invoice_numbers",
+                                  "message": "Dozwolone: litery, cyfry, "
+                                             "/, -, \\, spacja, kropka. Max 100 znaków."}],
+                },
+            )
+
+        try:
+            from app.db.wapro import resolve_invoice_numbers as _resolve_nums
+            _resolved_ids, _not_found, _resolved_rows = await _resolve_nums(
+                debtor_id=debtor_id,
+                invoice_numbers=_clean_nums,
+            )
+        except Exception as _res_exc:
+            logger.error(
+                "send_monit: błąd resolve_invoice_numbers",
+                extra={"debtor_id": debtor_id, "error": str(_res_exc)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code":    "wapro.resolve_error",
+                    "message": f"Błąd weryfikacji faktur w WAPRO: {_res_exc}",
+                },
+            )
+
+        if not _resolved_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":            "send.invoice_not_found",
+                    "message":         f"Żadna z podanych faktur nie należy do "
+                                       f"dłużnika ID={debtor_id}.",
+                    "invoice_numbers": _clean_nums,
+                    "not_found":       _not_found,
+                },
+            )
+
+        if _not_found:
+            logger.warning(
+                "send_monit: część invoice_numbers nie znaleziona",
+                extra={
+                    "debtor_id": debtor_id,
+                    "not_found": _not_found,
+                    "found":     len(_resolved_ids),
+                },
+            )
+
+        invoice_ids = _resolved_ids
+        logger.info(
+            "send_monit: invoice_numbers rozwiązane do invoice_ids",
+            extra={
+                "debtor_id":       debtor_id,
+                "invoice_numbers": _clean_nums,
+                "resolved_ids":    _resolved_ids,
+                "not_found":       _not_found,
+            },
+        )
+
     _errors = []
     if not template_id:
         _errors.append({"field": "template_id", "message": "Pole wymagane"})
@@ -907,6 +1345,25 @@ async def send_monit(
 
     try:
         from app.services.monit_service import MonitBulkRequest, MonitIntervalBlockedError
+        # Parsuj flagi opcjonalne
+        _inc_odsetki = bool(body.get("include_odsetki", True))
+        _inc_koszty  = bool(body.get("include_koszty", True))
+        _do_daty_send: "date | None" = None
+        _do_daty_raw_send = body.get("do_daty")
+        if _do_daty_raw_send:
+            try:
+                from datetime import date as _date_cls
+                _do_daty_send = _date_cls.fromisoformat(str(_do_daty_raw_send))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format do_daty — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "do_daty", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+
         result_bulk = await monit_service.send_bulk(
             db=db,
             wapro=wapro,
@@ -916,6 +1373,9 @@ async def send_monit(
                 monit_type=channel,
                 template_id=template_id,
                 invoice_ids_per_debtor={debtor_id: invoice_ids} if invoice_ids else None,
+                include_odsetki=_inc_odsetki,
+                include_koszty=_inc_koszty,
+                do_daty=_do_daty_send,
             ),
             triggered_by_user_id=current_user.id_user,
             ip_address=client_ip,

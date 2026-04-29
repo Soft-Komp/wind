@@ -143,7 +143,10 @@ class MonitBulkRequest:
     template_id:             Optional[int] = None
     scheduled_at:            Optional[datetime] = None
     custom_subject:          Optional[str] = None
-    invoice_ids_per_debtor:  Optional[dict[int, list[int]]] = None  # NOWE
+    invoice_ids_per_debtor:  Optional[dict[int, list[int]]] = None
+    include_odsetki:         bool = True    # czy doliczać odsetki do kwoty
+    include_koszty:          bool = True    # czy doliczać koszty dodatkowe kanału
+    do_daty:                 Optional["date"] = None  # data końcowa odsetek, None = dziś
 
     def __post_init__(self) -> None:
         if not self.debtor_ids:
@@ -1038,9 +1041,12 @@ async def send_bulk(
             if request.invoice_ids_per_debtor else []
         )
         odsetki_map = {}
-        if debtor_invoice_ids:
+        if debtor_invoice_ids and request.include_odsetki:
             try:
-                odsetki_map = await _get_odsetki(debtor_invoice_ids)
+                odsetki_map = await _get_odsetki(
+                    debtor_invoice_ids,
+                    do_daty=request.do_daty,
+                )
             except Exception as exc:
                 logger.warning(
                     "Błąd obliczania odsetek dla debtor=%d: %s — "
@@ -1049,7 +1055,11 @@ async def send_bulk(
                 )
         odsetki_total = _D(str(sum(odsetki_map.values()))) if odsetki_map else _D("0.00")
         total_debt    = _D(str(debtor_info.get("SumaDlugu") or "0"))
-        kwota_calkowita = total_debt + odsetki_total + suma_kosztow_dodatkowych
+
+        # Koszty dodatkowe — tylko gdy flaga włączona
+        _koszty_do_doliczenia = suma_kosztow_dodatkowych if request.include_koszty else _D("0.00")
+
+        kwota_calkowita = total_debt + odsetki_total + _koszty_do_doliczenia
 
         monit = MonitHistory(
             id_kontrahenta=debtor_id,
@@ -1993,6 +2003,10 @@ async def generate_pdf_preview(
     debtor_id: int,
     template_id: int,
     channel: str = "email",
+    invoice_numbers: list[str] | None = None,
+    include_odsetki: bool = True,
+    include_koszty: bool = True,
+    do_daty: "date | None" = None,
 ) -> bytes:
     """
     Generuje podgląd PDF monitu w pamięci (bez zapisu do MonitHistory).
@@ -2001,19 +2015,24 @@ async def generate_pdf_preview(
     generuje PDF przez ReportLab i zwraca jako bytes.
 
     Args:
-        db:          Sesja SQLAlchemy.
-        wapro:       Pula połączeń WAPRO.
-        redis:       Klient Redis.
-        debtor_id:   ID kontrahenta WAPRO.
-        template_id: ID szablonu z skw_Templates.
-        channel:     Kanał: email | sms | letter.
+        db:              Sesja SQLAlchemy.
+        wapro:           Pula połączeń WAPRO.
+        redis:           Klient Redis.
+        debtor_id:       ID kontrahenta WAPRO.
+        template_id:     ID szablonu z skw_Templates.
+        channel:         Kanał: email | sms | letter.
+        invoice_numbers: Opcjonalna lista NumerFaktury do uwzględnienia w PDF.
+                         None = wszystkie niezapłacone (zachowanie dotychczasowe).
+                         Pusta lista → traktowana jak None (backward compat).
 
     Returns:
         Bajty PDF gotowe do StreamingResponse.
 
     Raises:
-        MonitTemplateNotFoundError: Szablon nie istnieje.
-        MonitDebtorNotFoundError:   Dłużnik nie istnieje w WAPRO.
+        MonitTemplateNotFoundError:   Szablon nie istnieje.
+        MonitDebtorNotFoundError:     Dłużnik nie istnieje w WAPRO.
+        MonitValidationError:         invoice_numbers podane, ale żadna nie należy
+                                      do tego dłużnika.
     """
     from io import BytesIO
     from sqlalchemy import select as sa_select
@@ -2128,51 +2147,245 @@ async def generate_pdf_preview(
     # ── Krok 2.5: Pobierz numery faktur z WAPRO dla invoice_list ─────────────
     # Klucz "invoice_numbers" NIE istnieje w dict z skw_kontrahenci —
     # trzeba osobno odpytać skw_rozrachunki_faktur.
+# ── Krok 2.5: Pobierz numery faktur z WAPRO dla invoice_list ─────────────
+    # Dwa tryby:
+    #   A) invoice_numbers podane → pobierz TYLKO te faktury, waliduj własność
+    #   B) invoice_numbers=None   → zachowanie dotychczasowe (wszystkie niezapłacone)
     invoice_list_str = "—"
-    try:
-        from app.db.wapro import get_invoices_for_debtor, InvoiceFilterParams
-        _inv_params = InvoiceFilterParams(
-            kontrahent_id=debtor_id,
-            include_paid=False,
-            limit=20,
-            offset=0,
-        )
-        _inv_result = await get_invoices_for_debtor(_inv_params)
-        if _inv_result.rows:
-            _numbers = [
-                str(row.get("NumerFaktury") or row.get("NR_DOK") or "").strip()
-                for row in _inv_result.rows
-                if row.get("NumerFaktury") or row.get("NR_DOK")
+    _invoice_rows_for_pdf: list[dict] = []  # pełne wiersze (do przyszłych rozszerzeń)
+
+    _clean_invoice_numbers = [n for n in (invoice_numbers or []) if n]
+
+    if _clean_invoice_numbers:
+        # ── Tryb A: konkretne faktury z walidacją własności ──────────────────
+        try:
+            from app.db.wapro import resolve_invoice_numbers as _resolve_nums
+            _resolved_ids, _not_found, _resolved_rows = await _resolve_nums(
+                debtor_id=debtor_id,
+                invoice_numbers=_clean_invoice_numbers,
+            )
+
+            logger.info(
+                "generate_pdf_preview: rozwiązywanie numerów faktur",
+                extra={
+                    "debtor_id":      debtor_id,
+                    "template_id":    template_id,
+                    "requested":      _clean_invoice_numbers,
+                    "resolved_ids":   _resolved_ids,
+                    "not_found":      _not_found,
+                    "resolved_count": len(_resolved_ids),
+                },
+            )
+
+            if not _resolved_ids:
+                # Żadna z podanych faktur nie należy do tego dłużnika
+                raise MonitValidationError(
+                    f"Żadna z podanych faktur nie należy do dłużnika "
+                    f"ID={debtor_id}. "
+                    f"Podane numery: {_clean_invoice_numbers}. "
+                    f"Sprawdź poprawność numerów i przynależność do kontrahenta."
+                )
+
+            _invoice_rows_for_pdf = _resolved_rows
+
+            _numbers_for_str = [
+                str(row.get("NumerFaktury") or "").strip()
+                for row in _resolved_rows
+                if row.get("NumerFaktury")
             ]
-            if _numbers:
-                invoice_list_str = ", ".join(_numbers)
-        logger.debug(
-            "Faktury pobrane dla podglądu PDF",
-            extra={
-                "debtor_id": debtor_id,
-                "invoice_count": len(_inv_result.rows),
-                "invoice_list_str": invoice_list_str,
-            },
-        )
-    except Exception as _inv_exc:
-        import traceback as _tb_inv
-        logger.warning(
-            "Nie udało się pobrać faktur dla podglądu PDF — używam myślnika",
-            extra={
-                "debtor_id": debtor_id,
-                "error": str(_inv_exc),
-                "traceback": _tb_inv.format_exc(),
-            },
-        )
+            invoice_list_str = ", ".join(_numbers_for_str) if _numbers_for_str else "—"
+
+            if _not_found:
+                # Częściowy brak — logujemy WARNING ale kontynuujemy z tym co jest
+                logger.warning(
+                    "generate_pdf_preview: część faktur nie znaleziona dla dłużnika",
+                    extra={
+                        "debtor_id":  debtor_id,
+                        "not_found":  _not_found,
+                        "found":      len(_resolved_ids),
+                        "total_requested": len(_clean_invoice_numbers),
+                    },
+                )
+
+        except MonitValidationError:
+            raise  # propaguj bez owijania
+
+        except Exception as _inv_exc:
+            import traceback as _tb_inv
+            logger.error(
+                "generate_pdf_preview: błąd rozwiązywania numerów faktur",
+                extra={
+                    "debtor_id":       debtor_id,
+                    "invoice_numbers": _clean_invoice_numbers,
+                    "error":           str(_inv_exc),
+                    "traceback":       _tb_inv.format_exc(),
+                },
+            )
+            raise MonitValidationError(
+                f"Błąd weryfikacji faktur dla dłużnika ID={debtor_id}: {_inv_exc}"
+            ) from _inv_exc
+
+    else:
+        # ── Tryb B: wszystkie niezapłacone — zachowanie dotychczasowe ────────
+        try:
+            from app.db.wapro import get_invoices_for_debtor, InvoiceFilterParams
+            _inv_params = InvoiceFilterParams(
+                kontrahent_id=debtor_id,
+                include_paid=False,
+                limit=20,
+                offset=0,
+            )
+            _inv_result = await get_invoices_for_debtor(_inv_params)
+            if _inv_result.rows:
+                _invoice_rows_for_pdf = _inv_result.rows
+                _numbers = [
+                    str(row.get("NumerFaktury") or row.get("NR_DOK") or "").strip()
+                    for row in _inv_result.rows
+                    if row.get("NumerFaktury") or row.get("NR_DOK")
+                ]
+                if _numbers:
+                    invoice_list_str = ", ".join(_numbers)
+            logger.debug(
+                "generate_pdf_preview: faktury pobrane (tryb domyślny)",
+                extra={
+                    "debtor_id":     debtor_id,
+                    "invoice_count": len(_inv_result.rows),
+                    "invoice_list":  invoice_list_str,
+                },
+            )
+        except MonitValidationError:
+            raise
+        except Exception as _inv_exc:
+            import traceback as _tb_inv
+            logger.warning(
+                "Nie udało się pobrać faktur dla podglądu PDF — używam myślnika",
+                extra={
+                    "debtor_id": debtor_id,
+                    "error":     str(_inv_exc),
+                    "traceback": _tb_inv.format_exc(),
+                },
+            )
 
     # ── Krok 3: Zbuduj kontekst Jinja2 i renderuj ────────────────────────────
     body_text = tmpl_row.get("Body") or "(brak treści szablonu)"
     rendered_subject = tmpl_row.get("Subject") or ""  # inicjalizacja przed try — fallback na surowy Subject
     rendered_subject = tmpl_row.get("Subject") or ""
 
+    # Oblicz total_debt — z konkretnych faktur jeśli podano invoice_numbers,
+    # w przeciwnym razie z łącznego długu dłużnika
+    # W obu przypadkach doliczamy odsetki przez dbo.skw_Func_OdsetkiRozrachunku
+    if _clean_invoice_numbers and _invoice_rows_for_pdf:
+        # Pobierz kwoty + odsetki jednym zapytaniem dla wszystkich faktur
+        _ids_for_odsetki = [
+            int(row["ID_ROZRACHUNKU"])
+            for row in _invoice_rows_for_pdf
+            if row.get("ID_ROZRACHUNKU") is not None
+        ]
+        if _ids_for_odsetki:
+            try:
+                from app.db.wapro import _run_in_executor, _execute_query_sync
+                from decimal import Decimal as _D
+                _placeholders = ", ".join(["?" for _ in _ids_for_odsetki])
+                # do_daty=None → SQL przekazuje NULL → funkcja liczy do dziś
+                _do_daty_sql = do_daty  # date | None — pyodbc obsługuje oba
+                _odsetki_sql = f"""
+                    SELECT
+                        r.ID_ROZRACHUNKU,
+                        ISNULL(r.KwotaPozostala, 0)                                             AS KwotaPozostala,
+                        ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?), 0)         AS Odsetki,
+                        ISNULL(r.KwotaPozostala, 0)
+                            + ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?), 0)   AS KwotaZOdsetkami
+                    FROM dbo.skw_rozrachunki_faktur AS r
+                    WHERE r.ID_ROZRACHUNKU IN ({_placeholders})
+                """.strip()
+                _odsetki_rows = await _run_in_executor(
+                    _execute_query_sync,
+                    _odsetki_sql,
+                    (_do_daty_sql, _do_daty_sql) + tuple(_ids_for_odsetki),
+                    "odsetki_preview",
+                    "generate_pdf_preview",
+                )
+
+                # Suma długu — z odsetkami lub bez zależnie od flagi
+                if include_odsetki:
+                    _suma_z_odsetkami = _D(str(sum(
+                        float(row.get("KwotaZOdsetkami") or 0)
+                        for row in _odsetki_rows
+                    )))
+                else:
+                    _suma_z_odsetkami = _D(str(sum(
+                        float(row.get("KwotaPozostala") or 0)
+                        for row in _odsetki_rows
+                    )))
+
+                # Koszty dodatkowe — tylko gdy flaga włączona
+                _suma_kosztow = _D("0.00")
+                if include_koszty:
+                    try:
+                        from app.services import koszt_service as _koszt_svc
+                        _koszty = await _koszt_svc.get_active_for_channel(db, redis, channel)
+                        _suma_kosztow = _D(str(sum(k["kwota"] for k in _koszty)))
+                    except Exception as _kosz_exc:
+                        logger.warning(
+                            "generate_pdf_preview: błąd pobierania kosztów dodatkowych — "
+                            "używam 0.00",
+                            extra={
+                                "debtor_id": debtor_id,
+                                "channel":   channel,
+                                "error":     str(_kosz_exc),
+                            },
+                        )
+
+                _total_debt_val = float(_suma_z_odsetkami + _suma_kosztow)
+
+                logger.info(
+                    "generate_pdf_preview: total_debt obliczony",
+                    extra={
+                        "debtor_id":       debtor_id,
+                        "include_odsetki": include_odsetki,
+                        "include_koszty":  include_koszty,
+                        "do_daty":         str(do_daty) if do_daty else None,
+                        "suma_dlug_odsetki": float(_suma_z_odsetkami),
+                        "suma_kosztow":    float(_suma_kosztow),
+                        "total_debt":      _total_debt_val,
+                    },
+                )
+
+                logger.info(
+                    "generate_pdf_preview: total_debt = dlug + odsetki + koszty",
+                    extra={
+                        "debtor_id":        debtor_id,
+                        "invoice_ids":      _ids_for_odsetki,
+                        "suma_z_odsetkami": float(_suma_z_odsetkami),
+                        "suma_kosztow":     float(_suma_kosztow),
+                        "total_debt":       _total_debt_val,
+                        "channel":          channel,
+                    },
+                )
+            except Exception as _ods_exc:
+                import traceback as _tb_ods
+                logger.warning(
+                    "generate_pdf_preview: błąd pobierania odsetek — używam KwotaPozostala",
+                    extra={
+                        "debtor_id": debtor_id,
+                        "error":     str(_ods_exc),
+                        "traceback": _tb_ods.format_exc(),
+                    },
+                )
+                # Fallback — bez odsetek i kosztów
+                _total_debt_val = sum(
+                    float(row.get("KwotaPozostala") or 0)
+                    for row in _invoice_rows_for_pdf
+                )
+        else:
+            _total_debt_val = float(debtor.get("SumaDlugu") or 0)
+    else:
+        # Tryb domyślny — łączny dług dłużnika
+        _total_debt_val = float(debtor.get("SumaDlugu") or 0)
+        
     _jinja_context = {
         "debtor_name":  debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or "",
-        "total_debt":   f"{float(debtor.get('SumaDlugu') or 0):.2f}",
+        "total_debt":   f"{_total_debt_val:.2f}",
         "invoice_list": invoice_list_str,
         "due_date":     _calc_preview_deadline(),
         "company_name": settings.COMPANY_NAME,

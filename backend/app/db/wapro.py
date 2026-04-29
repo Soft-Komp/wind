@@ -1941,6 +1941,169 @@ async def execute_query(
     
 
 # ---------------------------------------------------------------------------
+# ZAPYTANIE 4: Rozwiązywanie NumerFaktury → ID_ROZRACHUNKU
+# ---------------------------------------------------------------------------
+
+# Regex akceptujący polskie numery faktur: FV/2024/001, FV 10/2025, FS-01/2025 itp.
+# Dozwolone: litery, cyfry, /, -, \, spacja, kropka, podkreślenie
+_INVOICE_NUMBER_RE = re.compile(r"^[\w\s/\\.,-]{1,100}$", re.UNICODE)
+
+# Limit listy na jedno wywołanie — zabezpieczenie przed DoS
+_MAX_INVOICE_NUMBERS_PER_CALL: int = 100
+
+
+def _sanitize_invoice_number(raw: str) -> str | None:
+    """
+    Sanityzuje pojedynczy numer faktury.
+    Zwraca oczyszczony string lub None jeśli nieprawidłowy.
+    """
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > 100:
+        return None
+    if not _INVOICE_NUMBER_RE.match(cleaned):
+        return None
+    return cleaned
+
+
+def _build_resolve_numbers_sql(
+    debtor_id: int,
+    invoice_numbers: list[str],
+) -> tuple[str, tuple]:
+    """
+    Buduje SQL do rozwiązywania NumerFaktury → ID_ROZRACHUNKU.
+    W pełni parametryzowane — zero interpolacji wartości z frontendu.
+    """
+    placeholders = ", ".join(["?" for _ in invoice_numbers])
+    sql = f"""
+        SELECT
+            ID_ROZRACHUNKU,
+            NumerFaktury,
+            KwotaPozostala,
+            DniPo,
+            CZY_ROZLICZONY
+        FROM {SKW_ROZRACHUNKI_FAKTUR}
+        WHERE ID_KONTRAHENTA = ?
+          AND NumerFaktury IN ({placeholders})
+    """
+    params = tuple([debtor_id] + list(invoice_numbers))
+    return sql.strip(), params
+
+
+async def resolve_invoice_numbers(
+    debtor_id: int,
+    invoice_numbers: list[str],
+) -> tuple[list[int], list[str], list[dict]]:
+    """
+    Rozwiązuje listę NumerFaktury → ID_ROZRACHUNKU dla danego kontrahenta.
+
+    Walidacja własności: sprawdza czy faktury należą do debtor_id
+    przez filtr WHERE ID_KONTRAHENTA = ? — faktury obcego dłużnika
+    nie trafią do zbioru wyników.
+
+    Args:
+        debtor_id:       ID_KONTRAHENTA z WAPRO.
+        invoice_numbers: Lista numerów faktur (NumerFaktury z widoku).
+
+    Returns:
+        Tuple (resolved_ids, not_found_numbers, resolved_rows):
+          - resolved_ids:       lista ID_ROZRACHUNKU (int) dla znalezionych faktur
+          - not_found_numbers:  lista NumerFaktury które NIE istnieją dla dłużnika
+          - resolved_rows:      pełne słowniki z widoku (do budowy invoice_list_str)
+
+    Raises:
+        ValueError: lista pusta lub za długa.
+    """
+    import re as _re
+
+    if not invoice_numbers:
+        raise ValueError("Lista invoice_numbers jest pusta.")
+    if len(invoice_numbers) > _MAX_INVOICE_NUMBERS_PER_CALL:
+        raise ValueError(
+            f"Za dużo numerów faktur: {len(invoice_numbers)} > "
+            f"{_MAX_INVOICE_NUMBERS_PER_CALL}."
+        )
+
+    query_id = str(uuid.uuid4())[:12]
+    t_start = time.monotonic()
+
+    logger.info(
+        "resolve_invoice_numbers start [%s]: debtor_id=%d, count=%d, "
+        "numbers_sample=%s",
+        query_id, debtor_id, len(invoice_numbers),
+        invoice_numbers[:5],
+        extra={
+            "query_id":    query_id,
+            "debtor_id":   debtor_id,
+            "count":       len(invoice_numbers),
+            "numbers":     invoice_numbers,
+        },
+    )
+
+    try:
+        sql, params = _build_resolve_numbers_sql(debtor_id, invoice_numbers)
+
+        logger.debug(
+            "resolve_invoice_numbers SQL [%s]: %s | params=%s",
+            query_id, sql, params,
+        )
+
+        rows: list[dict] = await _run_in_executor(
+            _execute_query_sync,
+            sql, params, query_id, "resolve_invoice_numbers",
+        )
+
+    except Exception as exc:
+        duration_ms = (time.monotonic() - t_start) * 1000
+        logger.error(
+            "resolve_invoice_numbers BŁĄD [%s]: debtor_id=%d error=%s (%.1fms)",
+            query_id, debtor_id, exc, duration_ms,
+            extra={
+                "query_id":  query_id,
+                "debtor_id": debtor_id,
+                "error":     str(exc),
+                "traceback": traceback.format_exc(),
+            },
+        )
+        raise
+
+    duration_ms = (time.monotonic() - t_start) * 1000
+
+    found_numbers: set[str] = {
+        str(row.get("NumerFaktury") or "").strip()
+        for row in rows
+        if row.get("NumerFaktury")
+    }
+    resolved_ids: list[int] = [
+        int(row["ID_ROZRACHUNKU"])
+        for row in rows
+        if row.get("ID_ROZRACHUNKU") is not None
+    ]
+    not_found: list[str] = [
+        n for n in invoice_numbers
+        if n.strip() not in found_numbers
+    ]
+
+    logger.info(
+        "resolve_invoice_numbers OK [%s]: debtor_id=%d resolved=%d "
+        "not_found=%d (%.1fms)",
+        query_id, debtor_id, len(resolved_ids), len(not_found), duration_ms,
+        extra={
+            "query_id":        query_id,
+            "debtor_id":       debtor_id,
+            "resolved_ids":    resolved_ids,
+            "not_found":       not_found,
+            "duration_ms":     round(duration_ms, 1),
+        },
+    )
+
+    return resolved_ids, not_found, rows
+
+
+# ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------
 
@@ -1958,6 +2121,7 @@ __all__ = [
     "get_debtors",
     "get_debtor_by_id",
     "get_invoices_for_debtor",
+    "resolve_invoice_numbers",          # ← NOWE
     "validate_kontrahent_ids",
     "ping",
     # Stałe — nazwy widoków (do referencji w serwisach)
@@ -1967,4 +2131,7 @@ __all__ = [
     "get_kontrahent_names_batch",
     # Nowe kolumny w widokach — stałe do referencji
     "WaproConnectionPool",
+    # Sanityzacja numerów faktur
+    "_sanitize_invoice_number",         # ← NOWE (używane w routerze)
+    "_MAX_INVOICE_NUMBERS_PER_CALL",    # ← NOWE
 ]
