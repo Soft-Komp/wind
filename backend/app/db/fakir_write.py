@@ -295,7 +295,11 @@ def initialize_fakir_pool() -> None:
         )
 
     fakir_host = getattr(settings, "FAKIR_DB_HOST", None)
+    fakir_port = getattr(settings, "FAKIR_DB_PORT", None)
     fakir_pass = getattr(settings, "FAKIR_DB_PASSWORD", None)
+    
+    # Buduj server string z portem jeśli podany
+    fakir_server = f"{fakir_host},{fakir_port}" if fakir_port else fakir_host
 
     if not all([fakir_host, fakir_user, fakir_pass]):
         logger.warning(
@@ -322,14 +326,14 @@ def initialize_fakir_pool() -> None:
         if hasattr(password, "get_secret_value"):
             password = password.get_secret_value()
 
-        db_name = getattr(settings, "FAKIR_DB_NAME", getattr(settings, "DB_NAME", "WAPRO"))
+        db_name = getattr(settings, "FAKIR_DB_DATABASE", getattr(settings, "DB_NAME", "WAPRO"))
 
         conn_str = (
             f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-            f"SERVER={fakir_host};"
+            f"SERVER={fakir_server};"
             f"DATABASE={db_name};"
             f"UID={fakir_user};"
-            f"PWD={password};"
+            f"PWD={{{password}}};"
             f"TrustServerCertificate=yes;"
             f"Encrypt=yes;"
             f"Connection Timeout=10;"

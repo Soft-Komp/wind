@@ -308,7 +308,7 @@ async def trigger_fakir_update_if_complete(
             .where(FakturaAkceptacja.id == faktura_id)
             .values(
                 status_wewnetrzny="zaakceptowana",
-                updated_at=datetime.now().replace(tzinfo=None),
+                UpdatedAt=datetime.now().replace(tzinfo=None),
             )
         )
 

@@ -43,6 +43,7 @@ from app.db.session import close_db_engine, get_async_session, get_redis_client
 from app.db.wapro import initialize_pool as wapro_initialize_pool
 from app.db.wapro import shutdown_pool as wapro_shutdown_pool
 from app.core.arq_pool import init_arq_pool, close_arq_pool
+from app.db.fakir_write import initialize_fakir_pool, shutdown_fakir_pool, is_fakir_available
 from app.core.integrity_watchdog import run_watchdog_loop, request_shutdown
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -819,7 +820,24 @@ async def lifespan(app: FastAPI):
             }).decode()
         )
         raise  # WAPRO niedostępne = aplikacja nie startuje
-
+    # ── KROK 8b: Fakir Write Pool (pyodbc, zapis KOD_STATUSU) ────────────────
+    try:
+        initialize_fakir_pool()
+        logger.info(
+            orjson.dumps({
+                "event": "startup_fakir_pool_ok",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps({
+                "event": "startup_fakir_pool_error",
+                "error": str(exc),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+        # Niekrytyczny — aplikacja startuje bez Fakira
     # ── KROK 8: ARQ Pool (enqueue tasków do workera) ──────────────────────────
     try:
         await init_arq_pool()
@@ -938,6 +956,22 @@ async def lifespan(app: FastAPI):
                 }).decode()
             )
 
+        try:
+            shutdown_fakir_pool()
+            logger.info(
+                orjson.dumps({
+                    "event": "app_shutdown_fakir_closed",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
+        except Exception as exc:
+            logger.error(
+                orjson.dumps({
+                    "event": "app_shutdown_fakir_error",
+                    "error": str(exc),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }).decode()
+            )
         # ← istniejący close_db_engine() już tu jest
         await close_db_engine()
         logger.info(
