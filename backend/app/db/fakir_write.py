@@ -71,8 +71,9 @@ _DEFAULT_POOL_TIMEOUT = 10     # sekund na wolne połączenie
 _DEFAULT_RETRY_COUNT  = 3      # domyślna liczba prób
 _RETRY_BASE_DELAY     = 1.0    # sekund — base dla exponential backoff
 
-# PRG_KOD = 3 → moduł Fakir (zakupy) — hardkodowane, nie parametryzowane
-_FAKIR_PRG_KOD = 3
+# PRG_KOD = 1 → zaktualizowane po migracji 0014 (2026-04-14)
+# Poprzednia wartość 3 zwracała pusty zestaw danych na produkcji 
+_FAKIR_PRG_KOD = 1
 
 # Nowy status po akceptacji wszystkich
 _AKCEPTACJA_KOD_STATUSU = "K"

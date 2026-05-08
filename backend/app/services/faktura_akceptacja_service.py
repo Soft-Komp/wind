@@ -49,6 +49,7 @@ import orjson
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import and_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -693,17 +694,86 @@ async def create_faktura_akceptacja(
     SSE push (nowa_faktura) do każdego przypisanego pracownika.
     Idempotentność zapewniona przez IdempotencyGuard w routerze.
     """
-    # Sprawdź duplikat numer_ksef
-    existing = await db.execute(
-        select(FakturaAkceptacja).where(
+    # ── Pre-check duplikatu numer_ksef ────────────────────────────────────────
+    # UWAGA ARCHITEKTONICZNA (migracja 0010):
+    # Constraint UQ_skw_faktura_akceptacja_numer_ksef_active jest FILTERED
+    # (WHERE IsActive = 1). Anulowane faktury (IsActive=0) NIE blokują
+    # nowego wpisu — to zachowanie Opcji A (re-entry dozwolony).
+    #
+    # Pre-check w kodzie (poza DB) ma dwa cele:
+    #   1. Czytelny HTTP 409 zamiast IntegrityError dla aktywnych duplikatów
+    #   2. Logowanie ostrzeżenia przy re-entry anulowanej faktury
+
+    # 2a. Sprawdź aktywny duplikat → twardy 409
+    stmt_active = (
+        select(FakturaAkceptacja)
+        .where(
             FakturaAkceptacja.numer_ksef == body.numer_ksef,
             FakturaAkceptacja.IsActive == True,  # noqa: E712
         )
+        .limit(1)
     )
-    if existing.scalar_one_or_none():
+    row_active = (await db.execute(stmt_active)).scalar_one_or_none()
+
+    if row_active is not None:
+        logger.warning(
+            orjson.dumps({
+                "event":       "faktura_create_rejected_duplikat_aktywny",
+                "numer_ksef":  body.numer_ksef,
+                "istniejace_id": row_active.id,
+                "status_istniejacego": row_active.status_wewnetrzny,
+                "actor_id":    actor_id,
+                "actor_name":  actor_name,
+                "request_id":  request_id,
+                "ip":          actor_ip,
+                "ts":          datetime.utcnow().isoformat(),
+            }).decode()
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Faktura z KSEF_ID={body.numer_ksef!r} jest już w obiegu.",
+            detail={
+                "kod":          "DUPLIKAT_AKTYWNY",
+                "numer_ksef":   body.numer_ksef,
+                "istniejace_id": row_active.id,
+                "komunikat": (
+                    f"Faktura {body.numer_ksef!r} jest już aktywnie w obiegu "
+                    f"(ID={row_active.id}, status={row_active.status_wewnetrzny!r}). "
+                    "Nie można wstawić duplikatu aktywnego wpisu."
+                ),
+            },
+        )
+
+    # 2b. Sprawdź czy istnieje anulowany wpis tej faktury → ostrzeżenie (re-entry)
+    stmt_anulowana = (
+        select(FakturaAkceptacja)
+        .where(
+            FakturaAkceptacja.numer_ksef == body.numer_ksef,
+            FakturaAkceptacja.IsActive == False,  # noqa: E712
+        )
+        .order_by(FakturaAkceptacja.CreatedAt.desc())
+        .limit(1)
+    )
+    row_anulowana = (await db.execute(stmt_anulowana)).scalar_one_or_none()
+
+    if row_anulowana is not None:
+        # Re-entry po anulowaniu — dozwolone (Opcja A), ale logujemy ostrzeżenie
+        logger.warning(
+            orjson.dumps({
+                "event":            "faktura_reentry_po_anulowaniu",
+                "numer_ksef":       body.numer_ksef,
+                "poprzednie_id":    row_anulowana.id,
+                "poprzedni_status": row_anulowana.status_wewnetrzny,
+                "poprzednia_data":  str(row_anulowana.CreatedAt),
+                "actor_id":         actor_id,
+                "actor_name":       actor_name,
+                "request_id":       request_id,
+                "ip":               actor_ip,
+                "ts":               datetime.utcnow().isoformat(),
+                "uwaga": (
+                    "Faktura ponownie wpuszczana do obiegu po uprzednim anulowaniu. "
+                    "Weryfikuj zgodność z procesem biznesowym."
+                ),
+            }).decode()
         )
 
     # Sprawdź limit przypisanych
@@ -732,7 +802,43 @@ async def create_faktura_akceptacja(
         CreatedAt=now,
     )
     db.add(faktura)
-    await db.flush()  # Pobierz ID bez commit
+    # ── flush z siatką bezpieczeństwa na race condition ───────────────────────
+    # Pre-check wyżej eliminuje 99.9% duplikatów, ale przy równoległych
+    # requestach (race condition) dwa wątki mogą oba przejść SELECT przed
+    # INSERT. Catch IntegrityError tutaj zamienia 500 → czytelny 409.
+    try:
+        await db.flush()  # Pobierz ID bez commit — constraint sprawdzany przez DB
+    except IntegrityError as exc:
+        await db.rollback()
+        _ksef = getattr(body, "numer_ksef", "NIEZNANY")
+        logger.critical(
+            orjson.dumps({
+                "event":        "faktura_create_race_condition_integrity_error",
+                "numer_ksef":   _ksef,
+                "actor_id":     actor_id,
+                "actor_name":   actor_name,
+                "request_id":   request_id,
+                "ip":           actor_ip,
+                "ts":           datetime.utcnow().isoformat(),
+                "db_error":     str(exc).splitlines()[0],  # tylko pierwsza linia
+                "uwaga": (
+                    "Race condition: dwa równoległe requesty przeszły pre-check "
+                    "i jeden przegrał wyścig o INSERT. "
+                    "Frontend powinien odświeżyć listę faktur."
+                ),
+            }).decode()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "kod":       "RACE_CONDITION_DUPLIKAT",
+                "numer_ksef": _ksef,
+                "komunikat": (
+                    f"Faktura {_ksef!r} została właśnie dodana przez innego użytkownika. "
+                    "Odśwież listę faktur i spróbuj ponownie."
+                ),
+            },
+        ) from exc
 
     # Utwórz przypisania
     for user_id in body.user_ids:

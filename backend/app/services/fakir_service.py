@@ -43,7 +43,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.db.fakir_write import FakirUpdateResult, is_fakir_available, update_kod_statusu
-from app.db.models.faktura_akceptacja import FakturaAkceptacja, FakturaLog, FakturaPrzypisanie
+from app.db.models.faktura_akceptacja import FakturaAkceptacja
+from app.db.models.faktura_log import FakturaLog
+from app.db.models.faktura_przypisanie import FakturaPrzypisanie
 from app.schemas.faktura_akceptacja import (
     AkcjaLog,
     FakturaLogDetails,
@@ -67,11 +69,12 @@ def _lock_key(faktura_id: int) -> str:
     return f"{_LOCK_PREFIX}:{faktura_id}"
 
 
-async def _is_fakir_update_enabled(redis: Redis) -> bool:
+async def _is_fakir_update_enabled(redis: Redis, db: AsyncSession) -> bool:
     """Sprawdza SystemConfig: faktury.fakir_update_enabled (cache Redis 300s)."""
     try:
         value = await get_config_value(
             redis=redis,
+            db=db,
             key="faktury.fakir_update_enabled",
             default="false",
         )
@@ -172,7 +175,7 @@ async def trigger_fakir_update_if_complete(
         return result
 
     # ── Krok 1: Sprawdź włącznik config
-    if not await _is_fakir_update_enabled(redis):
+    if not await _is_fakir_update_enabled(redis=redis, db=db):
         logger.info(
             orjson.dumps({
                 "event":      "fakir_blocked_config_disabled",
