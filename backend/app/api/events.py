@@ -37,9 +37,12 @@ import orjson
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from redis.asyncio import Redis
+from redis.asyncio.connection import ConnectionPool
+
+from app.core.config import settings
 from app.core.dependencies import (
     CurrentUser,
-    RedisClient,
     RequestID,
     require_permission,
 )
@@ -84,7 +87,6 @@ _MAX_SESSION_SECONDS = 3600  # 1 godzina
 async def sse_user_stream(
     request: Request,
     current_user: CurrentUser,
-    redis: RedisClient,
     request_id: RequestID,
 ):
     channel = f"channel:user:{current_user.id_user}"
@@ -102,7 +104,6 @@ async def sse_user_stream(
     return StreamingResponse(
         content=_sse_generator(
             request=request,
-            redis=redis,
             channel=channel,
             user_id=current_user.id_user,
             request_id=request_id,
@@ -147,7 +148,6 @@ async def sse_user_stream(
 async def sse_admins_stream(
     request: Request,
     current_user: CurrentUser,
-    redis: RedisClient,
     request_id: RequestID,
 ):
     channel = "channel:admins"
@@ -165,7 +165,6 @@ async def sse_admins_stream(
     return StreamingResponse(
         content=_sse_generator(
             request=request,
-            redis=redis,
             channel=channel,
             user_id=current_user.id_user,
             request_id=request_id,
@@ -186,7 +185,6 @@ async def sse_admins_stream(
 
 async def _sse_generator(
     request: Request,
-    redis: RedisClient,
     channel: str,
     user_id: int,
     request_id: str,
@@ -200,8 +198,26 @@ async def _sse_generator(
       - rozłączeniu klienta (request.is_disconnected())
       - upłynięciu _MAX_SESSION_SECONDS
       - błędzie Redis
+
+    ARCHITEKTURA POŁĄCZENIA:
+      Każde wywołanie tworzy DEDYKOWANY klient Redis (max_connections=1).
+      Izoluje PubSub od współdzielonego poola (cache / ARQ / blacklista JWT).
+      Bez izolacji: przy auto-retry frontendu pool 20 połączeń wyczerpuje się
+      w ~20 sekund → ConnectionError: Too many connections → crash → retry → ...
+      Klient jest zamykany w bloku finally — gwarantowane nawet przy wyjątku
+      lub CancelledError (rozłączenie klienta).
     """
-    pubsub = redis.pubsub()
+    # Dedykowany pool i klient — wyłącznie dla tego połączenia SSE
+    _pool = ConnectionPool.from_url(
+        settings.redis_url,
+        max_connections=1,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        retry_on_timeout=True,
+    )
+    _dedicated_redis = Redis(connection_pool=_pool)
+    pubsub = _dedicated_redis.pubsub()
+
     session_start = asyncio.get_event_loop().time()
     connected = True
 
@@ -290,12 +306,31 @@ async def _sse_generator(
             }).decode()
         )
     finally:
-        # Zawsze odsubskrybuj — zapobiega memory leaks w Redis
+        # Krok 1: odsubskrybuj kanał Redis
         try:
             await pubsub.unsubscribe(channel)
-            await pubsub.close()
+            await pubsub.aclose()
         except Exception:
             pass
+
+        # Krok 2: zamknij DEDYKOWANY klient i jego pool
+        # close_connection_pool=True zwalnia też ConnectionPool
+        # BEZ tego kroku połączenie TCP do Redis pozostaje otwarte
+        # i wlicza się do limitu — to był źródłowy bug
+        try:
+            await _dedicated_redis.aclose(close_connection_pool=True)
+        except Exception:
+            pass
+
+        logger.info(
+            orjson.dumps({
+                "event": "sse_generator_cleanup_done",
+                "channel": channel,
+                "user_id": user_id,
+                "request_id": request_id,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
 
 
 def _sse_event(event_type: str, data: dict) -> bytes:

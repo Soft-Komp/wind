@@ -1016,7 +1016,7 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
             _th_h("Pracownik"),
             _th_h("Decyzja"),
             _th_h("Data decyzji"),
-            _th_h("Komentarz (SHA-256)"),
+            _th_h("Komentarz"),
         ]]
 
         for i, p in enumerate(ctx.przypisania):
@@ -1025,8 +1025,12 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
             decyzja    = _decyzja_label(status_p)
             full_name  = _sanitize_str(p.get("full_name") or f"User #{p.get('user_id', '?')}", 80)
             decided_at = _fmt_date(p.get("decided_at"))
-            komentarz  = p.get("komentarz")
-            sha_prev   = _sha256_preview(komentarz) if komentarz else "—"
+            komentarz       = p.get("komentarz")
+            komentarz_tekst = (
+                (_sanitize_str(komentarz, 200) + ("..." if len(komentarz) > 200 else ""))
+                if komentarz
+                else "—"
+            )
             sym_kolor  = _decyzja_kolor(status_p)
 
             # Nieaktywne przypisania (is_active=False) — szarszy tekst
@@ -1053,16 +1057,16 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
                     _s(f"hdt_{i}", fontSize=8, leading=10),
                 ),
                 Paragraph(
-                    sha_prev,
-                    _s(f"hsha_{i}", fontSize=7, leading=9,
-                       textColor=colors.HexColor("#777777")),
+                    komentarz_tekst,
+                    _s(f"hkom_{i}", fontSize=7, leading=9,
+                    textColor=colors.HexColor("#444444")),
                 ),
             ]
             historia_wiersze.append(wiersz)
 
         tab_historia = Table(
             historia_wiersze,
-            colWidths=[1.0 * cm, None, 3.2 * cm, 2.8 * cm, 2.4 * cm],
+            colWidths=[1.0 * cm, 3.0 * cm, 3.0 * cm, 2.8 * cm, None],
             repeatRows=1,
         )
 
@@ -1093,11 +1097,6 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         story.append(Paragraph(
             "Legenda: ✓ Zaakceptowano  |  ✗ Odrzucono  |  "
             "↩ Nie moja  |  ⏳ Oczekuje",
-            S_MALY,
-        ))
-        story.append(Paragraph(
-            "SHA-256: skrócony hash komentarza pracownika (privacy by design — "
-            "pełna treść w systemie).",
             S_MALY,
         ))
     else:
