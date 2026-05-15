@@ -12,16 +12,16 @@
 GO
 
 -- ── Admin: wszystkie uprawnienia faktury ─────────────────────────────────────
-INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
 SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-FROM [dbo_ext].[skw_Permissions] p
-CROSS JOIN [dbo_ext].[skw_Roles] r
+FROM [dbo].[skw_Permissions] p
+CROSS JOIN [dbo].[skw_Roles] r
 WHERE p.[Category] = N'faktury'
   AND p.[IsActive] = 1
   AND r.[RoleName] = N'Admin'
   AND r.[IsActive] = 1
   AND NOT EXISTS (
-      SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+      SELECT 1 FROM [dbo].[skw_RolePermissions] rp
       WHERE rp.[ID_ROLE] = r.[ID_ROLE]
         AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
   );
@@ -30,10 +30,10 @@ PRINT '[09] Admin — przypisano: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' uprawnie�
 GO
 
 -- ── Manager: bez force_status i config_edit ───────────────────────────────────
-INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
 SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-FROM [dbo_ext].[skw_Permissions] p
-CROSS JOIN [dbo_ext].[skw_Roles] r
+FROM [dbo].[skw_Permissions] p
+CROSS JOIN [dbo].[skw_Roles] r
 WHERE p.[Category] = N'faktury'
   AND p.[IsActive] = 1
   AND p.[PermissionName] NOT IN (
@@ -43,7 +43,7 @@ WHERE p.[Category] = N'faktury'
   AND r.[RoleName] = N'Manager'
   AND r.[IsActive] = 1
   AND NOT EXISTS (
-      SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+      SELECT 1 FROM [dbo].[skw_RolePermissions] rp
       WHERE rp.[ID_ROLE] = r.[ID_ROLE]
         AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
   );
@@ -52,10 +52,10 @@ PRINT '[09] Manager — przypisano: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' uprawni
 GO
 
 -- ── User: tylko uprawnienia pracownika ────────────────────────────────────────
-INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
 SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-FROM [dbo_ext].[skw_Permissions] p
-CROSS JOIN [dbo_ext].[skw_Roles] r
+FROM [dbo].[skw_Permissions] p
+CROSS JOIN [dbo].[skw_Roles] r
 WHERE p.[Category] = N'faktury'
   AND p.[IsActive] = 1
   AND p.[PermissionName] IN (
@@ -68,7 +68,7 @@ WHERE p.[Category] = N'faktury'
   AND r.[RoleName] = N'User'
   AND r.[IsActive] = 1
   AND NOT EXISTS (
-      SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+      SELECT 1 FROM [dbo].[skw_RolePermissions] rp
       WHERE rp.[ID_ROLE] = r.[ID_ROLE]
         AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
   );
@@ -80,9 +80,9 @@ GO
 SELECT
     r.[RoleName],
     COUNT(*) AS LiczbaUprawnien
-FROM [dbo_ext].[skw_RolePermissions] rp
-JOIN [dbo_ext].[skw_Permissions]     p ON rp.[ID_PERMISSION] = p.[ID_PERMISSION]
-JOIN [dbo_ext].[skw_Roles]           r ON rp.[ID_ROLE]       = r.[ID_ROLE]
+FROM [dbo].[skw_RolePermissions] rp
+JOIN [dbo].[skw_Permissions]     p ON rp.[ID_PERMISSION] = p.[ID_PERMISSION]
+JOIN [dbo].[skw_Roles]           r ON rp.[ID_ROLE]       = r.[ID_ROLE]
 WHERE p.[Category] = N'faktury'
 GROUP BY r.[RoleName]
 ORDER BY r.[RoleName];

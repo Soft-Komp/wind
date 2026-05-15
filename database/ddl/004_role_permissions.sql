@@ -32,7 +32,7 @@ BEGIN TRY
     BEGIN
         PRINT '[004] Tworzenie tabeli dbo_ext.skw_RolePermissions...';
 
-        CREATE TABLE [dbo_ext].[skw_RolePermissions] (
+        CREATE TABLE [dbo].[skw_RolePermissions] (
 
             -- ── Klucz kompozytowy (PK) ────────────────────────────────────────
             [ID_ROLE]       INT      NOT NULL,
@@ -49,14 +49,14 @@ BEGIN TRY
             -- FK → skw_Roles (usunięcie roli = usunięcie wszystkich przypisań)
             CONSTRAINT [FK_skw_RolePermissions_RoleID]
                 FOREIGN KEY ([ID_ROLE])
-                REFERENCES [dbo_ext].[skw_Roles] ([ID_ROLE])
+                REFERENCES [dbo].[skw_Roles] ([ID_ROLE])
                 ON DELETE CASCADE
                 ON UPDATE NO ACTION,
 
             -- FK → skw_Permissions (usunięcie uprawnienia = usunięcie przypisań)
             CONSTRAINT [FK_skw_RolePermissions_PermissionID]
                 FOREIGN KEY ([ID_PERMISSION])
-                REFERENCES [dbo_ext].[skw_Permissions] ([ID_PERMISSION])
+                REFERENCES [dbo].[skw_Permissions] ([ID_PERMISSION])
                 ON DELETE CASCADE
                 ON UPDATE NO ACTION
         );
@@ -77,7 +77,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_RolePermissions_PermissionID]
-            ON [dbo_ext].[skw_RolePermissions] ([ID_PERMISSION] ASC, [ID_ROLE] ASC);
+            ON [dbo].[skw_RolePermissions] ([ID_PERMISSION] ASC, [ID_ROLE] ASC);
         PRINT '[004] Indeks IX_skw_RolePermissions_PermissionID utworzony.';
     END
 

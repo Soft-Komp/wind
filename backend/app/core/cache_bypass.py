@@ -170,7 +170,7 @@ class CacheBypassManager:
             result = await db.execute(
                 sa_text("""
                     SELECT [ConfigValue]
-                    FROM [dbo_ext].[skw_SystemConfig]
+                    FROM [dbo].[skw_SystemConfig]
                     WHERE [ConfigKey] = :key
                       AND [IsActive] = 1
                 """),

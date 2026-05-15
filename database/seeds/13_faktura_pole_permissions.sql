@@ -11,7 +11,7 @@
 
 SET NOCOUNT ON;
 
-MERGE [dbo_ext].[skw_Permissions] AS target
+MERGE [dbo].[skw_Permissions] AS target
 USING (
     VALUES
     -- =========================================================================

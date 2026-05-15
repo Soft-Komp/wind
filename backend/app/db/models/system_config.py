@@ -1,5 +1,5 @@
 """
-Model tabeli dbo_ext.skw_SystemConfig.
+Model tabeli dbo.skw_SystemConfig.
 Dynamiczna konfiguracja aplikacji. Cachowana w Redis (TTL: 5 min).
 Zmiana config_value działa bez restartu aplikacji.
 """
@@ -13,7 +13,7 @@ from .base import AuditMixin, Base
 class SystemConfig(AuditMixin, Base):
     __tablename__ = "skw_SystemConfig"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": (
             "Dynamiczna konfiguracja. Cachowana Redis TTL=5min. "
             "Zmiana bez restartu. Patrz: config_service.py"

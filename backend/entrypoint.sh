@@ -274,41 +274,16 @@ _SCHEMA_CHECK=$(/opt/mssql-tools18/bin/sqlcmd \
     -U "${DB_USER}" \
     -P "${DB_PASSWORD}" \
     -C -b -h -1 \
-    -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.schemas WHERE name='dbo_ext';" \
+    -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo' AND t.name LIKE 'skw_%';" \
     2>/dev/null | tr -d ' \r\n' || echo "0")
 
 if [ "$_SCHEMA_CHECK" = "0" ] || [ -z "$_SCHEMA_CHECK" ]; then
-    log_warn "Schemat dbo_ext NIE ISTNIEJE w bazie ${DB_NAME}!"
-    log_warn "Uruchom DDL: sqlcmd -i database/ddl/000_create_schema.sql"
-    log_warn ""
-    log_warn "Jeśli używasz ALEMBIC_MODE=upgrade — Alembic spróbuje utworzyć schemat."
-    log_warn "Jeśli używasz ALEMBIC_MODE=stamp   — schemat MUSI istnieć wcześniej."
-
+    log_warn "Brak tabel skw_* w schemacie dbo — migracje moga byc potrzebne."
     if [ "$ALEMBIC_MODE" = "stamp" ]; then
-        die "ALEMBIC_MODE=stamp wymaga istniejącego schematu dbo_ext. Uruchom DDL najpierw."
+        die "ALEMBIC_MODE=stamp wymaga istniejacych tabel skw_* w dbo. Uruchom: alembic upgrade head"
     fi
 else
-    log_ok "Schemat dbo_ext istnieje w bazie ${DB_NAME}."
-
-    # Sprawdź ile tabel skw_ już istnieje
-    _SKW_COUNT=$(/opt/mssql-tools18/bin/sqlcmd \
-        -S "tcp:${DB_HOST},${DB_PORT}" \
-        -d "${DB_NAME}" \
-        -U "${DB_USER}" \
-        -P "${DB_PASSWORD}" \
-        -C -b -h -1 \
-        -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo_ext' AND t.name LIKE 'skw_%';" \
-        2>/dev/null | tr -d ' \r\n' || echo "0")
-
-    log_ok "Tabele skw_* w dbo_ext: ${_SKW_COUNT}/13"
-
-    # Ostrzeżenie gdy tabele istnieją ale ALEMBIC_MODE=upgrade
-    if [ "$_SKW_COUNT" -gt "0" ] && [ "$ALEMBIC_MODE" = "upgrade" ]; then
-        log_warn "Wykryto ${_SKW_COUNT} tabel skw_* w bazie."
-        log_warn "Jeśli DDL był wykonany ręcznie (sqlcmd), użyj ALEMBIC_MODE=stamp"
-        log_warn "aby uniknąć błędu 'Table already exists'."
-        log_warn "Kontynuuję z ALEMBIC_MODE=upgrade — migracja 0001 jest idempotentna (IF NOT EXISTS)."
-    fi
+    log_ok "Tabele skw_* w schemacie dbo: ${_SCHEMA_CHECK}"
 fi
 
 # =============================================================================
@@ -329,11 +304,11 @@ _SCHEMA_EXISTS=$(/opt/mssql-tools18/bin/sqlcmd \
     -U "${DB_USER}" \
     -P "${DB_PASSWORD}" \
     -C -b -h -1 \
-    -Q "SET NOCOUNT ON; SELECT CAST(ISNULL(SCHEMA_ID(N'dbo_ext'), 0) AS NVARCHAR(10));" \
+    -Q "SET NOCOUNT ON; SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id WHERE s.name='dbo' AND t.name LIKE 'skw_%';" \
     2>/dev/null | tr -d ' \r\n' || echo "0")
 
 if [ "$_SCHEMA_EXISTS" != "0" ]; then
-    log_ok "Schemat dbo_ext istnieje (schema_id=${_SCHEMA_EXISTS}) — pomijam DDL."
+    log_ok "Tabele skw_* w schemacie dbo: ${_SCHEMA_EXISTS} — pomijam bootstrap DDL."
 else
     log_info "Schemat dbo_ext NIE ISTNIEJE — uruchamiam DDL bootstrap..."
 
@@ -423,15 +398,15 @@ case "$ALEMBIC_MODE" in
                 -C -b -h -1 \
                 -Q "
                     SET NOCOUNT ON;
-                        IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NOT NULL
+                        IF OBJECT_ID(N'[dbo].[skw_SchemaChecksums]', N'U') IS NOT NULL
                         BEGIN
-                            DELETE FROM [dbo_ext].[skw_SchemaChecksums]
+                            DELETE FROM [dbo].[skw_SchemaChecksums]
                             WHERE NOT EXISTS (
                                 SELECT 1
                                 FROM sys.objects  o
                                 JOIN sys.schemas  s ON s.schema_id = o.schema_id
-                                WHERE s.name = [dbo_ext].[skw_SchemaChecksums].[SchemaName]
-                                AND o.name = [dbo_ext].[skw_SchemaChecksums].[ObjectName]
+                                WHERE s.name = [dbo].[skw_SchemaChecksums].[SchemaName]
+                                AND o.name = [dbo].[skw_SchemaChecksums].[ObjectName]
                                 AND o.type IN ('V', 'P', 'FN', 'IF', 'TF')
                             );
                             PRINT 'SchemaChecksums cleanup: ' + CAST(@@ROWCOUNT AS NVARCHAR) + ' wpisow usunieto.';
@@ -516,7 +491,7 @@ case "$RUN_SEEDS" in
             -U "${DB_USER}" \
             -P "${DB_PASSWORD}" \
             -C -b -h -1 \
-            -Q "SET NOCOUNT ON; IF OBJECT_ID(N'[dbo_ext].[skw_Roles]','U') IS NOT NULL SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM [dbo_ext].[skw_Roles] ELSE SELECT N'0';" \
+            -Q "SET NOCOUNT ON; IF OBJECT_ID(N'[dbo].[skw_Roles]','U') IS NOT NULL SELECT CAST(COUNT(*) AS NVARCHAR(10)) FROM [dbo].[skw_Roles] ELSE SELECT N'0';" \
             2>/dev/null | tr -d ' \r\n' || echo "0")
 
         if [ "$_ROLES_COUNT" = "0" ]; then

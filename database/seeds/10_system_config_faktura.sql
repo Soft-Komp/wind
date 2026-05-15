@@ -22,7 +22,7 @@ GO
 -- ---------------------------------------------------------------------------
 -- MERGE: wstaw brakujące uprawnienia, nie dotykaj istniejących
 -- ---------------------------------------------------------------------------
-MERGE INTO [dbo_ext].[skw_Permissions] AS target
+MERGE INTO [dbo].[skw_Permissions] AS target
 USING (
     VALUES
     -- ==================================================================
@@ -141,12 +141,12 @@ SELECT
     [Category],
     [IsActive],
     [CreatedAt]
-FROM   [dbo_ext].[skw_Permissions]
+FROM   [dbo].[skw_Permissions]
 WHERE  [Category] = N'faktury'
 ORDER BY [PermissionName];
 
 DECLARE @cnt INT;
-SELECT @cnt = COUNT(*) FROM [dbo_ext].[skw_Permissions] WHERE [Category] = N'faktury';
+SELECT @cnt = COUNT(*) FROM [dbo].[skw_Permissions] WHERE [Category] = N'faktury';
 PRINT '[08] Uprawnienia kategorii faktury: ' + CAST(@cnt AS VARCHAR(10)) + ' (oczekiwane: 14)';
 IF @cnt <> 14
     PRINT '[08] ⚠️  UWAGA: Liczba uprawnień różni się od oczekiwanej!';

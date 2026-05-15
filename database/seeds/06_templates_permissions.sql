@@ -14,7 +14,7 @@ GO
 BEGIN TRANSACTION;
 BEGIN TRY
 
-    MERGE [dbo_ext].[skw_Permissions] AS target
+    MERGE [dbo].[skw_Permissions] AS target
     USING (VALUES
         (N'templates.view_list',
          N'Lista wszystkich szablonów monitów',
@@ -63,21 +63,21 @@ BEGIN TRANSACTION;
 BEGIN TRY
 
     -- ADMIN — wszystkie templates.*
-    INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+    INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM   [dbo_ext].[skw_Roles]       r
-    JOIN   [dbo_ext].[skw_Permissions] p ON p.[Category] = N'templates' AND p.[IsActive] = 1
+    FROM   [dbo].[skw_Roles]       r
+    JOIN   [dbo].[skw_Permissions] p ON p.[Category] = N'templates' AND p.[IsActive] = 1
     WHERE  r.[RoleName] = N'Admin'
       AND  NOT EXISTS (
-          SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+          SELECT 1 FROM [dbo].[skw_RolePermissions] rp
           WHERE rp.[ID_ROLE] = r.[ID_ROLE] AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
       );
 
     -- MANAGER — view_list, view_details, create, edit
-    INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+    INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM   [dbo_ext].[skw_Roles]       r
-    JOIN   [dbo_ext].[skw_Permissions] p ON p.[Category] = N'templates'
+    FROM   [dbo].[skw_Roles]       r
+    JOIN   [dbo].[skw_Permissions] p ON p.[Category] = N'templates'
                                          AND p.[PermissionName] IN (
                                              N'templates.view_list',
                                              N'templates.view_details',
@@ -87,15 +87,15 @@ BEGIN TRY
                                          AND p.[IsActive] = 1
     WHERE  r.[RoleName] = N'Manager'
       AND  NOT EXISTS (
-          SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+          SELECT 1 FROM [dbo].[skw_RolePermissions] rp
           WHERE rp.[ID_ROLE] = r.[ID_ROLE] AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
       );
 
     -- USER — view_list, view_details
-    INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+    INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM   [dbo_ext].[skw_Roles]       r
-    JOIN   [dbo_ext].[skw_Permissions] p ON p.[Category] = N'templates'
+    FROM   [dbo].[skw_Roles]       r
+    JOIN   [dbo].[skw_Permissions] p ON p.[Category] = N'templates'
                                          AND p.[PermissionName] IN (
                                              N'templates.view_list',
                                              N'templates.view_details'
@@ -103,20 +103,20 @@ BEGIN TRY
                                          AND p.[IsActive] = 1
     WHERE  r.[RoleName] = N'User'
       AND  NOT EXISTS (
-          SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+          SELECT 1 FROM [dbo].[skw_RolePermissions] rp
           WHERE rp.[ID_ROLE] = r.[ID_ROLE] AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
       );
 
     -- READONLY — view_list
-    INSERT INTO [dbo_ext].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
+    INSERT INTO [dbo].[skw_RolePermissions] ([ID_ROLE], [ID_PERMISSION])
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM   [dbo_ext].[skw_Roles]       r
-    JOIN   [dbo_ext].[skw_Permissions] p ON p.[Category] = N'templates'
+    FROM   [dbo].[skw_Roles]       r
+    JOIN   [dbo].[skw_Permissions] p ON p.[Category] = N'templates'
                                          AND p.[PermissionName] = N'templates.view_list'
                                          AND p.[IsActive] = 1
     WHERE  r.[RoleName] = N'ReadOnly'
       AND  NOT EXISTS (
-          SELECT 1 FROM [dbo_ext].[skw_RolePermissions] rp
+          SELECT 1 FROM [dbo].[skw_RolePermissions] rp
           WHERE rp.[ID_ROLE] = r.[ID_ROLE] AND rp.[ID_PERMISSION] = p.[ID_PERMISSION]
       );
 
@@ -135,9 +135,9 @@ GO
 SELECT
     r.[RoleName],
     p.[PermissionName]
-FROM   [dbo_ext].[skw_RolePermissions] rp
-JOIN   [dbo_ext].[skw_Roles]           r ON r.[ID_ROLE]       = rp.[ID_ROLE]
-JOIN   [dbo_ext].[skw_Permissions]     p ON p.[ID_PERMISSION] = rp.[ID_PERMISSION]
+FROM   [dbo].[skw_RolePermissions] rp
+JOIN   [dbo].[skw_Roles]           r ON r.[ID_ROLE]       = rp.[ID_ROLE]
+JOIN   [dbo].[skw_Permissions]     p ON p.[ID_PERMISSION] = rp.[ID_PERMISSION]
 WHERE  p.[Category] = N'templates'
 ORDER BY r.[RoleName], p.[PermissionName];
 GO

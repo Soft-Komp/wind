@@ -56,7 +56,7 @@ IF NOT EXISTS (
 BEGIN
     PRINT N'[017] Tworzenie tabeli dbo_ext.skw_faktura_log...';
 
-    CREATE TABLE [dbo_ext].[skw_faktura_log] (
+    CREATE TABLE [dbo].[skw_faktura_log] (
 
         -- ── Identyfikacja ────────────────────────────────────────────────────
         id          INT          IDENTITY(1,1) NOT NULL,
@@ -87,13 +87,13 @@ BEGIN
         -- FK: do której faktury należy ten wpis logu
         CONSTRAINT [FK_sfl_faktura_id]
             FOREIGN KEY (faktura_id)
-            REFERENCES [dbo_ext].[skw_faktura_akceptacja] (id),
+            REFERENCES [dbo].[skw_faktura_akceptacja] (id),
 
         -- FK: kto wykonał akcję
         -- ON DELETE SET NULL: historia przeżywa dezaktywację/usunięcie pracownika
         CONSTRAINT [FK_sfl_user_id]
             FOREIGN KEY (user_id)
-            REFERENCES [dbo_ext].[skw_Users] (ID_USER)
+            REFERENCES [dbo].[skw_Users] (ID_USER)
             ON DELETE SET NULL,
 
         -- Walidacja typów akcji — wszystkie możliwe zdarzenia w module
@@ -137,7 +137,7 @@ BEGIN
     PRINT N'[017] Tworzenie indeksu IX_sfl_faktura_created...';
 
     CREATE NONCLUSTERED INDEX [IX_sfl_faktura_created]
-        ON [dbo_ext].[skw_faktura_log]
+        ON [dbo].[skw_faktura_log]
             (faktura_id ASC, CreatedAt DESC)
         WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF,
               SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF,

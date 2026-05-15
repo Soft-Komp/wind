@@ -35,7 +35,7 @@ PRZYKŁADY OPERACJI:
   op.create_index('IX_skw_Users_Email', 'skw_Users', ['Email'], schema='dbo_ext')
 
   # Wykonaj surowy SQL (np. INSERT seed danych)
-  op.execute("INSERT INTO [dbo_ext].[skw_SystemConfig] ...")
+  op.execute("INSERT INTO [dbo].[skw_SystemConfig] ...")
 
   # Warunkowe — sprawdź czy kolumna istnieje zanim dodasz
   # (przydatne gdy DDL i Alembic mogą być niezsynch.)

@@ -34,7 +34,7 @@ BEGIN TRY
     BEGIN
         PRINT '[012] Tworzenie tabeli dbo_ext.skw_MasterAccessLog...';
 
-        CREATE TABLE [dbo_ext].[skw_MasterAccessLog] (
+        CREATE TABLE [dbo].[skw_MasterAccessLog] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_LOG]          BIGINT         IDENTITY(1,1)  NOT NULL,
@@ -63,7 +63,7 @@ BEGIN TRY
             -- FK → skw_Users (SET NULL — log zostaje po usunięciu usera)
             CONSTRAINT [FK_skw_MasterAccessLog_TargetUserID]
                 FOREIGN KEY ([TargetUserID])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE SET NULL
                 ON UPDATE NO ACTION
         );
@@ -84,7 +84,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_AccessedAt]
-            ON [dbo_ext].[skw_MasterAccessLog] ([AccessedAt] DESC);
+            ON [dbo].[skw_MasterAccessLog] ([AccessedAt] DESC);
         PRINT '[012] Indeks IX_skw_MasterAccessLog_AccessedAt utworzony.';
     END
 
@@ -95,7 +95,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_MasterAccessLog_TargetUserID]
-            ON [dbo_ext].[skw_MasterAccessLog] ([TargetUserID] ASC, [AccessedAt] DESC)
+            ON [dbo].[skw_MasterAccessLog] ([TargetUserID] ASC, [AccessedAt] DESC)
             WHERE [TargetUserID] IS NOT NULL;
         PRINT '[012] Indeks IX_skw_MasterAccessLog_TargetUserID utworzony.';
     END

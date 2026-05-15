@@ -43,7 +43,7 @@ BEGIN TRY
     BEGIN
         PRINT '[011] Tworzenie tabeli dbo_ext.skw_SchemaChecksums v2.0.0...';
 
-        CREATE TABLE [dbo_ext].[skw_SchemaChecksums] (
+        CREATE TABLE [dbo].[skw_SchemaChecksums] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_CHECKSUM]      INT            IDENTITY(1,1)  NOT NULL,

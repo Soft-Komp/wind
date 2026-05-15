@@ -35,7 +35,7 @@ PRZYKŁADY OPERACJI:
   op.create_index('IX_skw_Users_Email', 'skw_Users', ['Email'], schema='dbo_ext')
 
   # Wykonaj surowy SQL (np. INSERT seed danych)
-  op.execute("INSERT INTO [dbo_ext].[skw_SystemConfig] ...")
+  op.execute("INSERT INTO [dbo].[skw_SystemConfig] ...")
 
   # Warunkowe — sprawdź czy kolumna istnieje zanim dodasz
   # (przydatne gdy DDL i Alembic mogą być niezsynch.)
@@ -623,10 +623,10 @@ def _create_wapro_indexes() -> None:
         IF NOT EXISTS (
             SELECT 1 FROM sys.indexes
             WHERE name = N'IX_Mon_Kontrahent_Historia'
-              AND object_id = OBJECT_ID(N'[dbo_ext].[skw_MonitHistory]')
+              AND object_id = OBJECT_ID(N'[dbo].[skw_MonitHistory]')
         )
         CREATE NONCLUSTERED INDEX [IX_Mon_Kontrahent_Historia]
-            ON [dbo_ext].[skw_MonitHistory] ([ID_KONTRAHENTA] ASC, [IsActive] ASC)
+            ON [dbo].[skw_MonitHistory] ([ID_KONTRAHENTA] ASC, [IsActive] ASC)
             INCLUDE ([SentAt], [MonitType], [CreatedAt]);
     """)
     op.execute("""

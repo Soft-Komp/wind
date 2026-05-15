@@ -31,7 +31,7 @@ BEGIN TRY
     BEGIN
         PRINT '[001] Tworzenie tabeli dbo_ext.skw_Roles...';
 
-        CREATE TABLE [dbo_ext].[skw_Roles] (
+        CREATE TABLE [dbo].[skw_Roles] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_ROLE]     INT           IDENTITY(1,1)  NOT NULL,
@@ -73,7 +73,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Roles_IsActive]
-            ON [dbo_ext].[skw_Roles] ([IsActive] ASC);
+            ON [dbo].[skw_Roles] ([IsActive] ASC);
         PRINT '[001] Indeks IX_skw_Roles_IsActive utworzony.';
     END
 

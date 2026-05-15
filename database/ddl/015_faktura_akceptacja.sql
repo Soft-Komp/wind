@@ -52,7 +52,7 @@ IF NOT EXISTS (
 BEGIN
     PRINT N'[015] Tworzenie tabeli dbo_ext.skw_faktura_akceptacja...';
 
-    CREATE TABLE [dbo_ext].[skw_faktura_akceptacja] (
+    CREATE TABLE [dbo].[skw_faktura_akceptacja] (
 
         -- ── Identyfikacja ────────────────────────────────────────────────────
         id                  INT          IDENTITY(1,1) NOT NULL,
@@ -93,7 +93,7 @@ BEGIN
         -- FK: kto wpuścił fakturę do obiegu
         CONSTRAINT [FK_sfa_utworzony_przez]
             FOREIGN KEY (utworzony_przez)
-            REFERENCES [dbo_ext].[skw_Users] (ID_USER),
+            REFERENCES [dbo].[skw_Users] (ID_USER),
 
         -- Walidacja statusu wewnętrznego
         CONSTRAINT [CHK_sfa_status_wewnetrzny] CHECK (

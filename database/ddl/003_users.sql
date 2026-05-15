@@ -37,7 +37,7 @@ BEGIN TRY
     BEGIN
         PRINT '[003] Tworzenie tabeli dbo_ext.skw_Users...';
 
-        CREATE TABLE [dbo_ext].[skw_Users] (
+        CREATE TABLE [dbo].[skw_Users] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_USER]              INT           IDENTITY(1,1)  NOT NULL,
@@ -85,7 +85,7 @@ BEGIN TRY
             -- FK → skw_Roles (RESTRICT — nie można usunąć roli z przypisanymi userami)
             CONSTRAINT [FK_skw_Users_RoleID]
                 FOREIGN KEY ([RoleID])
-                REFERENCES [dbo_ext].[skw_Roles] ([ID_ROLE])
+                REFERENCES [dbo].[skw_Roles] ([ID_ROLE])
                 ON DELETE NO ACTION
                 ON UPDATE NO ACTION
         );
@@ -114,7 +114,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Users_RoleID]
-            ON [dbo_ext].[skw_Users] ([RoleID] ASC);
+            ON [dbo].[skw_Users] ([RoleID] ASC);
         PRINT '[003] Indeks IX_skw_Users_RoleID utworzony.';
     END
 
@@ -125,7 +125,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Users_IsActive]
-            ON [dbo_ext].[skw_Users] ([IsActive] ASC);
+            ON [dbo].[skw_Users] ([IsActive] ASC);
         PRINT '[003] Indeks IX_skw_Users_IsActive utworzony.';
     END
 
@@ -137,7 +137,7 @@ BEGIN TRY
     BEGIN
         -- Filtrowany — tylko konta aktualnie zablokowane (NULL = brak blokady)
         CREATE NONCLUSTERED INDEX [IX_skw_Users_LockedUntil]
-            ON [dbo_ext].[skw_Users] ([LockedUntil] ASC)
+            ON [dbo].[skw_Users] ([LockedUntil] ASC)
             WHERE [LockedUntil] IS NOT NULL;
         PRINT '[003] Indeks IX_skw_Users_LockedUntil utworzony.';
     END

@@ -53,7 +53,7 @@ class SchemaChecksums(Base):
 
     __tablename__ = "skw_SchemaChecksums"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": (
             "Sumy kontrolne widoków i procedur — ochrona integralności schematu. "
             "Niezgodność przy starcie → SystemExit(1)."

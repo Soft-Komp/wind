@@ -32,7 +32,7 @@ BEGIN TRY
     BEGIN
         PRINT '[007] Tworzenie tabeli dbo_ext.skw_AuditLog...';
 
-        CREATE TABLE [dbo_ext].[skw_AuditLog] (
+        CREATE TABLE [dbo].[skw_AuditLog] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_LOG]          BIGINT         IDENTITY(1,1)  NOT NULL,
@@ -87,7 +87,7 @@ BEGIN TRY
             -- FK → skw_Users (SET NULL — log zostaje po usunięciu usera)
             CONSTRAINT [FK_skw_AuditLog_UserID]
                 FOREIGN KEY ([ID_USER])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE SET NULL
                 ON UPDATE NO ACTION
         );
@@ -108,7 +108,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_AuditLog_Timestamp]
-            ON [dbo_ext].[skw_AuditLog] ([Timestamp] DESC);
+            ON [dbo].[skw_AuditLog] ([Timestamp] DESC);
         PRINT '[007] Indeks IX_skw_AuditLog_Timestamp utworzony.';
     END
 
@@ -119,7 +119,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_AuditLog_UserID]
-            ON [dbo_ext].[skw_AuditLog] ([ID_USER] ASC, [Timestamp] DESC)
+            ON [dbo].[skw_AuditLog] ([ID_USER] ASC, [Timestamp] DESC)
             WHERE [ID_USER] IS NOT NULL;
         PRINT '[007] Indeks IX_skw_AuditLog_UserID utworzony.';
     END
@@ -131,7 +131,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_AuditLog_ActionCategory]
-            ON [dbo_ext].[skw_AuditLog] ([ActionCategory] ASC, [Timestamp] DESC);
+            ON [dbo].[skw_AuditLog] ([ActionCategory] ASC, [Timestamp] DESC);
         PRINT '[007] Indeks IX_skw_AuditLog_ActionCategory utworzony.';
     END
 
@@ -142,7 +142,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_AuditLog_EntityType_ID]
-            ON [dbo_ext].[skw_AuditLog] ([EntityType] ASC, [EntityID] ASC, [Timestamp] DESC)
+            ON [dbo].[skw_AuditLog] ([EntityType] ASC, [EntityID] ASC, [Timestamp] DESC)
             WHERE [EntityType] IS NOT NULL;
         PRINT '[007] Indeks IX_skw_AuditLog_EntityType_ID utworzony.';
     END

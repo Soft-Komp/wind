@@ -286,7 +286,7 @@ def _check_prerequisites() -> None:
         IF OBJECT_ID(N'[dbo].[RM_Func_ClarionDateToDateTime]', N'FN') IS NULL
             SET @brak = @brak + N'  [BRAK] dbo.RM_Func_ClarionDateToDateTime' + CHAR(10);
 
-        IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NULL
+        IF OBJECT_ID(N'[dbo].[skw_SchemaChecksums]', N'U') IS NULL
             SET @brak = @brak + N'  [BRAK] dbo_ext.skw_SchemaChecksums' + CHAR(10);
 
         IF LEN(@brak) > 0

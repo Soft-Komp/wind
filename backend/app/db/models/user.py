@@ -56,7 +56,7 @@ class User(Base):
 
     __tablename__ = "skw_Users"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": "Użytkownicy systemu windykacyjnego — zarządzani przez aplikację",
     }
 
@@ -105,7 +105,7 @@ class User(Base):
     role_id: Mapped[int] = mapped_column(
         "RoleID",
         Integer,
-        ForeignKey("dbo_ext.skw_Roles.ID_ROLE", ondelete="RESTRICT"),
+        ForeignKey("dbo.skw_Roles.ID_ROLE", ondelete="RESTRICT"),
         nullable=False,
         comment="FK → Roles.ID_ROLE — RESTRICT: nie można usunąć roli z userami",
     )

@@ -40,7 +40,7 @@ def _sync_insert_alert_log(
     checked_at: datetime,
 ) -> int | None:
     sql = """
-    INSERT INTO [dbo_ext].[skw_AlertLog] (
+    INSERT INTO [dbo].[skw_AlertLog] (
         [AlertType], [Level], [Title], [Message], [Details],
         [EmailSent], [EmailRecipients], [EmailError],
         [IsRecovery], [IncidentId], [CheckedAt], [CreatedAt]

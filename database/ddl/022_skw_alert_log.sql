@@ -24,7 +24,7 @@ IF NOT EXISTS (
     WHERE s.name = 'dbo_ext' AND t.name = 'skw_AlertLog'
 )
 BEGIN
-    CREATE TABLE [dbo_ext].[skw_AlertLog] (
+    CREATE TABLE [dbo].[skw_AlertLog] (
         -- Klucz główny
         [ID]              BIGINT          NOT NULL IDENTITY(1,1),
 
@@ -83,7 +83,7 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_skw_AlertLog_AlertType]
-        ON [dbo_ext].[skw_AlertLog] ([AlertType] ASC)
+        ON [dbo].[skw_AlertLog] ([AlertType] ASC)
         INCLUDE ([Level], [EmailSent], [CreatedAt]);
     PRINT '✅ INDEX IX_skw_AlertLog_AlertType utworzony.';
 END
@@ -96,7 +96,7 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_skw_AlertLog_Level]
-        ON [dbo_ext].[skw_AlertLog] ([Level] ASC, [CreatedAt] DESC);
+        ON [dbo].[skw_AlertLog] ([Level] ASC, [CreatedAt] DESC);
     PRINT '✅ INDEX IX_skw_AlertLog_Level utworzony.';
 END
 GO
@@ -108,7 +108,7 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_skw_AlertLog_IncidentId]
-        ON [dbo_ext].[skw_AlertLog] ([IncidentId] ASC);
+        ON [dbo].[skw_AlertLog] ([IncidentId] ASC);
     PRINT '✅ INDEX IX_skw_AlertLog_IncidentId utworzony.';
 END
 GO
@@ -120,7 +120,7 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_skw_AlertLog_IsRecovery]
-        ON [dbo_ext].[skw_AlertLog] ([IsRecovery] ASC, [CreatedAt] DESC);
+        ON [dbo].[skw_AlertLog] ([IsRecovery] ASC, [CreatedAt] DESC);
     PRINT '✅ INDEX IX_skw_AlertLog_IsRecovery utworzony.';
 END
 GO
@@ -132,7 +132,7 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_skw_AlertLog_CreatedAt]
-        ON [dbo_ext].[skw_AlertLog] ([CreatedAt] DESC);
+        ON [dbo].[skw_AlertLog] ([CreatedAt] DESC);
     PRINT '✅ INDEX IX_skw_AlertLog_CreatedAt utworzony.';
 END
 GO

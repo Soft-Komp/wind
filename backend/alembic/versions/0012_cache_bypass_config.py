@@ -24,7 +24,7 @@ def upgrade() -> None:
 
     op.execute(
         f"""
-        MERGE [dbo_ext].[skw_SystemConfig] AS [target]
+        MERGE [dbo].[skw_SystemConfig] AS [target]
         USING (
             VALUES (
                 N'cache.bypass_enabled',
@@ -46,6 +46,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("""
-        DELETE FROM [dbo_ext].[skw_SystemConfig]
+        DELETE FROM [dbo].[skw_SystemConfig]
         WHERE [ConfigKey] = N'cache.bypass_enabled';
     """)

@@ -1,7 +1,7 @@
 # =============================================================================
 # backend/app/db/models/monit_history_invoices.py
 #
-# Model SQLAlchemy ORM dla tabeli dbo_ext.skw_MonitHistory_Invoices
+# Model SQLAlchemy ORM dla tabeli dbo.skw_MonitHistory_Invoices
 #
 # Tabela łączy monit (skw_MonitHistory) z rozrachunkami WAPRO.
 # Relacja N:M — jeden monit może dotyczyć wielu rozrachunków,
@@ -32,7 +32,7 @@ class MonitHistoryInvoice(Base):
     """
     Powiązanie monitu z rozrachunkiem WAPRO.
 
-    Tabela: dbo_ext.skw_MonitHistory_Invoices
+    Tabela: dbo.skw_MonitHistory_Invoices
     Schemat: dbo_ext
 
     INSERT wykonywany przez worker po każdej pomyślnej wysyłce monitu.
@@ -76,7 +76,7 @@ class MonitHistoryInvoice(Base):
         "ID_MONIT",
         BigInteger,
         ForeignKey(
-            "dbo_ext.skw_MonitHistory.ID_MONIT",
+            "dbo.skw_MonitHistory.ID_MONIT",
             ondelete="CASCADE",
             name="FK_skw_MonitHistory_Invoices_skw_MonitHistory",
         ),

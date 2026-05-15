@@ -1,6 +1,6 @@
 # backend/app/db/models/koszt_dodatkowy.py
 """
-Model ORM — dbo_ext.skw_KosztyDodatkowe.
+Model ORM — dbo.skw_KosztyDodatkowe.
 
 Koszty dodatkowe doliczane do monitów (stała kwota per typ monitu).
 """
@@ -17,7 +17,7 @@ from app.db.base import Base
 
 class KosztDodatkowy(Base):
     __tablename__ = "skw_KosztyDodatkowe"
-    __table_args__ = {"schema": "dbo_ext"}
+    __table_args__ = {"schema": "dbo"}
 
     id_kosztu: Mapped[int] = mapped_column(
         "ID_KOSZTU", BigInteger, Identity(start=1, increment=1), primary_key=True

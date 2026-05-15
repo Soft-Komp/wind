@@ -11,7 +11,6 @@
 -- BAZA: GPGKJASLO
 -- =============================================================================
 
-USE [GPGKJASLO];
 GO
 
 SET NOCOUNT ON;
@@ -72,7 +71,7 @@ FETCH NEXT FROM fk_cursor INTO @fk_name, @table_name;
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    SET @sql = N'ALTER TABLE [dbo_ext].[' + @table_name + N'] DROP CONSTRAINT [' + @fk_name + N']';
+    SET @sql = N'ALTER TABLE [dbo].[' + @table_name + N'] DROP CONSTRAINT [' + @fk_name + N']';
     EXEC sp_executesql @sql;
     PRINT '[OK] FK: ' + @fk_name + ' (tabela: ' + @table_name + ')';
     SET @cnt = @cnt + 1;
@@ -108,7 +107,7 @@ FETCH NEXT FROM tr_cursor INTO @tr_name, @tr_table;
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    SET @sql = N'DROP TRIGGER [dbo_ext].[' + @tr_name + N']';
+    SET @sql = N'DROP TRIGGER [dbo].[' + @tr_name + N']';
     EXEC sp_executesql @sql;
     PRINT '[OK] Trigger: ' + @tr_name;
     SET @triggers_removed = @triggers_removed + 1;
@@ -145,7 +144,7 @@ FETCH NEXT FROM tbl_cursor INTO @tbl_name;
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    SET @sql = N'DROP TABLE [dbo_ext].[' + @tbl_name + N']';
+    SET @sql = N'DROP TABLE [dbo].[' + @tbl_name + N']';
     BEGIN TRY
         EXEC sp_executesql @sql;
         PRINT '[OK] ' + @tbl_name;
@@ -185,8 +184,8 @@ END
 */
 
 -- alembic_version w dbo_ext (starsze instalacje)
-IF OBJECT_ID(N'[dbo_ext].[alembic_version]', N'U') IS NOT NULL
-BEGIN DROP TABLE [dbo_ext].[alembic_version]; PRINT '[OK] dbo_ext.alembic_version'; END
+IF OBJECT_ID(N'[dbo].[alembic_version]', N'U') IS NOT NULL
+BEGIN DROP TABLE [dbo].[alembic_version]; PRINT '[OK] dbo_ext.alembic_version'; END
 ELSE PRINT '[--] dbo_ext.alembic_version';
 
 -- alembic_version w dbo (aktualne instalacje — version_table_schema=dbo)

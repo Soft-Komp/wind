@@ -31,7 +31,7 @@ BEGIN TRY
     BEGIN
         PRINT '[006] Tworzenie tabeli dbo_ext.skw_OtpCodes...';
 
-        CREATE TABLE [dbo_ext].[skw_OtpCodes] (
+        CREATE TABLE [dbo].[skw_OtpCodes] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_OTP]    INT           IDENTITY(1,1)  NOT NULL,
@@ -70,7 +70,7 @@ BEGIN TRY
             -- FK → skw_Users (usunięcie usera = usunięcie jego kodów OTP)
             CONSTRAINT [FK_skw_OtpCodes_UserID]
                 FOREIGN KEY ([ID_USER])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE CASCADE
                 ON UPDATE NO ACTION
         );
@@ -91,7 +91,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_OtpCodes_UserID_Purpose]
-            ON [dbo_ext].[skw_OtpCodes] ([ID_USER] ASC, [Purpose] ASC, [IsUsed] ASC)
+            ON [dbo].[skw_OtpCodes] ([ID_USER] ASC, [Purpose] ASC, [IsUsed] ASC)
             WHERE [IsUsed] = 0;
         PRINT '[006] Indeks IX_skw_OtpCodes_UserID_Purpose utworzony.';
     END
@@ -103,7 +103,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_OtpCodes_ExpiresAt]
-            ON [dbo_ext].[skw_OtpCodes] ([ExpiresAt] ASC)
+            ON [dbo].[skw_OtpCodes] ([ExpiresAt] ASC)
             WHERE [IsUsed] = 0;
         PRINT '[006] Indeks IX_skw_OtpCodes_ExpiresAt utworzony.';
     END

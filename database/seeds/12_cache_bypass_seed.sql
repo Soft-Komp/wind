@@ -6,7 +6,7 @@
 -- Uruchamiany przez migrację Alembic (w łańcuchu po 0009).
 -- =============================================================================
 
-MERGE [dbo_ext].[skw_SystemConfig] AS [target]
+MERGE [dbo].[skw_SystemConfig] AS [target]
 USING (
     VALUES (
         N'cache.bypass_enabled',

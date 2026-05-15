@@ -150,7 +150,7 @@ def downgrade() -> None:
    # Krok 1: Dodaj jako NULL
    op.add_column('skw_Users', sa.Column('NewCol', sa.String(50), nullable=True), schema='dbo_ext')
    # Krok 2: Wypełnij dane
-   op.execute("UPDATE [dbo_ext].[skw_Users] SET NewCol = 'wartość_domyślna'")
+   op.execute("UPDATE [dbo].[skw_Users] SET NewCol = 'wartość_domyślna'")
    # Krok 3: Zmień na NOT NULL
    op.alter_column('skw_Users', 'NewCol', existing_type=sa.String(50), nullable=False, schema='dbo_ext')
    ```

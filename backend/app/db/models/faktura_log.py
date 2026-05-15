@@ -1,7 +1,7 @@
 """
 Plik   : app/db/models/faktura_log.py
 Moduł  : Akceptacja Faktur KSeF
-Model  : FakturaLog → dbo_ext.skw_faktura_log
+Model  : FakturaLog → dbo.skw_faktura_log
 
 Immutable audit trail modułu faktur.
 ZASADA: tylko INSERT — nigdy UPDATE ani DELETE.
@@ -56,7 +56,7 @@ AKCJA_VALUES = frozenset({
 
 class FakturaLog(Base):
     """
-    Model ORM: dbo_ext.skw_faktura_log
+    Model ORM: dbo.skw_faktura_log
 
     Immutable audit trail — każde zdarzenie w module faktur.
     Jeden wiersz = jedno zdarzenie. Nigdy nie modyfikować po INSERT.
@@ -78,7 +78,7 @@ class FakturaLog(Base):
             name="CHK_sfl_akcja",
         ),
         Index("IX_sfl_faktura_created", "faktura_id", "CreatedAt"),
-        {"schema": "dbo_ext"},
+        {"schema": "dbo"},
     )
 
     # ── Kolumny ──────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ class FakturaLog(Base):
 
     faktura_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("dbo_ext.skw_faktura_akceptacja.id", ondelete="CASCADE"),
+        ForeignKey("dbo.skw_faktura_akceptacja.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="FK → skw_faktura_akceptacja",
@@ -100,7 +100,7 @@ class FakturaLog(Base):
 
     user_id: Mapped[Optional[int]] = mapped_column(
         Integer,
-        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="SET NULL"),
+        ForeignKey("dbo.skw_Users.ID_USER", ondelete="SET NULL"),
         nullable=True,
         comment="Kto wykonał akcję — NULL = akcja systemowa",
     )

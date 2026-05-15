@@ -375,17 +375,17 @@ def _upsert_schema_checksums() -> None:
             op.execute(
                 sa.text("""
                     IF EXISTS (
-                        SELECT 1 FROM [dbo_ext].[skw_SchemaChecksums]
+                        SELECT 1 FROM [dbo].[skw_SchemaChecksums]
                         WHERE [SchemaName] = :schema
                           AND [ObjectName] = :name
                     )
-                        UPDATE [dbo_ext].[skw_SchemaChecksums]
+                        UPDATE [dbo].[skw_SchemaChecksums]
                         SET    [Checksum]  = :checksum,
                                [UpdatedAt] = GETDATE()
                         WHERE  [SchemaName] = :schema
                           AND  [ObjectName] = :name
                     ELSE
-                        INSERT INTO [dbo_ext].[skw_SchemaChecksums]
+                        INSERT INTO [dbo].[skw_SchemaChecksums]
                             ([SchemaName], [ObjectType], [ObjectName],
                              [Checksum],  [UpdatedAt])
                         VALUES

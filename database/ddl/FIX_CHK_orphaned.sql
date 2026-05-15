@@ -23,7 +23,7 @@ BEGIN TRY
           AND parent_object_id = OBJECT_ID('dbo_ext.skw_faktura_akceptacja')
     )
     BEGIN
-        ALTER TABLE [dbo_ext].[skw_faktura_akceptacja]
+        ALTER TABLE [dbo].[skw_faktura_akceptacja]
         DROP CONSTRAINT [CHK_sfa_status_wewnetrzny];
         PRINT '[FIX] Stary constraint usunięty.';
     END
@@ -33,7 +33,7 @@ BEGIN TRY
     END
 
     -- 2. Dodajemy nowe ograniczenie z 'orphaned'
-    ALTER TABLE [dbo_ext].[skw_faktura_akceptacja]
+    ALTER TABLE [dbo].[skw_faktura_akceptacja]
     ADD CONSTRAINT [CHK_sfa_status_wewnetrzny]
     CHECK ([status_wewnetrzny] IN (
         N'anulowana',

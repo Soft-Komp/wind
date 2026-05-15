@@ -38,7 +38,7 @@ def upgrade() -> None:
               AND TABLE_NAME   = 'skw_MonitHistory_Invoices'
         )
         BEGIN
-            CREATE TABLE [dbo_ext].[skw_MonitHistory_Invoices] (
+            CREATE TABLE [dbo].[skw_MonitHistory_Invoices] (
                 [ID_MONIT_INVOICE]  BIGINT    IDENTITY(1,1) NOT NULL,
                 [ID_MONIT]          BIGINT                  NOT NULL,
                 [ID_ROZRACHUNKU]    INT                     NOT NULL,
@@ -49,7 +49,7 @@ def upgrade() -> None:
                     PRIMARY KEY CLUSTERED ([ID_MONIT_INVOICE] ASC),
                 CONSTRAINT [FK_skw_MonitHistory_Invoices_skw_MonitHistory]
                     FOREIGN KEY ([ID_MONIT])
-                    REFERENCES [dbo_ext].[skw_MonitHistory]([ID_MONIT])
+                    REFERENCES [dbo].[skw_MonitHistory]([ID_MONIT])
                     ON DELETE CASCADE
             )
             PRINT '0003: CREATE TABLE OK'
@@ -72,7 +72,7 @@ def upgrade() -> None:
               AND si.name = 'IX_skw_MonitHistory_Invoices_ID_MONIT'
         )
         CREATE INDEX [IX_skw_MonitHistory_Invoices_ID_MONIT]
-            ON [dbo_ext].[skw_MonitHistory_Invoices] ([ID_MONIT] ASC)
+            ON [dbo].[skw_MonitHistory_Invoices] ([ID_MONIT] ASC)
     """))
 
     op.execute(sa.text("""
@@ -85,7 +85,7 @@ def upgrade() -> None:
               AND si.name = 'IX_skw_MonitHistory_Invoices_ID_ROZRACHUNKU'
         )
         CREATE INDEX [IX_skw_MonitHistory_Invoices_ID_ROZRACHUNKU]
-            ON [dbo_ext].[skw_MonitHistory_Invoices] ([ID_ROZRACHUNKU] ASC)
+            ON [dbo].[skw_MonitHistory_Invoices] ([ID_ROZRACHUNKU] ASC)
     """))
 
     op.execute(sa.text("""
@@ -98,7 +98,7 @@ def upgrade() -> None:
               AND si.name = 'IX_skw_MonitHistory_Invoices_ROZR_DATE'
         )
         CREATE INDEX [IX_skw_MonitHistory_Invoices_ROZR_DATE]
-            ON [dbo_ext].[skw_MonitHistory_Invoices]
+            ON [dbo].[skw_MonitHistory_Invoices]
             ([ID_ROZRACHUNKU] ASC, [CreatedAt] DESC)
     """))
 
@@ -112,10 +112,10 @@ def upgrade() -> None:
     op.execute(
         sa.text("""
             IF NOT EXISTS (
-                SELECT 1 FROM [dbo_ext].[skw_SystemConfig]
+                SELECT 1 FROM [dbo].[skw_SystemConfig]
                 WHERE [ConfigKey] = 'monit.interval_days'
             )
-            INSERT INTO [dbo_ext].[skw_SystemConfig]
+            INSERT INTO [dbo].[skw_SystemConfig]
                 ([ConfigKey], [ConfigValue], [Description], [IsActive], [CreatedAt])
             VALUES (
                 'monit.interval_days',
@@ -130,10 +130,10 @@ def upgrade() -> None:
     op.execute(
         sa.text("""
             IF NOT EXISTS (
-                SELECT 1 FROM [dbo_ext].[skw_SystemConfig]
+                SELECT 1 FROM [dbo].[skw_SystemConfig]
                 WHERE [ConfigKey] = 'monit.block_mode'
             )
-            INSERT INTO [dbo_ext].[skw_SystemConfig]
+            INSERT INTO [dbo].[skw_SystemConfig]
                 ([ConfigKey], [ConfigValue], [Description], [IsActive], [CreatedAt])
             VALUES (
                 'monit.block_mode',
@@ -148,10 +148,10 @@ def upgrade() -> None:
     op.execute(
         sa.text("""
             IF NOT EXISTS (
-                SELECT 1 FROM [dbo_ext].[skw_SystemConfig]
+                SELECT 1 FROM [dbo].[skw_SystemConfig]
                 WHERE [ConfigKey] = 'monit.min_days_overdue'
             )
-            INSERT INTO [dbo_ext].[skw_SystemConfig]
+            INSERT INTO [dbo].[skw_SystemConfig]
                 ([ConfigKey], [ConfigValue], [Description], [IsActive], [CreatedAt])
             VALUES (
                 'monit.min_days_overdue',
@@ -171,7 +171,7 @@ def downgrade() -> None:
     logger.info("0003 downgrade: START")
 
     op.execute(sa.text("""
-        DELETE FROM [dbo_ext].[skw_SystemConfig]
+        DELETE FROM [dbo].[skw_SystemConfig]
         WHERE [ConfigKey] IN (
             'monit.interval_days',
             'monit.block_mode',
@@ -181,7 +181,7 @@ def downgrade() -> None:
 
     op.execute(sa.text("""
         IF OBJECT_ID('dbo_ext.skw_MonitHistory_Invoices', 'U') IS NOT NULL
-            DROP TABLE [dbo_ext].[skw_MonitHistory_Invoices]
+            DROP TABLE [dbo].[skw_MonitHistory_Invoices]
     """))
 
     logger.info("0003 downgrade: ZAKOŃCZONY POMYŚLNIE")

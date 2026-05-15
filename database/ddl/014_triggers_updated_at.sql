@@ -36,11 +36,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_Roles_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_Roles')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_Roles_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_Roles_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_Roles_UpdatedAt]
-ON [dbo_ext].[skw_Roles]
+CREATE TRIGGER [dbo].[TR_skw_Roles_UpdatedAt]
+ON [dbo].[skw_Roles]
 AFTER UPDATE
 AS
 BEGIN
@@ -49,7 +49,7 @@ BEGIN
     BEGIN
         UPDATE r
         SET    r.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_Roles] r
+        FROM   [dbo].[skw_Roles] r
         INNER JOIN inserted i ON r.[ID_ROLE] = i.[ID_ROLE];
     END
 END
@@ -67,11 +67,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_Permissions_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_Permissions')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_Permissions_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_Permissions_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_Permissions_UpdatedAt]
-ON [dbo_ext].[skw_Permissions]
+CREATE TRIGGER [dbo].[TR_skw_Permissions_UpdatedAt]
+ON [dbo].[skw_Permissions]
 AFTER UPDATE
 AS
 BEGIN
@@ -80,7 +80,7 @@ BEGIN
     BEGIN
         UPDATE p
         SET    p.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_Permissions] p
+        FROM   [dbo].[skw_Permissions] p
         INNER JOIN inserted i ON p.[ID_PERMISSION] = i.[ID_PERMISSION];
     END
 END
@@ -98,11 +98,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_Users_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_Users')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_Users_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_Users_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_Users_UpdatedAt]
-ON [dbo_ext].[skw_Users]
+CREATE TRIGGER [dbo].[TR_skw_Users_UpdatedAt]
+ON [dbo].[skw_Users]
 AFTER UPDATE
 AS
 BEGIN
@@ -111,7 +111,7 @@ BEGIN
     BEGIN
         UPDATE u
         SET    u.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_Users] u
+        FROM   [dbo].[skw_Users] u
         INNER JOIN inserted i ON u.[ID_USER] = i.[ID_USER];
     END
 END
@@ -129,11 +129,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_Templates_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_Templates')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_Templates_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_Templates_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_Templates_UpdatedAt]
-ON [dbo_ext].[skw_Templates]
+CREATE TRIGGER [dbo].[TR_skw_Templates_UpdatedAt]
+ON [dbo].[skw_Templates]
 AFTER UPDATE
 AS
 BEGIN
@@ -142,7 +142,7 @@ BEGIN
     BEGIN
         UPDATE t
         SET    t.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_Templates] t
+        FROM   [dbo].[skw_Templates] t
         INNER JOIN inserted i ON t.[ID_TEMPLATE] = i.[ID_TEMPLATE];
     END
 END
@@ -160,11 +160,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_MonitHistory_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_MonitHistory')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_MonitHistory_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_MonitHistory_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_MonitHistory_UpdatedAt]
-ON [dbo_ext].[skw_MonitHistory]
+CREATE TRIGGER [dbo].[TR_skw_MonitHistory_UpdatedAt]
+ON [dbo].[skw_MonitHistory]
 AFTER UPDATE
 AS
 BEGIN
@@ -173,7 +173,7 @@ BEGIN
     BEGIN
         UPDATE m
         SET    m.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_MonitHistory] m
+        FROM   [dbo].[skw_MonitHistory] m
         INNER JOIN inserted i ON m.[ID_MONIT] = i.[ID_MONIT];
     END
 END
@@ -191,11 +191,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_SystemConfig_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_SystemConfig')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_SystemConfig_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_SystemConfig_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_SystemConfig_UpdatedAt]
-ON [dbo_ext].[skw_SystemConfig]
+CREATE TRIGGER [dbo].[TR_skw_SystemConfig_UpdatedAt]
+ON [dbo].[skw_SystemConfig]
 AFTER UPDATE
 AS
 BEGIN
@@ -204,7 +204,7 @@ BEGIN
     BEGIN
         UPDATE c
         SET    c.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_SystemConfig] c
+        FROM   [dbo].[skw_SystemConfig] c
         INNER JOIN inserted i ON c.[ID_CONFIG] = i.[ID_CONFIG];
     END
 END
@@ -222,11 +222,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_SchemaChecksums_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_SchemaChecksums')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_SchemaChecksums_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_SchemaChecksums_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_SchemaChecksums_UpdatedAt]
-ON [dbo_ext].[skw_SchemaChecksums]
+CREATE TRIGGER [dbo].[TR_skw_SchemaChecksums_UpdatedAt]
+ON [dbo].[skw_SchemaChecksums]
 AFTER UPDATE
 AS
 BEGIN
@@ -235,7 +235,7 @@ BEGIN
     BEGIN
         UPDATE sc
         SET    sc.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_SchemaChecksums] sc
+        FROM   [dbo].[skw_SchemaChecksums] sc
         INNER JOIN inserted i ON sc.[ID_CHECKSUM] = i.[ID_CHECKSUM];
     END
 END
@@ -253,11 +253,11 @@ IF EXISTS (
     WHERE name = 'TR_skw_Comments_UpdatedAt'
       AND parent_id = OBJECT_ID('dbo_ext.skw_Comments')
 )
-    DROP TRIGGER [dbo_ext].[TR_skw_Comments_UpdatedAt];
+    DROP TRIGGER [dbo].[TR_skw_Comments_UpdatedAt];
 GO
 
-CREATE TRIGGER [dbo_ext].[TR_skw_Comments_UpdatedAt]
-ON [dbo_ext].[skw_Comments]
+CREATE TRIGGER [dbo].[TR_skw_Comments_UpdatedAt]
+ON [dbo].[skw_Comments]
 AFTER UPDATE
 AS
 BEGIN
@@ -266,7 +266,7 @@ BEGIN
     BEGIN
         UPDATE c
         SET    c.[UpdatedAt] = GETDATE()
-        FROM   [dbo_ext].[skw_Comments] c
+        FROM   [dbo].[skw_Comments] c
         INNER JOIN inserted i ON c.[ID_COMMENT] = i.[ID_COMMENT];
     END
 END

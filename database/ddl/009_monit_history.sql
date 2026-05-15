@@ -34,7 +34,7 @@ BEGIN TRY
     BEGIN
         PRINT '[009] Tworzenie tabeli dbo_ext.skw_MonitHistory...';
 
-        CREATE TABLE [dbo_ext].[skw_MonitHistory] (
+        CREATE TABLE [dbo].[skw_MonitHistory] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_MONIT]        BIGINT          IDENTITY(1,1)  NOT NULL,
@@ -116,14 +116,14 @@ BEGIN TRY
             -- FK → skw_Users (SET NULL — historia zostaje po usunięciu usera)
             CONSTRAINT [FK_skw_MonitHistory_UserID]
                 FOREIGN KEY ([ID_USER])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE SET NULL
                 ON UPDATE NO ACTION,
 
             -- FK → skw_Templates (SET NULL — historia zostaje po usunięciu szablonu)
             CONSTRAINT [FK_skw_MonitHistory_TemplateID]
                 FOREIGN KEY ([TemplateID])
-                REFERENCES [dbo_ext].[skw_Templates] ([ID_TEMPLATE])
+                REFERENCES [dbo].[skw_Templates] ([ID_TEMPLATE])
                 ON DELETE SET NULL
                 ON UPDATE NO ACTION
         );
@@ -144,7 +144,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_MonitHistory_Kontrahent]
-            ON [dbo_ext].[skw_MonitHistory] ([ID_KONTRAHENTA] ASC, [CreatedAt] DESC);
+            ON [dbo].[skw_MonitHistory] ([ID_KONTRAHENTA] ASC, [CreatedAt] DESC);
         PRINT '[009] Indeks IX_skw_MonitHistory_Kontrahent utworzony.';
     END
 
@@ -155,7 +155,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_MonitHistory_Status]
-            ON [dbo_ext].[skw_MonitHistory] ([Status] ASC, [CreatedAt] DESC);
+            ON [dbo].[skw_MonitHistory] ([Status] ASC, [CreatedAt] DESC);
         PRINT '[009] Indeks IX_skw_MonitHistory_Status utworzony.';
     END
 
@@ -166,7 +166,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_MonitHistory_UserID]
-            ON [dbo_ext].[skw_MonitHistory] ([ID_USER] ASC, [CreatedAt] DESC)
+            ON [dbo].[skw_MonitHistory] ([ID_USER] ASC, [CreatedAt] DESC)
             WHERE [ID_USER] IS NOT NULL;
         PRINT '[009] Indeks IX_skw_MonitHistory_UserID utworzony.';
     END

@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Stałe
 # ---------------------------------------------------------------------------
-MONITORED_SCHEMAS: tuple[str, ...] = ("dbo_ext", "dbo")
+MONITORED_SCHEMAS: tuple[str, ...] = ("dbo")
 
 # SQL pobierający AKTUALNE checksums z sys.sql_modules
 # Obejmuje oba schematy: dbo_ext (własne obiekty) + dbo (widoki WAPRO)
@@ -65,23 +65,12 @@ SELECT
     o.object_id                     AS object_id
 FROM sys.sql_modules m
 JOIN sys.objects      o ON m.object_id = o.object_id
-WHERE (
-    /* dbo_ext: wszystkie obiekty projektu */
-    SCHEMA_NAME(o.schema_id) = 'dbo_ext'
-)
-OR (
+WHERE
     SCHEMA_NAME(o.schema_id) = 'dbo'
-    AND o.type_desc = 'VIEW'
     AND (
         o.name LIKE 'VIEW[_]%'
         OR o.name LIKE 'skw[_]%'
     )
-)
-OR (
-    SCHEMA_NAME(o.schema_id) = 'dbo'
-    AND o.type_desc = 'SQL_SCALAR_FUNCTION'
-    AND o.name LIKE 'skw[_]%'
-)
 ORDER BY schema_name, object_name
 """
 
@@ -96,8 +85,8 @@ SELECT
     sc.AlembicRevision,
     sc.LastVerifiedAt,
     sc.CreatedAt
-FROM dbo_ext.skw_SchemaChecksums sc
-WHERE sc.SchemaName IN ('dbo_ext', 'dbo')
+FROM dbo.skw_SchemaChecksums sc
+WHERE sc.SchemaName = 'dbo'
   AND sc.ObjectType NOT IN ('INDEX', 'STATISTICS', 'TRIGGER')
 ORDER BY sc.SchemaName, sc.ObjectName
 """

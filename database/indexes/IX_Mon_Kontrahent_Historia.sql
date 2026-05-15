@@ -16,12 +16,12 @@ PRINT 'Tworzenie indeksu IX_Mon_Kontrahent_Historia...';
 
 IF NOT EXISTS (
     SELECT 1 FROM sys.indexes
-    WHERE object_id = OBJECT_ID(N'[dbo_ext].[MonitHistory]')
+    WHERE object_id = OBJECT_ID(N'[dbo].[MonitHistory]')
       AND name = N'IX_Mon_Kontrahent_Historia'
 )
 BEGIN
     CREATE NONCLUSTERED INDEX [IX_Mon_Kontrahent_Historia]
-        ON [dbo_ext].[MonitHistory] (
+        ON [dbo].[MonitHistory] (
             [ID_KONTRAHENTA] ASC,
             [CreatedAt]      DESC
         )

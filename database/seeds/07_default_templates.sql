@@ -9,7 +9,7 @@ GO
 BEGIN TRANSACTION;
 BEGIN TRY
 
-    MERGE [dbo_ext].[skw_Templates] AS target
+    MERGE [dbo].[skw_Templates] AS target
     USING (VALUES
         (
             N'Wezwanie do zapłaty - Email',
@@ -77,7 +77,7 @@ Z poważaniem,
         TemplateName,
         TemplateType,
         IsActive
-    FROM [dbo_ext].[skw_Templates]
+    FROM [dbo].[skw_Templates]
     ORDER BY ID_TEMPLATE;
 
     COMMIT TRANSACTION;

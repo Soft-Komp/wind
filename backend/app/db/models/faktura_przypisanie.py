@@ -1,7 +1,7 @@
 """
 Plik   : app/db/models/faktura_przypisanie.py
 Moduł  : Akceptacja Faktur KSeF
-Model  : FakturaPrzypisanie → dbo_ext.skw_faktura_przypisanie
+Model  : FakturaPrzypisanie → dbo.skw_faktura_przypisanie
 
 Jeden wiersz = jeden pracownik przypisany do jednej faktury.
 
@@ -62,7 +62,7 @@ STATUS_AKCEPTACJA = "zaakceptowane"
 
 class FakturaPrzypisanie(Base):
     """
-    Model ORM: dbo_ext.skw_faktura_przypisanie
+    Model ORM: dbo.skw_faktura_przypisanie
 
     Przypisanie pracownika do faktury w obiegu akceptacji.
 
@@ -92,7 +92,7 @@ class FakturaPrzypisanie(Base):
             "status IN ('oczekuje','zaakceptowane','odrzucone','nie_moje')",
             name="CK_skw_faktura_przypisanie_status",
         ),
-        {"schema": "dbo_ext"},
+        {"schema": "dbo"},
     )
 
     # ------------------------------------------------------------------
@@ -108,7 +108,7 @@ class FakturaPrzypisanie(Base):
     faktura_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey(
-            "dbo_ext.skw_faktura_akceptacja.id",
+            "dbo.skw_faktura_akceptacja.id",
             ondelete="NO ACTION",
             name="FK_skw_faktura_przypisanie_faktura",
         ),
@@ -120,7 +120,7 @@ class FakturaPrzypisanie(Base):
     user_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey(
-            "dbo_ext.skw_Users.ID_USER",
+            "dbo.skw_Users.ID_USER",
             ondelete="NO ACTION",
             name="FK_skw_faktura_przypisanie_user",
         ),

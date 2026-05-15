@@ -1306,7 +1306,7 @@ async def confirm_delete(
         from sqlalchemy import text as sa_text
         faktura_check = await db.execute(
             sa_text(
-                "SELECT COUNT(*) FROM [dbo_ext].[skw_faktura_przypisanie] "
+                "SELECT COUNT(*) FROM [dbo].[skw_faktura_przypisanie] "
                 "WHERE user_id = :uid AND is_active = 1 AND status = 'oczekuje'"
             ),
             {"uid": user_id},

@@ -36,7 +36,7 @@ BEGIN TRY
     BEGIN
         PRINT '[008] Tworzenie tabeli dbo_ext.skw_Templates...';
 
-        CREATE TABLE [dbo_ext].[skw_Templates] (
+        CREATE TABLE [dbo].[skw_Templates] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_TEMPLATE]  INT            IDENTITY(1,1)  NOT NULL,
@@ -92,7 +92,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Templates_Type_Active]
-            ON [dbo_ext].[skw_Templates] ([TemplateType] ASC, [IsActive] ASC);
+            ON [dbo].[skw_Templates] ([TemplateType] ASC, [IsActive] ASC);
         PRINT '[008] Indeks IX_skw_Templates_Type_Active utworzony.';
     END
 

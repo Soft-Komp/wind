@@ -103,12 +103,12 @@ def upgrade() -> None:
                   AND cc.name = N'CK_skw_Permissions_Category'
             )
             BEGIN
-                ALTER TABLE [dbo_ext].[skw_Permissions]
+                ALTER TABLE [dbo].[skw_Permissions]
                     DROP CONSTRAINT [CK_skw_Permissions_Category];
                 PRINT N'[0017] Stary constraint usunięty.';
             END
 
-            ALTER TABLE [dbo_ext].[skw_Permissions]
+            ALTER TABLE [dbo].[skw_Permissions]
                 ADD CONSTRAINT [CK_skw_Permissions_Category] CHECK (
                     [Category] IN (
                         N'faktury',   N'templates', N'auth',       N'users',
@@ -219,10 +219,10 @@ def downgrade() -> None:
               AND cc.definition LIKE N'%dashboard%'
         )
         BEGIN
-            ALTER TABLE [dbo_ext].[skw_Permissions]
+            ALTER TABLE [dbo].[skw_Permissions]
                 DROP CONSTRAINT [CK_skw_Permissions_Category];
 
-            ALTER TABLE [dbo_ext].[skw_Permissions]
+            ALTER TABLE [dbo].[skw_Permissions]
                 ADD CONSTRAINT [CK_skw_Permissions_Category] CHECK (
                     [Category] IN (
                         N'faktury',   N'templates', N'auth',      N'users',

@@ -1,7 +1,7 @@
 """
 Plik   : app/db/models/faktura_akceptacja.py
 Moduł  : Akceptacja Faktur KSeF
-Model  : FakturaAkceptacja → dbo_ext.skw_faktura_akceptacja
+Model  : FakturaAkceptacja → dbo.skw_faktura_akceptacja
 
 Odwzorowuje główną tabelę modułu: jeden wiersz na fakturę wpuszczoną do obiegu.
 
@@ -64,7 +64,7 @@ PRIORYTET_VALUES = frozenset({
 
 class FakturaAkceptacja(Base):
     """
-    Model ORM: dbo_ext.skw_faktura_akceptacja
+    Model ORM: dbo.skw_faktura_akceptacja
 
     Jeden wiersz = jedna faktura zakupowa z KSeF wpuszczona do obiegu akceptacji.
 
@@ -103,7 +103,7 @@ class FakturaAkceptacja(Base):
             name="CK_skw_faktura_akceptacja_priorytet",
         ),
         UniqueConstraint("numer_ksef", name="UQ_skw_faktura_akceptacja_numer_ksef"),
-        {"schema": "dbo_ext"},
+        {"schema": "dbo"},
     )
 
     # ------------------------------------------------------------------
@@ -152,7 +152,7 @@ class FakturaAkceptacja(Base):
     utworzony_przez: Mapped[int] = mapped_column(
         Integer,
         ForeignKey(
-            "dbo_ext.skw_Users.ID_USER",
+            "dbo.skw_Users.ID_USER",
             ondelete="RESTRICT",
             name="FK_skw_faktura_akceptacja_utworzony_przez",
         ),

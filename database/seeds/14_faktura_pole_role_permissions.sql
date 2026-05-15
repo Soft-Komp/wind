@@ -14,7 +14,7 @@ DECLARE @pole_perms TABLE ([ID_PERMISSION] INT);
 
 INSERT INTO @pole_perms
 SELECT [ID_PERMISSION]
-FROM [dbo_ext].[skw_Permissions]
+FROM [dbo].[skw_Permissions]
 WHERE [PermissionName] LIKE N'faktury.pole.%'
   AND [IsActive] = 1;
 
@@ -30,10 +30,10 @@ BEGIN
 END
 
 -- ── Admin ────────────────────────────────────────────────────────────────────
-MERGE [dbo_ext].[skw_RolePermissions] AS target
+MERGE [dbo].[skw_RolePermissions] AS target
 USING (
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM [dbo_ext].[skw_Roles] r
+    FROM [dbo].[skw_Roles] r
     CROSS JOIN @pole_perms p
     WHERE r.[RoleName] = N'Admin'
 ) AS source
@@ -45,10 +45,10 @@ WHEN NOT MATCHED BY TARGET THEN
 PRINT N'[14] Admin: ' + CAST(@@ROWCOUNT AS NVARCHAR) + N' nowych przypisań.';
 
 -- ── Manager ──────────────────────────────────────────────────────────────────
-MERGE [dbo_ext].[skw_RolePermissions] AS target
+MERGE [dbo].[skw_RolePermissions] AS target
 USING (
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM [dbo_ext].[skw_Roles] r
+    FROM [dbo].[skw_Roles] r
     CROSS JOIN @pole_perms p
     WHERE r.[RoleName] = N'Manager'
 ) AS source
@@ -60,10 +60,10 @@ WHEN NOT MATCHED BY TARGET THEN
 PRINT N'[14] Manager: ' + CAST(@@ROWCOUNT AS NVARCHAR) + N' nowych przypisań.';
 
 -- ── User ─────────────────────────────────────────────────────────────────────
-MERGE [dbo_ext].[skw_RolePermissions] AS target
+MERGE [dbo].[skw_RolePermissions] AS target
 USING (
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM [dbo_ext].[skw_Roles] r
+    FROM [dbo].[skw_Roles] r
     CROSS JOIN @pole_perms p
     WHERE r.[RoleName] = N'User'
 ) AS source
@@ -75,10 +75,10 @@ WHEN NOT MATCHED BY TARGET THEN
 PRINT N'[14] User: ' + CAST(@@ROWCOUNT AS NVARCHAR) + N' nowych przypisań.';
 
 -- ── ReadOnly ─────────────────────────────────────────────────────────────────
-MERGE [dbo_ext].[skw_RolePermissions] AS target
+MERGE [dbo].[skw_RolePermissions] AS target
 USING (
     SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-    FROM [dbo_ext].[skw_Roles] r
+    FROM [dbo].[skw_Roles] r
     CROSS JOIN @pole_perms p
     WHERE r.[RoleName] = N'ReadOnly'
 ) AS source

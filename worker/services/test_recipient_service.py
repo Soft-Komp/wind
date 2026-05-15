@@ -175,7 +175,7 @@ async def _load_from_db() -> TestRecipientConfig | None:
         result = await db.execute(
             text("""
                 SELECT ConfigKey, ConfigValue
-                FROM [dbo_ext].[skw_SystemConfig]
+                FROM [dbo].[skw_SystemConfig]
                 WHERE ConfigKey IN (
                     'test_mode.enabled',
                     'test_mode.email',
@@ -220,7 +220,7 @@ async def _is_cache_bypassed_worker() -> bool:
             result = await db.execute(
                 text("""
                     SELECT [ConfigValue]
-                    FROM [dbo_ext].[skw_SystemConfig]
+                    FROM [dbo].[skw_SystemConfig]
                     WHERE [ConfigKey] = N'cache.bypass_enabled'
                       AND [IsActive] = 1
                 """)

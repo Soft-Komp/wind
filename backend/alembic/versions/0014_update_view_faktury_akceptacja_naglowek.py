@@ -200,7 +200,7 @@ _SQL_CHECK_PREREQUISITES: Final[str] = textwrap.dedent("""\
         SET @missing = @missing + N'  [BRAK] dbo.RM_Func_ClarionDateToDateTime' + CHAR(10);
 
     -- 4. Tabela SchemaChecksums (projekt)
-    IF OBJECT_ID(N'[dbo_ext].[skw_SchemaChecksums]', N'U') IS NULL
+    IF OBJECT_ID(N'[dbo].[skw_SchemaChecksums]', N'U') IS NULL
         SET @missing = @missing + N'  [BRAK] dbo_ext.skw_SchemaChecksums' + CHAR(10);
 
     IF LEN(@missing) > 0
@@ -237,7 +237,7 @@ def _sql_merge_checksum(alembic_revision: str) -> str:
     AlembicRevision ustawiana na przekazaną wartość revision.
     """
     return textwrap.dedent(f"""\
-        MERGE [dbo_ext].[skw_SchemaChecksums] AS target
+        MERGE [dbo].[skw_SchemaChecksums] AS target
         USING (
             SELECT
                 o.name                   AS ObjectName,

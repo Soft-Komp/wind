@@ -75,7 +75,7 @@ def upgrade() -> None:
     # Krok 1: MERGE uprawnień
     for perm_name, description in _PERMISSIONS:
         op.execute(textwrap.dedent(f"""\
-            MERGE [dbo_ext].[skw_Permissions] AS target
+            MERGE [dbo].[skw_Permissions] AS target
             USING (
                 SELECT
                     N'{perm_name}'   AS PermissionName,
@@ -94,11 +94,11 @@ def upgrade() -> None:
     # Krok 2: Przypisanie do ról
     for role_name in _ROLE_NAMES:
         op.execute(textwrap.dedent(f"""\
-            MERGE [dbo_ext].[skw_RolePermissions] AS target
+            MERGE [dbo].[skw_RolePermissions] AS target
             USING (
                 SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-                FROM [dbo_ext].[skw_Roles] r
-                CROSS JOIN [dbo_ext].[skw_Permissions] p
+                FROM [dbo].[skw_Roles] r
+                CROSS JOIN [dbo].[skw_Permissions] p
                 WHERE r.[RoleName]       = N'{role_name}'
                   AND p.[PermissionName] LIKE N'faktury.pole.%'
                   AND p.[IsActive]       = 1
@@ -120,15 +120,15 @@ def downgrade() -> None:
     # Usuń przypisania ról
     op.execute(textwrap.dedent("""\
         DELETE rp
-        FROM [dbo_ext].[skw_RolePermissions] rp
-        INNER JOIN [dbo_ext].[skw_Permissions] p
+        FROM [dbo].[skw_RolePermissions] rp
+        INNER JOIN [dbo].[skw_Permissions] p
             ON rp.[ID_PERMISSION] = p.[ID_PERMISSION]
         WHERE p.[PermissionName] LIKE N'faktury.pole.%';
     """))
 
     # Usuń uprawnienia
     op.execute(textwrap.dedent("""\
-        DELETE FROM [dbo_ext].[skw_Permissions]
+        DELETE FROM [dbo].[skw_Permissions]
         WHERE [PermissionName] LIKE N'faktury.pole.%';
     """))
 

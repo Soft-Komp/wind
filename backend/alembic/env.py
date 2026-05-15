@@ -115,8 +115,8 @@ target_metadata = Base.metadata
 # Musi być w dbo_ext — tam mamy PEŁNY CRUD
 _VERSION_TABLE_SCHEMA = "dbo"
 
-# Monitorowany schemat — tylko dbo_ext śledzony przez ORM
-_TRACKED_SCHEMA = "dbo_ext"
+# Monitorowany schemat — tylko dbo śledzony przez ORM
+_TRACKED_SCHEMA = "dbo"
 
 
 # =============================================================================
@@ -237,11 +237,13 @@ def include_object(
     """
     if type_ == "table":
         schema = getattr(object, "schema", None)
-        tracked = schema == _TRACKED_SCHEMA
+        # Po migracji 0026: tabele skw_* sa w dbo razem z tabelami WAPRO.
+        # Sledz TYLKO nasze tabele (prefix skw_) — ignoruj WAPRO (BUF_DOKUMENT itp.)
+        tracked = schema == "dbo" and name.startswith("skw_")
 
         if not tracked:
             logger.debug(
-                "Pomijam tabelę poza śledzonym schematem | tabela=%s | schemat=%s",
+                "Pomijam tabelę | tabela=%s | schemat=%s",
                 name,
                 schema,
             )

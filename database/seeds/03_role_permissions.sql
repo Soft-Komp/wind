@@ -49,13 +49,13 @@ BEGIN TRY
 
     ;WITH admin_perms AS (
         SELECT [ID_PERMISSION]
-        FROM [dbo_ext].[skw_Permissions]
+        FROM [dbo].[skw_Permissions]
         WHERE [IsActive] = 1
     )
-    MERGE [dbo_ext].[skw_RolePermissions] AS target
+    MERGE [dbo].[skw_RolePermissions] AS target
     USING (
         SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-        FROM [dbo_ext].[skw_Roles] r
+        FROM [dbo].[skw_Roles] r
         CROSS JOIN admin_perms p
         WHERE r.[RoleName] = N'Admin'
     ) AS source
@@ -73,7 +73,7 @@ BEGIN TRY
     PRINT 'Przypisuję uprawnienia roli: Manager';
 
     ;WITH manager_perms AS (
-        SELECT [ID_PERMISSION] FROM [dbo_ext].[skw_Permissions]
+        SELECT [ID_PERMISSION] FROM [dbo].[skw_Permissions]
         WHERE [PermissionName] IN (
             -- AUTH (5/8) — bez: reset_password_any, revoke_any_sessions, impersonate
             N'auth.login',
@@ -149,10 +149,10 @@ BEGIN TRY
         )
         AND [IsActive] = 1
     )
-    MERGE [dbo_ext].[skw_RolePermissions] AS target
+    MERGE [dbo].[skw_RolePermissions] AS target
     USING (
         SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-        FROM [dbo_ext].[skw_Roles] r
+        FROM [dbo].[skw_Roles] r
         CROSS JOIN manager_perms p
         WHERE r.[RoleName] = N'Manager'
     ) AS source
@@ -170,7 +170,7 @@ BEGIN TRY
     PRINT 'Przypisuję uprawnienia roli: User';
 
     ;WITH user_perms AS (
-        SELECT [ID_PERMISSION] FROM [dbo_ext].[skw_Permissions]
+        SELECT [ID_PERMISSION] FROM [dbo].[skw_Permissions]
         WHERE [PermissionName] IN (
             -- AUTH (3/8)
             N'auth.login',
@@ -215,10 +215,10 @@ BEGIN TRY
         )
         AND [IsActive] = 1
     )
-    MERGE [dbo_ext].[skw_RolePermissions] AS target
+    MERGE [dbo].[skw_RolePermissions] AS target
     USING (
         SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-        FROM [dbo_ext].[skw_Roles] r
+        FROM [dbo].[skw_Roles] r
         CROSS JOIN user_perms p
         WHERE r.[RoleName] = N'User'
     ) AS source
@@ -236,7 +236,7 @@ BEGIN TRY
     PRINT 'Przypisuję uprawnienia roli: ReadOnly';
 
     ;WITH readonly_perms AS (
-        SELECT [ID_PERMISSION] FROM [dbo_ext].[skw_Permissions]
+        SELECT [ID_PERMISSION] FROM [dbo].[skw_Permissions]
         WHERE [PermissionName] IN (
             -- AUTH (3/8) — tylko własne
             N'auth.login',
@@ -267,10 +267,10 @@ BEGIN TRY
         )
         AND [IsActive] = 1
     )
-    MERGE [dbo_ext].[skw_RolePermissions] AS target
+    MERGE [dbo].[skw_RolePermissions] AS target
     USING (
         SELECT r.[ID_ROLE], p.[ID_PERMISSION]
-        FROM [dbo_ext].[skw_Roles] r
+        FROM [dbo].[skw_Roles] r
         CROSS JOIN readonly_perms p
         WHERE r.[RoleName] = N'ReadOnly'
     ) AS source
@@ -290,8 +290,8 @@ BEGIN TRY
     SELECT
         r.[RoleName],
         COUNT(rp.[ID_PERMISSION]) AS LiczbaUprawnienia
-    FROM [dbo_ext].[skw_Roles] r
-    LEFT JOIN [dbo_ext].[skw_RolePermissions] rp ON r.[ID_ROLE] = rp.[ID_ROLE]
+    FROM [dbo].[skw_Roles] r
+    LEFT JOIN [dbo].[skw_RolePermissions] rp ON r.[ID_ROLE] = rp.[ID_ROLE]
     GROUP BY r.[RoleName]
     ORDER BY r.[RoleName];
 

@@ -33,7 +33,7 @@ BEGIN TRY
     BEGIN
         PRINT '[002] Tworzenie tabeli dbo_ext.skw_Permissions...';
 
-        CREATE TABLE [dbo_ext].[skw_Permissions] (
+        CREATE TABLE [dbo].[skw_Permissions] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_PERMISSION]  INT           IDENTITY(1,1)  NOT NULL,
@@ -84,7 +84,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Permissions_Category]
-            ON [dbo_ext].[skw_Permissions] ([Category] ASC, [IsActive] ASC);
+            ON [dbo].[skw_Permissions] ([Category] ASC, [IsActive] ASC);
         PRINT '[002] Indeks IX_skw_Permissions_Category utworzony.';
     END
 

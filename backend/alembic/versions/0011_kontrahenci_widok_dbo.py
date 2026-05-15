@@ -236,8 +236,8 @@ def _check_all_dependencies(bind) -> None:
         [dbo].[KONTRAHENT]                  — tabela WAPRO
         [dbo].[ROZRACHUNEK_VIEW]            — widok WAPRO
         [dbo].[RM_Func_ClarionDateToDateTime] — funkcja WAPRO (skalar lub tabela)
-        [dbo_ext].[skw_MonitHistory]        — tabela projektu (migracja 0001+)
-        [dbo_ext].[skw_MonitHistory_Invoices] — tabela projektu (migracja 0003+)
+        [dbo].[skw_MonitHistory]        — tabela projektu (migracja 0001+)
+        [dbo].[skw_MonitHistory_Invoices] — tabela projektu (migracja 0003+)
 
     Przy każdym brakującym obiekcie rzuca RuntimeError i PRZERYWA migrację.
     """

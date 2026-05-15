@@ -33,7 +33,7 @@ BEGIN TRY
     BEGIN
         PRINT '[013] Tworzenie tabeli dbo_ext.skw_Comments...';
 
-        CREATE TABLE [dbo_ext].[skw_Comments] (
+        CREATE TABLE [dbo].[skw_Comments] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_COMMENT]      INT            IDENTITY(1,1)  NOT NULL,
@@ -63,7 +63,7 @@ BEGIN TRY
             -- FK → skw_Users przez UzytkownikID (RESTRICT — blokuje usunięcie usera)
             CONSTRAINT [FK_skw_Comments_UzytkownikID]
                 FOREIGN KEY ([UzytkownikID])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE NO ACTION
                 ON UPDATE NO ACTION
         );
@@ -84,7 +84,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Comments_Kontrahent]
-            ON [dbo_ext].[skw_Comments] ([ID_KONTRAHENTA] ASC, [IsActive] ASC, [CreatedAt] DESC);
+            ON [dbo].[skw_Comments] ([ID_KONTRAHENTA] ASC, [IsActive] ASC, [CreatedAt] DESC);
         PRINT '[013] Indeks IX_skw_Comments_Kontrahent utworzony.';
     END
 
@@ -95,7 +95,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_Comments_UzytkownikID]
-            ON [dbo_ext].[skw_Comments] ([UzytkownikID] ASC, [CreatedAt] DESC);
+            ON [dbo].[skw_Comments] ([UzytkownikID] ASC, [CreatedAt] DESC);
         PRINT '[013] Indeks IX_skw_Comments_UzytkownikID utworzony.';
     END
 

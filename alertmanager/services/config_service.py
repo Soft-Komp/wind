@@ -55,7 +55,7 @@ def _sync_load_config(connection_string: str) -> dict[str, str]:
             cursor.execute(
                 """
                 SELECT [ConfigKey], [ConfigValue]
-                FROM [dbo_ext].[skw_SystemConfig]
+                FROM [dbo].[skw_SystemConfig]
                 WHERE [IsActive] = 1
                   AND [ConfigKey] LIKE 'alerts.%'
                 ORDER BY [ConfigKey]

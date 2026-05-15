@@ -15,7 +15,7 @@ TEMPLATE_TYPES = frozenset({"email", "sms", "print"})
 class Template(AuditMixin, Base):
     __tablename__ = "skw_Templates"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": (
             "Szablony monitów. "
             "Body używa składni Jinja2. "

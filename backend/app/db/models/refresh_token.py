@@ -15,7 +15,7 @@ from .base import Base
 class RefreshToken(Base):
     __tablename__ = "skw_RefreshTokens"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": "JWT Refresh tokeny. Token kolumna przechowuje HASH sha256 tokenu.",
     }
 
@@ -26,7 +26,7 @@ class RefreshToken(Base):
     id_user: Mapped[int] = mapped_column(
         "ID_USER",
         Integer,
-        ForeignKey("dbo_ext.skw_Users.ID_USER", ondelete="CASCADE"),
+        ForeignKey("dbo.skw_Users.ID_USER", ondelete="CASCADE"),
         nullable=False,
         comment="FK → Users",
     )

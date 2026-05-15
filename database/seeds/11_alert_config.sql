@@ -12,7 +12,7 @@ GO
 PRINT 'Seeder: 11_alert_config.sql — SystemConfig Alert Manager';
 GO
 
-MERGE [dbo_ext].[skw_SystemConfig] AS target
+MERGE [dbo].[skw_SystemConfig] AS target
 USING (VALUES
     -- ── Przełącznik główny ─────────────────────────────────────────────
     (
@@ -105,7 +105,7 @@ SELECT
     [ConfigValue],
     [IsActive],
     [CreatedAt]
-FROM [dbo_ext].[skw_SystemConfig]
+FROM [dbo].[skw_SystemConfig]
 WHERE [ConfigKey] LIKE 'alerts.%'
 ORDER BY [ConfigKey];
 

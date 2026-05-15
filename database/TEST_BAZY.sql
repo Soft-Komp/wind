@@ -59,7 +59,7 @@ OPEN tbl_cur;
 FETCH NEXT FROM tbl_cur INTO @tbl;
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    IF OBJECT_ID(N'[dbo_ext].[' + @tbl + N']', N'U') IS NOT NULL
+    IF OBJECT_ID(N'[dbo].[' + @tbl + N']', N'U') IS NOT NULL
     BEGIN PRINT '[OK] dbo_ext.' + @tbl; SET @pass = @pass + 1; END
     ELSE
     BEGIN PRINT '[FAIL] dbo_ext.' + @tbl + ' — BRAK!'; SET @fail = @fail + 1; END
@@ -145,18 +145,18 @@ PRINT '--- 4. DANE SEEDOW ---';
 
 -- 4.1 Role (oczekiwane: 4)
 DECLARE @role_count INT;
-SELECT @role_count = COUNT(*) FROM [dbo_ext].[skw_Roles] WHERE IsActive = 1;
+SELECT @role_count = COUNT(*) FROM [dbo].[skw_Roles] WHERE IsActive = 1;
 IF @role_count >= 4
 BEGIN PRINT '[OK] Role: ' + CAST(@role_count AS NVARCHAR) + ' (oczekiwane min 4)'; SET @pass = @pass + 1; END
 ELSE
 BEGIN PRINT '[FAIL] Role: ' + CAST(@role_count AS NVARCHAR) + ' (oczekiwane min 4)'; SET @fail = @fail + 1; END
 
 -- Lista rol
-SELECT '       Rola: ' + RoleName AS [Rola] FROM [dbo_ext].[skw_Roles] WHERE IsActive = 1;
+SELECT '       Rola: ' + RoleName AS [Rola] FROM [dbo].[skw_Roles] WHERE IsActive = 1;
 
 -- 4.2 Uprawnienia — lacznie (oczekiwane: 91+ = 72 bazowe + 5 templates + 14 faktury)
 DECLARE @perm_count INT;
-SELECT @perm_count = COUNT(*) FROM [dbo_ext].[skw_Permissions] WHERE IsActive = 1;
+SELECT @perm_count = COUNT(*) FROM [dbo].[skw_Permissions] WHERE IsActive = 1;
 IF @perm_count >= 91
 BEGIN PRINT '[OK] Uprawnienia: ' + CAST(@perm_count AS NVARCHAR) + ' (oczekiwane min 91)'; SET @pass = @pass + 1; END
 ELSE IF @perm_count >= 72
@@ -166,12 +166,12 @@ BEGIN PRINT '[FAIL] Uprawnienia: ' + CAST(@perm_count AS NVARCHAR) + ' (oczekiwa
 
 -- Uprawnienia per kategoria
 SELECT '       ' + ISNULL(Category, 'NULL') + ': ' + CAST(COUNT(*) AS NVARCHAR) + ' uprawnien'
-FROM [dbo_ext].[skw_Permissions] WHERE IsActive = 1
+FROM [dbo].[skw_Permissions] WHERE IsActive = 1
 GROUP BY Category ORDER BY Category;
 
 -- 4.3 Uprawnienia kategorii 'faktury' (oczekiwane: 14)
 DECLARE @fact_perm INT;
-SELECT @fact_perm = COUNT(*) FROM [dbo_ext].[skw_Permissions] WHERE Category = N'faktury' AND IsActive = 1;
+SELECT @fact_perm = COUNT(*) FROM [dbo].[skw_Permissions] WHERE Category = N'faktury' AND IsActive = 1;
 IF @fact_perm = 14
 BEGIN PRINT '[OK] Uprawnienia faktury: 14'; SET @pass = @pass + 1; END
 ELSE
@@ -179,7 +179,7 @@ BEGIN PRINT '[FAIL] Uprawnienia faktury: ' + CAST(@fact_perm AS NVARCHAR) + ' (o
 
 -- 4.4 Uprawnienia kategorii 'templates' (oczekiwane: 5)
 DECLARE @tmpl_perm INT;
-SELECT @tmpl_perm = COUNT(*) FROM [dbo_ext].[skw_Permissions] WHERE Category = N'templates' AND IsActive = 1;
+SELECT @tmpl_perm = COUNT(*) FROM [dbo].[skw_Permissions] WHERE Category = N'templates' AND IsActive = 1;
 IF @tmpl_perm = 5
 BEGIN PRINT '[OK] Uprawnienia templates: 5'; SET @pass = @pass + 1; END
 ELSE
@@ -187,21 +187,21 @@ BEGIN PRINT '[FAIL] Uprawnienia templates: ' + CAST(@tmpl_perm AS NVARCHAR) + ' 
 
 -- 4.5 SystemConfig — klucze ogolne (oczekiwane: min 8)
 DECLARE @cfg_count INT;
-SELECT @cfg_count = COUNT(*) FROM [dbo_ext].[skw_SystemConfig] WHERE IsActive = 1;
+SELECT @cfg_count = COUNT(*) FROM [dbo].[skw_SystemConfig] WHERE IsActive = 1;
 IF @cfg_count >= 8
 BEGIN PRINT '[OK] SystemConfig: ' + CAST(@cfg_count AS NVARCHAR) + ' kluczy (oczekiwane min 8)'; SET @pass = @pass + 1; END
 ELSE
 BEGIN PRINT '[FAIL] SystemConfig: ' + CAST(@cfg_count AS NVARCHAR) + ' kluczy (oczekiwane min 8)'; SET @fail = @fail + 1; END
 
 -- 4.6 SystemConfig — klucz modul_akceptacji_faktur_enabled
-IF EXISTS (SELECT 1 FROM [dbo_ext].[skw_SystemConfig] WHERE ConfigKey = N'modul_akceptacji_faktur_enabled')
+IF EXISTS (SELECT 1 FROM [dbo].[skw_SystemConfig] WHERE ConfigKey = N'modul_akceptacji_faktur_enabled')
 BEGIN PRINT '[OK] SystemConfig: modul_akceptacji_faktur_enabled istnieje'; SET @pass = @pass + 1; END
 ELSE
 BEGIN PRINT '[FAIL] SystemConfig: modul_akceptacji_faktur_enabled — BRAK!'; SET @fail = @fail + 1; END
 
 -- 4.7 Admin user (oczekiwane: przynajmniej 1 aktywny user)
 DECLARE @user_count INT;
-SELECT @user_count = COUNT(*) FROM [dbo_ext].[skw_Users] WHERE IsActive = 1;
+SELECT @user_count = COUNT(*) FROM [dbo].[skw_Users] WHERE IsActive = 1;
 IF @user_count >= 1
 BEGIN PRINT '[OK] Uzytkownicy aktywni: ' + CAST(@user_count AS NVARCHAR); SET @pass = @pass + 1; END
 ELSE
@@ -209,13 +209,13 @@ BEGIN PRINT '[FAIL] Brak aktywnych uzytkownikow!'; SET @fail = @fail + 1; END
 
 -- Lista userow
 SELECT '       User: ' + Username + ' (rola: ' + r.RoleName + ')'
-FROM [dbo_ext].[skw_Users] u
-JOIN [dbo_ext].[skw_Roles] r ON u.RoleID = r.ID_ROLE
+FROM [dbo].[skw_Users] u
+JOIN [dbo].[skw_Roles] r ON u.RoleID = r.ID_ROLE
 WHERE u.IsActive = 1;
 
 -- 4.8 Checksums widokow faktur
 DECLARE @chk_count INT;
-SELECT @chk_count = COUNT(*) FROM [dbo_ext].[skw_SchemaChecksums]
+SELECT @chk_count = COUNT(*) FROM [dbo].[skw_SchemaChecksums]
 WHERE ObjectName IN (N'dbo.skw_faktury_akceptacja_naglowek', N'dbo.skw_faktury_akceptacja_pozycje');
 IF @chk_count = 2
 BEGIN PRINT '[OK] SchemaChecksums: 2 wpisy dla widokow faktur'; SET @pass = @pass + 1; END
@@ -229,10 +229,10 @@ BEGIN PRINT '[WARN] SchemaChecksums: ' + CAST(@chk_count AS NVARCHAR) + '/2 wpis
 PRINT '';
 PRINT '--- 5. WERSJA ALEMBIC ---';
 
-IF OBJECT_ID(N'[dbo_ext].[alembic_version]', N'U') IS NOT NULL
+IF OBJECT_ID(N'[dbo].[alembic_version]', N'U') IS NOT NULL
 BEGIN
     DECLARE @alembic_ver NVARCHAR(50);
-    SELECT TOP 1 @alembic_ver = version_num FROM [dbo_ext].[alembic_version];
+    SELECT TOP 1 @alembic_ver = version_num FROM [dbo].[alembic_version];
     IF @alembic_ver = N'0007'
     BEGIN PRINT '[OK] alembic_version = 0007 (head)'; SET @pass = @pass + 1; END
     ELSE

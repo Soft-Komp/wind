@@ -134,7 +134,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     raise NotImplementedError(
         "Migracja 0008 jest nieodwracalna automatycznie. "
-        "Aby cofnąć: DROP TABLE [dbo_ext].[skw_AlertLog] w SSMS + "
+        "Aby cofnąć: DROP TABLE [dbo].[skw_AlertLog] w SSMS + "
         "usuń klucze alerts.* z skw_SystemConfig. "
         "Dane historii alertów zostaną utracone."
     )

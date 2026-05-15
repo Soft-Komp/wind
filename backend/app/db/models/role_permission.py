@@ -16,21 +16,21 @@ from .base import Base, _utcnow
 class RolePermission(Base):
     __tablename__ = "skw_RolePermissions"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": "Przypisanie uprawnień do ról (Many-to-Many)",
     }
 
     id_role: Mapped[int] = mapped_column(
         "ID_ROLE",
         Integer,
-        ForeignKey("dbo_ext.skw_Roles.ID_ROLE", ondelete="CASCADE"),
+        ForeignKey("dbo.skw_Roles.ID_ROLE", ondelete="CASCADE"),
         primary_key=True,
         comment="FK → Roles",
     )
     id_permission: Mapped[int] = mapped_column(
         "ID_PERMISSION",
         Integer,
-        ForeignKey("dbo_ext.skw_Permissions.ID_PERMISSION", ondelete="CASCADE"),
+        ForeignKey("dbo.skw_Permissions.ID_PERMISSION", ondelete="CASCADE"),
         primary_key=True,
         comment="FK → Permissions",
     )

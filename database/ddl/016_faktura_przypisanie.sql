@@ -53,7 +53,7 @@ IF NOT EXISTS (
 BEGIN
     PRINT N'[016] Tworzenie tabeli dbo_ext.skw_faktura_przypisanie...';
 
-    CREATE TABLE [dbo_ext].[skw_faktura_przypisanie] (
+    CREATE TABLE [dbo].[skw_faktura_przypisanie] (
 
         -- ── Identyfikacja ────────────────────────────────────────────────────
         id          INT          IDENTITY(1,1) NOT NULL,
@@ -87,12 +87,12 @@ BEGIN
         -- FK: do której faktury
         CONSTRAINT [FK_sfp_faktura_id]
             FOREIGN KEY (faktura_id)
-            REFERENCES [dbo_ext].[skw_faktura_akceptacja] (id),
+            REFERENCES [dbo].[skw_faktura_akceptacja] (id),
 
         -- FK: który pracownik
         CONSTRAINT [FK_sfp_user_id]
             FOREIGN KEY (user_id)
-            REFERENCES [dbo_ext].[skw_Users] (ID_USER),
+            REFERENCES [dbo].[skw_Users] (ID_USER),
 
         -- Walidacja statusu decyzji
         CONSTRAINT [CHK_sfp_status] CHECK (
@@ -125,7 +125,7 @@ BEGIN
     PRINT N'[016] Tworzenie indeksu IX_sfp_user_active...';
 
     CREATE NONCLUSTERED INDEX [IX_sfp_user_active]
-        ON [dbo_ext].[skw_faktura_przypisanie]
+        ON [dbo].[skw_faktura_przypisanie]
             (user_id ASC, is_active ASC, status ASC)
         INCLUDE (faktura_id, CreatedAt)
         WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF,
@@ -154,7 +154,7 @@ BEGIN
     PRINT N'[016] Tworzenie indeksu IX_sfp_faktura_active...';
 
     CREATE NONCLUSTERED INDEX [IX_sfp_faktura_active]
-        ON [dbo_ext].[skw_faktura_przypisanie]
+        ON [dbo].[skw_faktura_przypisanie]
             (faktura_id ASC, is_active ASC)
         INCLUDE (user_id, status)
         WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF,

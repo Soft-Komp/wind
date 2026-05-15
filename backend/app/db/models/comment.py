@@ -24,7 +24,7 @@ from .base import AuditMixin, Base
 class Comment(AuditMixin, Base):
     __tablename__ = "skw_Comments"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": (
             "Notatki pracowników do kontrahentów. "
             "ID_KONTRAHENTA = ref do WAPRO (bez FK constraint — WAPRO read-only). "
@@ -51,7 +51,7 @@ class Comment(AuditMixin, Base):
         "ID_USER", # ← polska nazwa kolumny zgodna z dokumentacją v1.5
         Integer,
         ForeignKey(
-            "dbo_ext.skw_Users.ID_USER",
+            "dbo.skw_Users.ID_USER",
             ondelete="RESTRICT",  # NIE SET NULL — NOT NULL wymaga RESTRICT
         ),
         nullable=False,          # ← NOT NULL (poprawka względem v1.4)

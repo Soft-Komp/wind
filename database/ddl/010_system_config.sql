@@ -38,7 +38,7 @@ BEGIN TRY
     BEGIN
         PRINT '[010] Tworzenie tabeli dbo_ext.skw_SystemConfig...';
 
-        CREATE TABLE [dbo_ext].[skw_SystemConfig] (
+        CREATE TABLE [dbo].[skw_SystemConfig] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_CONFIG]    INT            IDENTITY(1,1)  NOT NULL,
@@ -85,7 +85,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_SystemConfig_IsActive]
-            ON [dbo_ext].[skw_SystemConfig] ([IsActive] ASC, [ConfigKey] ASC);
+            ON [dbo].[skw_SystemConfig] ([IsActive] ASC, [ConfigKey] ASC);
         PRINT '[010] Indeks IX_skw_SystemConfig_IsActive utworzony.';
     END
 

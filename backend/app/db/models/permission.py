@@ -20,7 +20,7 @@ PERMISSION_CATEGORIES = frozenset({
 class Permission(AuditMixin, Base):
     __tablename__ = "skw_Permissions"
     __table_args__ = {
-        "schema": "dbo_ext",
+        "schema": "dbo",
         "comment": "Granularne uprawnienia systemu. Format: kategoria.akcja",
     }
 

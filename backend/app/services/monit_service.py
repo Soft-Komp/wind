@@ -498,7 +498,7 @@ async def _load_interval_config(db: AsyncSession, redis: Redis) -> dict:
         result = await db.execute(
             sa_text("""
                 SELECT [ConfigKey], [ConfigValue]
-                FROM [dbo_ext].[skw_SystemConfig]
+                FROM [dbo].[skw_SystemConfig]
                 WHERE [ConfigKey] IN (
                     'monit.interval_days',
                     'monit.block_mode',
@@ -615,7 +615,7 @@ async def check_interval(
                         ISNULL(SentAt, CreatedAt),
                         GETDATE()
                     )                            AS DniTemu
-                FROM [dbo_ext].[skw_MonitHistory]
+                FROM [dbo].[skw_MonitHistory]
                 WHERE [ID_KONTRAHENTA] = :debtor_id
                   AND [IsActive] = 1
                 ORDER BY ISNULL([SentAt], [CreatedAt]) DESC
@@ -669,7 +669,7 @@ async def check_interval(
                     SELECT TOP 1
                         [CreatedAt]                         AS OstatniMonit,
                         DATEDIFF(DAY, [CreatedAt], GETDATE()) AS DniTemu
-                    FROM [dbo_ext].[skw_MonitHistory_Invoices]
+                    FROM [dbo].[skw_MonitHistory_Invoices]
                     WHERE [ID_ROZRACHUNKU] = :inv_id
                     ORDER BY [CreatedAt] DESC
                 """).bindparams(inv_id=inv_id)

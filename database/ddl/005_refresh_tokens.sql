@@ -33,7 +33,7 @@ BEGIN TRY
     BEGIN
         PRINT '[005] Tworzenie tabeli dbo_ext.skw_RefreshTokens...';
 
-        CREATE TABLE [dbo_ext].[skw_RefreshTokens] (
+        CREATE TABLE [dbo].[skw_RefreshTokens] (
 
             -- ── Klucz główny ──────────────────────────────────────────────────
             [ID_TOKEN]    INT            IDENTITY(1,1)  NOT NULL,
@@ -70,7 +70,7 @@ BEGIN TRY
             -- FK → skw_Users (usunięcie usera = usunięcie jego tokenów)
             CONSTRAINT [FK_skw_RefreshTokens_UserID]
                 FOREIGN KEY ([ID_USER])
-                REFERENCES [dbo_ext].[skw_Users] ([ID_USER])
+                REFERENCES [dbo].[skw_Users] ([ID_USER])
                 ON DELETE CASCADE
                 ON UPDATE NO ACTION
         );
@@ -91,7 +91,7 @@ BEGIN TRY
     )
     BEGIN
         CREATE NONCLUSTERED INDEX [IX_skw_RefreshTokens_UserID]
-            ON [dbo_ext].[skw_RefreshTokens] ([ID_USER] ASC, [IsRevoked] ASC);
+            ON [dbo].[skw_RefreshTokens] ([ID_USER] ASC, [IsRevoked] ASC);
         PRINT '[005] Indeks IX_skw_RefreshTokens_UserID utworzony.';
     END
 
@@ -103,7 +103,7 @@ BEGIN TRY
     BEGIN
         -- Używany przez ARQ cleanup task
         CREATE NONCLUSTERED INDEX [IX_skw_RefreshTokens_ExpiresAt]
-            ON [dbo_ext].[skw_RefreshTokens] ([ExpiresAt] ASC)
+            ON [dbo].[skw_RefreshTokens] ([ExpiresAt] ASC)
             WHERE [IsRevoked] = 0;
         PRINT '[005] Indeks IX_skw_RefreshTokens_ExpiresAt utworzony.';
     END
