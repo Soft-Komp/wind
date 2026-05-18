@@ -46,7 +46,22 @@ from app.db.models.comment import Comment  # noqa: F401
 from app.db.models.monit_history import MonitHistory  # noqa: F401
 from app.db.models.monit_history_invoices import MonitHistoryInvoice    # noqa: F401
 
-
+from app.db.models.approval.document_source import DocumentSource  # noqa: F401
+from app.db.models.approval.document_category import DocumentCategory  # noqa: F401
+from app.db.models.approval.approval_group import ApprovalGroup  # noqa: F401
+from app.db.models.approval.approval_group_member import ApprovalGroupMember  # noqa: F401
+from app.db.models.approval.approval_path import ApprovalPath  # noqa: F401
+from app.db.models.approval.approval_path_step import ApprovalPathStep  # noqa: F401
+from app.db.models.approval.approval_path_change_log import ApprovalPathChangeLog  # noqa: F401
+from app.db.models.approval.approval_filter import ApprovalFilter  # noqa: F401
+from app.db.models.approval.approval_filter_condition import ApprovalFilterCondition  # noqa: F401
+from app.db.models.approval.document_source_field_mapping import DocumentSourceFieldMapping  # noqa: F401
+from app.db.models.approval.document_approval_instance import DocumentApprovalInstance  # noqa: F401
+from app.db.models.approval.document_approval_snapshot_step import DocumentApprovalSnapshotStep  # noqa: F401
+from app.db.models.approval.approval_delegation import ApprovalDelegation  # noqa: F401
+from app.db.models.approval.approval_comment import ApprovalComment  # noqa: F401
+from app.db.models.approval.approval_attachment import ApprovalAttachment  # noqa: F401
+from app.db.models.approval.user_notification import UserNotification  # noqa: F401
 # =============================================================================
 # __all__ — eksplicytna lista publicznego API modułu
 # Chroni przed przypadkowym importem przez `from app.db.models import *`

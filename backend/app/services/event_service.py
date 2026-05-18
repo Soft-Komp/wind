@@ -67,6 +67,9 @@ EventType = Literal[
     "faktura_zakonczona",
     "faktura_zresetowana",
     "faktura_wymaga_interwencji",
+    "document_waiting",   # dokument trafil do kolejki grupy
+    "document_approved",  # obieg zakonczony akceptacja
+    "document_rollback",  # dokument cofniety
 ]
 
 # Poziomy powiadomień systemowych
@@ -683,6 +686,131 @@ async def publish_schema_tamper_detected(
         broadcast_to_admins=True,
     )
 
+# =============================================================================
+# Modul Obiegu Dokumentow i Akceptacji — Sprint 3
+# Kanaly Redis:
+#   sse:approval:group:{id_group}      — czlonkowie grupy oczekujacej na akcje
+#   sse:approval:instance:{id_instance} — dyspozytor + wszyscy uczestnicy obiegu
+# =============================================================================
+
+async def publish_document_waiting(
+    redis: Redis,
+    instance_id: int,
+    id_group: int,
+    step_order: int,
+    document_title: Optional[str] = None,
+    triggered_by_user_id: Optional[int] = None,
+) -> dict:
+    """
+    Publikuje event SSE do grupy oczekujacej na akcje.
+
+    Kiedy: dispatch lub accept (przejscie do kolejnego kroku).
+    Kanal: sse:approval:group:{id_group} — subskrybuja czlonkowie grupy.
+
+    Args:
+        redis:               Klient Redis.
+        instance_id:         ID instancji obiegu.
+        id_group:            ID grupy ktorej kolej na akcje.
+        step_order:          Numer aktualnego kroku.
+        document_title:      Tytul dokumentu (do powiadomienia).
+        triggered_by_user_id: ID usera ktory wywolal akcje.
+
+    Returns:
+        Metadane operacji publish.
+    """
+    data: dict = {
+        "instance_id":    instance_id,
+        "id_group":       id_group,
+        "step_order":     step_order,
+        "document_title": document_title,
+    }
+    return await publish(
+        redis=redis,
+        event_type="document_waiting",
+        data=data,
+        user_id=triggered_by_user_id,
+        target_user_id=None,
+        broadcast_to_admins=False,
+        channel_override=f"sse:approval:group:{id_group}",
+    )
+
+
+async def publish_document_approved(
+    redis: Redis,
+    instance_id: int,
+    dispatched_by: Optional[int] = None,
+    document_title: Optional[str] = None,
+    triggered_by_user_id: Optional[int] = None,
+) -> dict:
+    """
+    Publikuje event SSE po zakonczeniu obiegu akceptacja.
+
+    Kiedy: ostatni krok zaakceptowany — status -> approved.
+    Kanal: sse:approval:instance:{instance_id} — dyspozytor + wszyscy uczestnicy.
+
+    Args:
+        redis:               Klient Redis.
+        instance_id:         ID instancji obiegu.
+        dispatched_by:       ID dyspozytora (powiadamiany priorytetowo).
+        document_title:      Tytul dokumentu.
+        triggered_by_user_id: ID usera ktory dal ostatni glos.
+
+    Returns:
+        Metadane operacji publish.
+    """
+    data: dict = {
+        "instance_id":    instance_id,
+        "dispatched_by":  dispatched_by,
+        "document_title": document_title,
+    }
+    return await publish(
+        redis=redis,
+        event_type="document_approved",
+        data=data,
+        user_id=triggered_by_user_id,
+        target_user_id=None,
+        broadcast_to_admins=False,
+        channel_override=f"sse:approval:instance:{instance_id}",
+    )
+
+
+async def publish_document_rollback(
+    redis: Redis,
+    instance_id: int,
+    rolled_back_to_step: int,
+    comment: Optional[str] = None,
+    triggered_by_user_id: Optional[int] = None,
+) -> dict:
+    """
+    Publikuje event SSE przy cofnieciu obiegu (rollback).
+
+    Kiedy: akcja rollback — biezacy krok cofniety, poprzedni aktywny.
+    Kanal: sse:approval:instance:{instance_id} — wszyscy uczestnicy.
+
+    Args:
+        redis:               Klient Redis.
+        instance_id:         ID instancji obiegu.
+        rolled_back_to_step: Numer kroku do ktorego cofnieto.
+        comment:             Komentarz obowiazkowy przy rollback.
+        triggered_by_user_id: ID usera ktory wywolal rollback.
+
+    Returns:
+        Metadane operacji publish.
+    """
+    data: dict = {
+        "instance_id":        instance_id,
+        "rolled_back_to_step": rolled_back_to_step,
+        "comment":            comment,
+    }
+    return await publish(
+        redis=redis,
+        event_type="document_rollback",
+        data=data,
+        user_id=triggered_by_user_id,
+        target_user_id=None,
+        broadcast_to_admins=False,
+        channel_override=f"sse:approval:instance:{instance_id}",
+    )
 
 # ===========================================================================
 # Diagnostyka

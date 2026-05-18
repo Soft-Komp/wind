@@ -80,6 +80,29 @@ try:
     from app.db.models.monit_history import MonitHistory  # noqa: F401
     from app.db.models.comment import Comment  # noqa: F401
 
+        # ── 6. Modele modulu Obiegu Dokumentow (approval) ─────────────────────────
+    # Import przez __init__ pakietu — rejestruje wszystkie 16 modeli.
+    # Brak modelu dla skw_approval_log (append-only, raw SQL INSERT).
+    from app.db.models.approval import (  # noqa: F401
+        DocumentSource,
+        DocumentCategory,
+        ApprovalGroup,
+        ApprovalGroupMember,
+        ApprovalPath,
+        ApprovalPathStep,
+        ApprovalPathChangeLog,
+        ApprovalFilter,
+        ApprovalFilterCondition,
+        DocumentSourceFieldMapping,
+        DocumentApprovalInstance,
+        DocumentApprovalSnapshotStep,
+        ApprovalDelegation,
+        ApprovalComment,
+        ApprovalAttachment,
+        UserNotification,
+    )
+
+
 except ImportError as exc:
     # Nie pozwól Alembicowi startować bez kompletnych modeli.
     # Brakujący model = brakująca migracja = niedostrzegalny problem w prod.

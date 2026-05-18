@@ -46,6 +46,24 @@ _SKW_TABLES = [
     "skw_faktura_akceptacja",
     "skw_faktura_przypisanie",   # ← szczególnie ważne: historyczne is_active=0
     "skw_faktura_log",           # ← audit trail modułu
+    "skw_approval_groups",
+    "skw_approval_group_members",
+    "skw_approval_paths",
+    "skw_approval_path_steps",
+    "skw_approval_path_change_log",
+    "skw_document_sources",
+    "skw_document_categories",
+    "skw_document_approval_instances",
+    "skw_document_approval_snapshot_steps",
+    "skw_approval_log",                     # APPEND-ONLY — snapshot read-only
+    "skw_approval_delegations",
+    "skw_approval_comments",
+    "skw_approval_attachments",
+    "skw_approval_filters",
+    "skw_approval_filter_conditions",
+    "skw_document_source_field_mappings",
+    "skw_user_notifications",
+
 ]
 
 
