@@ -1,6 +1,6 @@
 ================================================================ 
  WINDYKACJA GPGK -- RAPORT STRUKTURY PROJEKTU 
- Data: 15.05.2026  Czas: 13:43:20,67 
+ Data: 19.05.2026  Czas:  8:27:03,75 
  Katalog bazowy: C:\python\Windykacja-gpgk-backend 
 ================================================================ 
  
@@ -9,15 +9,25 @@
 On branch master
 Your branch is up to date with 'origin/master'.
 
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   backend/app/services/approval_service.py
+	deleted:    logs/alembic.log.2026-03-11
+
 Untracked files:
   (use "git add <file>..." to include in what will be committed)
+	backend/app/schemas/unified_document.py
+	backend/app/services/filter_engine.py
 	backend/tmp/
 	projekt_raport_2026-05-15_13-43.txt
+	projekt_raport_2026-05-19_08-27.txt
 
-nothing added to commit but untracked files present (use "git add" to track)
+no changes added to commit (use "git add" and/or "git commit -a")
  
 ===== GIT LOG (ostatnie 10 commitow) ===== 
  
+073a27d Obieg dokumentów
 6a5d794 Migracja dbo_ext na dbo
 4293279 Zmiany w podglądzie faktury
 fe3ac28 Poprawki w sadze Fakira
@@ -27,7 +37,6 @@ fe3ac28 Poprawki w sadze Fakira
 3eed4f3 Optymalizacja
 998bd31 Optymalizacja
 64e9301 Optymalizacja
-2e3e3a0 Optymalizacja
  
 ===== GIT BRANCH ===== 
  
@@ -62,23 +71,24 @@ fe3ac28 Poprawki w sadze Fakira
 0025_filtered_unique_numer_ksef.py
 0026_schema_transfer.py
 0027_fix_skw_users_transfer.py
+0028_approval_module.py
 f124fa9b58eb_initial_schema.py
  
  -- alembic current przez docker: 
-2026-05-15T11:43:25+0000 | DEBUG    | 2859 | alembic.env | Alembic env.py załadowany | offline_mode=False | models_count=14
-2026-05-15T11:43:25+0000 | INFO     | 2859 | alembic.env | Uruchamianie migracji w trybie ONLINE (async aioodbc)
-2026-05-15T11:43:25+0000 | INFO     | 2859 | alembic.env | Tryb ONLINE | target_schema=dbo | version_table_schema=dbo
-2026-05-15T11:43:25+0000 | DEBUG    | 2859 | alembic.env | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59425;DATABASE=STOMIL;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.env | Połączenie z bazą OK | db=STOMIL | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
+2026-05-19T06:27:08+0000 | DEBUG    | 464 | alembic.env | Alembic env.py załadowany | offline_mode=False | models_count=30
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.env | Uruchamianie migracji w trybie ONLINE (async aioodbc)
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.env | Tryb ONLINE | target_schema=dbo | version_table_schema=dbo
+2026-05-19T06:27:08+0000 | DEBUG    | 464 | alembic.env | Zbudowano URL połączenia | odbc=DRIVER={ODBC Driver 18 for SQL Server};SERVER=192.168.0.50,59425;DATABASE=STOMIL;UID=sa;PWD=***MASKED***;TrustServerCertificate=yes;Encrypt=yes;MARS_Connection=yes;
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.env | Połączenie z bazą OK | db=STOMIL | sql_server=Microsoft SQL Server 2022 (RTM) - 16.0.1000.6 (X64) 
 	Oct  8 2022 05:58:25 
 	Cop
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.env | Schemat 'dbo' ISTNIEJE w bazie 'STOMIL' (schema_id=1) — migracje będą aktualizować istniejące tabele.
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.runtime.migration | Context impl MSSQLImpl.
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.runtime.migration | Will assume transactional DDL.
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.env | Uruchamianie migracji...
-0027 (head)
-2026-05-15T11:43:26+0000 | INFO     | 2859 | alembic.env | Migracje zakończone pomyślnie — COMMIT wykonany.
-2026-05-15T11:43:26+0000 | DEBUG    | 2859 | alembic.env | Engine zamknięty.
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.env | Schemat 'dbo' ISTNIEJE w bazie 'STOMIL' (schema_id=1) — migracje będą aktualizować istniejące tabele.
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.runtime.migration | Context impl MSSQLImpl.
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.runtime.migration | Will assume transactional DDL.
+2026-05-19T06:27:08+0000 | INFO     | 464 | alembic.env | Uruchamianie migracji...
+0028 (head)
+2026-05-19T06:27:09+0000 | INFO     | 464 | alembic.env | Migracje zakończone pomyślnie — COMMIT wykonany.
+2026-05-19T06:27:09+0000 | DEBUG    | 464 | alembic.env | Engine zamknięty.
  
 ===== PLIKI DDL (database\ddl\) ===== 
  
@@ -147,9 +157,27 @@ C:\python\Windykacja-gpgk-backend\backend\app\db\models\system_config.py
 C:\python\Windykacja-gpgk-backend\backend\app\db\models\template.py
 C:\python\Windykacja-gpgk-backend\backend\app\db\models\user.py
 C:\python\Windykacja-gpgk-backend\backend\app\db\models\__init__.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_attachment.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_comment.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_delegation.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_filter.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_filter_condition.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_group.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_group_member.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path_change_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path_step.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_approval_instance.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_approval_snapshot_step.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_category.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_source.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_source_field_mapping.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\user_notification.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\__init__.py
  
 ===== SERWISY (app\services\) ===== 
  
+C:\python\Windykacja-gpgk-backend\backend\app\services\approval_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\archive_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\audit_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\auth_service.py
@@ -161,6 +189,7 @@ C:\python\Windykacja-gpgk-backend\backend\app\services\event_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\fakir_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\faktura_akceptacja_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\faktura_pdf_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\filter_engine.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\impersonation_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\koszt_service.py
 C:\python\Windykacja-gpgk-backend\backend\app\services\moje_faktury_service.py
@@ -208,11 +237,11 @@ C:\python\Windykacja-gpgk-backend\backend\app\api\__init__.py
  
 ===== DOCKER PS ===== 
  
-NAMES                     STATUS                 PORTS
-windykacja_alertmanager   Up 4 hours (healthy)   
-windykacja_worker         Up 4 hours (healthy)   0.0.0.0:8001->8001/tcp, [::]:8001->8001/tcp
-windykacja_api            Up 4 hours (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
-windykacja_redis          Up 4 hours (healthy)   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+NAMES                     STATUS                    PORTS
+windykacja_alertmanager   Up 21 minutes (healthy)   
+windykacja_worker         Up 21 minutes (healthy)   0.0.0.0:8001->8001/tcp, [::]:8001->8001/tcp
+windykacja_api            Up 21 minutes (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+windykacja_redis          Up 21 minutes (healthy)   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
  
 ----- requirements.txt ----- 
 # =============================================================================
@@ -651,6 +680,29 @@ try:
     from app.db.models.role_permission import RolePermission  # noqa: F401
     from app.db.models.monit_history import MonitHistory  # noqa: F401
     from app.db.models.comment import Comment  # noqa: F401
+
+        # ── 6. Modele modulu Obiegu Dokumentow (approval) ─────────────────────────
+    # Import przez __init__ pakietu — rejestruje wszystkie 16 modeli.
+    # Brak modelu dla skw_approval_log (append-only, raw SQL INSERT).
+    from app.db.models.approval import (  # noqa: F401
+        DocumentSource,
+        DocumentCategory,
+        ApprovalGroup,
+        ApprovalGroupMember,
+        ApprovalPath,
+        ApprovalPathStep,
+        ApprovalPathChangeLog,
+        ApprovalFilter,
+        ApprovalFilterCondition,
+        DocumentSourceFieldMapping,
+        DocumentApprovalInstance,
+        DocumentApprovalSnapshotStep,
+        ApprovalDelegation,
+        ApprovalComment,
+        ApprovalAttachment,
+        UserNotification,
+    )
+
 
 except ImportError as exc:
     # Nie pozwól Alembicowi startować bez kompletnych modeli.

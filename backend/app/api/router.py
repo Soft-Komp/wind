@@ -211,3 +211,11 @@ _register_router(
     prefix="/koszty-dodatkowe",
     tags=["Koszty Dodatkowe"],
 )
+# 17. OBIEG DOKUMENTOW I AKCEPTACJI
+_register_router(
+    api_router,
+    module_path="app.api.approval",
+    attr="router",
+    prefix="/approval",
+    tags=["Approval — Obieg Dokumentow"],
+)

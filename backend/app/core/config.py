@@ -493,6 +493,105 @@ class Settings(BaseSettings):
         return self
 
     # -----------------------------------------------------------------------
+    # Sekcja: APPROVAL — Modul Obiegu Dokumentow i Akceptacji (Sprint 3)
+    #
+    # Wszystkie zmienne opcjonalne z wartosciami domyslnymi.
+    # Glowny wlacznik: APPROVAL_MODULE_ENABLED (domyslnie false — bezpieczna wartosc).
+    # Aktywacja: ustaw APPROVAL_MODULE_ENABLED=true w .env i przypisz uprawnienia.
+    # -----------------------------------------------------------------------
+ 
+    APPROVAL_MODULE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Wlacznik glowny modulu obiegu dokumentow. "
+            "False = modul wylaczony, endpointy zwracaja 503. "
+            "True = modul aktywny. "
+            "PRZED wlaczeniem: uruchom migracje 0028+0029 i przypisz uprawnienia do rol."
+        ),
+    )
+ 
+    APPROVAL_ATTACHMENTS_DIR: str = Field(
+        default="/data/approval_attachments",
+        description=(
+            "Katalog na zalaczniki do instancji obiegu. "
+            "Musi byc poza web root. Montowany jako Docker volume. "
+            "Uprawnienia: appuser (uid 1001) musi miec zapis."
+        ),
+    )
+ 
+    APPROVAL_MAX_ATTACHMENT_MB: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maksymalny rozmiar zalacznika w MB (1-100). Weryfikowany przez python-magic.",
+    )
+ 
+    APPROVAL_COMMENTS_ENABLED: bool = Field(
+        default=True,
+        description="Czy komentarze do instancji sa wlaczone. False = endpointy zwracaja 503.",
+    )
+ 
+    APPROVAL_ATTACHMENTS_ENABLED: bool = Field(
+        default=True,
+        description="Czy zalaczniki sa wlaczone. False = upload/download zwracaja 503.",
+    )
+ 
+    APPROVAL_DELEGATIONS_ENABLED: bool = Field(
+        default=True,
+        description="Czy delegacje uprawnien sa wlaczone. False = endpointy delegacji zwracaja 503.",
+    )
+ 
+    APPROVAL_URGENT_MARKING_ENABLED: bool = Field(
+        default=True,
+        description="Czy mozna oznaczac dokumenty jako pilne (is_urgent). False = endpoint zwraca 503.",
+    )
+ 
+    APPROVAL_AUTO_FILTERS_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Czy silnik filtrow automatycznie dobiera sciezke przy dispatch. "
+            "False = dispatcher musi podac id_path recznie."
+        ),
+    )
+ 
+    APPROVAL_STATISTICS_ENABLED: bool = Field(
+        default=True,
+        description="Czy endpointy statystyk i raportow sa dostepne. False = zwracaja 503.",
+    )
+ 
+    APPROVAL_EMAIL_NOTIFICATIONS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Czy wysylac emaile o zdarzeniach w obiegu. "
+            "False = taski email sa pomijane (skipped). "
+            "Wymaga skonfigurowanego SMTP (SMTP_HOST, SMTP_FROM)."
+        ),
+    )
+ 
+    APPROVAL_EMAIL_DEBOUNCE_MINUTES: int = Field(
+        default=15,
+        ge=1,
+        le=120,
+        description=(
+            "Czas agregowania emaili (minuty). "
+            "Zdarzenia w tym oknie sa laczone w jeden zbiorczy email. "
+            "Wyzszy = mniej emaili, dluzsze opoznienie powiadomienia."
+        ),
+    )
+ 
+    APPROVAL_ESCALATION_REMINDER_DAYS: int = Field(
+        default=3,
+        ge=1,
+        le=30,
+        description=(
+            "Po ilu dniach od przekroczenia deadline wysylac eskalacje do supervisors. "
+            "Wymaga APPROVAL_MODULE_ENABLED=true i skonfigurowanego crona deadline_check_task."
+        ),
+    )
+
+
+
+    # -----------------------------------------------------------------------
     # Walidatory
     # -----------------------------------------------------------------------
 

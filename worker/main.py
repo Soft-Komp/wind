@@ -20,6 +20,13 @@ from worker.tasks.email_task import send_bulk_emails
 from worker.tasks.sms_task import send_bulk_sms
 from worker.tasks.otp_pdf_task import generate_pdf_task, send_otp
 from worker.tasks.snapshot_task import daily_snapshot
+# Approval — Obieg Dokumentow (Sprint 3)
+from worker.tasks.deadline_task import deadline_check_task
+from worker.tasks.notification_task import send_approval_notification
+from worker.tasks.email_task_approval import queue_approval_email, flush_approval_emails
+
+
+
 
 # ── Inicjalizacja logowania (ZANIM cokolwiek się załaduje) ────────────────────
 _settings = get_settings()
@@ -84,9 +91,15 @@ async def on_startup(ctx: dict[str, Any]) -> None:
         {
             "pid":        os.getpid(),
             "max_jobs":   _settings.ARQ_MAX_JOBS,
-            "tasks":      ["send_bulk_emails", "send_bulk_sms", "generate_pdf_task", "send_otp", "daily_snapshot"],
+            "tasks": [
+                "send_bulk_emails", "send_bulk_sms", "generate_pdf_task",
+                "send_otp", "daily_snapshot",
+                "send_approval_notification", "send_approval_email",
+                "deadline_check_task",
+            ],
         },
     )
+
     logger.info("=== ARQ Worker gotowy — czekam na zadania ===")
 
 
@@ -146,7 +159,12 @@ class WorkerSettings:
         generate_pdf_task,
         send_otp,
         daily_snapshot,
+        # Approval — Obieg Dokumentow (Sprint 3)
+        send_approval_notification,
+        queue_approval_email,
+        flush_approval_emails,
     ]
+
 
     # ── Cron jobs ─────────────────────────────────────────────────────────────
     # ARQ 0.26.1 nie obsługuje tzinfo w cron() — używamy UTC
@@ -158,8 +176,18 @@ class WorkerSettings:
             daily_snapshot,
             hour=1,
             minute=0,
-            timeout=3600,       # Max 1h na snapshot
-            unique=True,        # Nie duplikuj jeśli poprzedni jeszcze działa
+            timeout=3600,
+            unique=True,
+            run_at_startup=False,
+        ),
+        # Sprawdzanie terminow obiegow co godzine (minuta 5, nie koliduje z daily_snapshot)
+        cron(
+            deadline_check_task,
+            hour={0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                  12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23},
+            minute=5,
+            timeout=300,
+            unique=True,
             run_at_startup=False,
         ),
     ]
