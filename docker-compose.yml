@@ -1,29 +1,35 @@
 # =============================================================================
 # docker-compose.yml — System Windykacja
 # =============================================================================
-# Środowisko: lokalne (dev/staging)
-# MSSQL:  zewnętrzny, sieć lokalna — 192.168.0.53 (NIE w kontenerze)
-# Redis:  kontener lokalny
-# API:    kontener lokalny, port 8000
+# Wersja: Sprint 3 — z nginx reverse proxy i kontenerem frontend
+#
+# Architektura:
+#   windykacja_nginx     — jedyny punkt wejścia (port 80/443)
+#   windykacja_frontend  — Vue.js SPA (wewnętrzny, port 3000)
+#   windykacja_api       — FastAPI backend (wewnętrzny, port 8000)
+#   windykacja_worker    — ARQ worker (wewnętrzny, port 8001)
+#   windykacja_redis     — Redis cache/queue (wewnętrzny, port 6379)
+#
+# WAŻNE zmiany vs poprzednia wersja:
+#   - windykacja_api: usunięto ports (dostępny tylko przez nginx)
+#   - windykacja_worker: port 8001 tylko wewnętrzny
+#   - windykacja_redis: port 6379 tylko wewnętrzny (NIGDY nie wystawiaj na zewnątrz)
+#   - dodano volume: approval_data dla załączników
+#   - dodano: windykacja_nginx, windykacja_frontend
 #
 # Uruchomienie:
-#   docker-compose up --build
+#   docker compose up --build
 #
-# Tylko API bez workera:
-#   docker-compose up redis api
-#
-# Zatrzymanie:
-#   docker-compose down
-#
-# Zatrzymanie + usunięcie danych Redis:
-#   docker-compose down -v
+# Dev (hot reload):
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml up
 # =============================================================================
 
 services:
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   # REDIS — cache, pub/sub SSE, broker ARQ
-  # ─────────────────────────────────────────────────────────────────────────
+  # Port 6379: TYLKO wewnętrzny — nigdy nie wystawiaj na zewnątrz
+  # ───────────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: windykacja_redis
@@ -34,8 +40,7 @@ services:
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --requirepass "${REDIS_PASSWORD:-}"
-    ports:
-      - "6379:6379"
+    # BRAK ports — Redis dostępny tylko wewnętrznie
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -60,10 +65,10 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   # API — FastAPI backend
-  # IDENTYCZNA konfiguracja jak w działającej wersji — nic nie zmieniono
-  # ─────────────────────────────────────────────────────────────────────────
+  # Port 8000: TYLKO wewnętrzny — dostępny przez nginx (/api/*)
+  # ───────────────────────────────────────────────────────────────────────────
   api:
     build:
       context: ./backend
@@ -72,7 +77,6 @@ services:
     env_file:
       - .env
     environment:
-      # MSSQL — zewnętrzny serwer w sieci lokalnej
       DB_HOST: "${DB_HOST:-192.168.0.53}"
       DB_PORT: "${DB_PORT:-1433}"
       DB_NAME: "${DB_NAME}"
@@ -80,21 +84,21 @@ services:
       DB_PASSWORD: "${DB_PASSWORD}"
       DB_TRUST_SERVER_CERTIFICATE: "${DB_TRUST_SERVER_CERTIFICATE:-true}"
       DB_ENCRYPT: "${DB_ENCRYPT:-false}"
-      # Redis — usługa w tym samym compose
       REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
-      # Aplikacja
       APP_ENV: "${APP_ENV:-development}"
       DEBUG: "${DEBUG:-true}"
-    ports:
-      - "${API_PORT:-8000}:8000"
+      # Approval — katalog załączników (wewnątrz kontenera)
+      APPROVAL_ATTACHMENTS_DIR: "/data/approval_attachments"
+    # BRAK ports — API dostępny tylko przez nginx
     volumes:
       - ./backend:/app
-      - ./database:/app/database
       - ./database:/app/database:ro
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
       - ./archives:/app/archives
       - ./pdf_cache:/app/pdf_cache
+      # Volume dla załączników modułu approval
+      - approval_data:/data/approval_attachments
     depends_on:
       redis:
         condition: service_healthy
@@ -113,9 +117,10 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # WORKER — ARQ background worker + REST API (port 8001)
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # WORKER — ARQ background worker + REST API
+  # Port 8001: TYLKO wewnętrzny
+  # ───────────────────────────────────────────────────────────────────────────
   worker:
     build:
       context: ./worker
@@ -124,7 +129,6 @@ services:
     env_file:
       - .env
     environment:
-      # MSSQL — identyczne jak API
       DB_HOST: "${DB_HOST:-192.168.0.53}"
       DB_PORT: "${DB_PORT:-1433}"
       DB_NAME: "${DB_NAME}"
@@ -132,21 +136,21 @@ services:
       DB_PASSWORD: "${DB_PASSWORD}"
       DB_TRUST_SERVER_CERTIFICATE: "${DB_TRUST_SERVER_CERTIFICATE:-true}"
       DB_ENCRYPT: "${DB_ENCRYPT:-false}"
-      # Redis — identyczne jak API
       REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
-      # Timezone + Python
       TZ: "Europe/Warsaw"
       PYTHONPATH: "/app"
-    ports:
-      - "8001:8001"
+      # Approval
+      APPROVAL_ESCALATION_REMINDER_DAYS: "${APPROVAL_ESCALATION_REMINDER_DAYS:-3}"
+    # BRAK ports — Worker dostępny tylko przez nginx (/worker-api/)
     volumes:
       - ./worker:/app/worker
       - ./logs:/app/logs
       - ./snapshots:/app/snapshots
       - ./archives:/app/archives
       - ./pdf_cache:/app/pdf_cache
+      - approval_data:/data/approval_attachments
     depends_on:
       redis:
         condition: service_healthy
@@ -164,9 +168,10 @@ services:
       options:
         max-size: "20m"
         max-file: "10"
-  # ─────────────────────────────────────────────────────────────────────────
-  # ALERT MANAGER — monitoring + email-alerty (standalone asyncio, bez FastAPI)
-  # ─────────────────────────────────────────────────────────────────────────
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ALERT MANAGER — monitoring + email-alerty
+  # ───────────────────────────────────────────────────────────────────────────
   alertmanager:
     build:
       context: ./alertmanager
@@ -214,16 +219,88 @@ services:
         max-size: "10m"
         max-file: "5"
 
-# ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # FRONTEND — Vue.js SPA
+  # Port 3000: TYLKO wewnętrzny — dostępny przez nginx (/)
+  # ───────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Prefix API — nginx proxy_pass do /api/v1
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-/api/v1}"
+        NODE_ENV: "production"
+    container_name: windykacja_frontend
+    # BRAK ports — frontend dostępny tylko przez nginx
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # NGINX — reverse proxy, jedyny punkt wejścia
+  # Port 80:  HTTP
+  # Port 443: HTTPS (jeśli SSL skonfigurowany)
+  # ───────────────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: windykacja_nginx
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # Odkomentuj dla HTTPS:
+      # - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # Opcjonalnie — certyfikaty SSL (nigdy w repo, .gitignore):
+      # - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+# =============================================================================
 # WOLUMENY
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 volumes:
   redis_data:
     driver: local
+  approval_data:
+    driver: local
+    # Na produkcji rozważ named volume z backup:
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /data/windykacja/approval_attachments
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # SIECI
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 networks:
   windykacja_net:
     driver: bridge

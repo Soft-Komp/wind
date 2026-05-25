@@ -313,3 +313,60 @@ async def delete_step(id_path: int, id_step: int,
         raise HTTPException(status_code=404, detail="Krok nie istnieje.")
     await db.commit()
     return {"id_step": id_step, "deleted": True}
+
+class StepReorderItem(BaseModel):
+    id_step:    int = Field(..., gt=0)
+    step_order: int = Field(..., gt=0, le=50)
+
+
+@router.patch(
+    "/{id_path}/steps/reorder",
+    summary="Zmien kolejnosc krokow sciezki (drag & drop)",
+    description=(
+        "Aktualizuje `step_order` wielu krokow jednoczesnie. "
+        "Body: lista `[{id_step, step_order}]`. "
+        "Walidacja: step_order musi byc unikalny w ramach sciezki po aktualizacji. "
+        "**Uzycie:** po drag & drop w UI konfiguracji sciezki."
+    ),
+    responses={
+        200: {"description": "Kroki przestawione"},
+        409: {"description": "Duplikat step_order po aktualizacji"},
+        422: {"description": "Pusta lista lub zly format"},
+    },
+    dependencies=[require_permission("approval.manage_paths")],
+)
+async def reorder_steps(
+    id_path: int,
+    items: list[StepReorderItem],
+    current_user: CurrentUser, db: DB, redis: RedisClient,
+):
+    await _check_module_enabled(db, redis)
+    if not items:
+        raise HTTPException(status_code=422, detail="Lista nie moze byc pusta.")
+
+    # Walidacja unikalnosci step_order w body
+    orders = [i.step_order for i in items]
+    if len(orders) != len(set(orders)):
+        raise HTTPException(
+            status_code=409,
+            detail="Duplikat step_order w body — kazdy krok musi miec unikalny numer.",
+        )
+
+    updated = 0
+    for item in items:
+        result = await db.execute(
+            text(
+                f"UPDATE [{_SCHEMA}].[skw_approval_path_steps] "
+                f"SET [step_order]=:o "
+                f"WHERE [id_step]=:s AND [id_path]=:p"
+            ),
+            {"o": item.step_order, "s": item.id_step, "p": id_path},
+        )
+        updated += result.rowcount
+
+    await db.commit()
+    return {
+        "id_path":  id_path,
+        "updated":  updated,
+        "message":  f"Zaktualizowano kolejnosc {updated} krokow.",
+    }

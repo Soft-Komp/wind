@@ -391,3 +391,52 @@ async def remove_member(
     await db.commit()
     await invalidate_group_cache(redis, id_group)
     return {"message": "Czlonek usuniety.", "id_group": id_group, "id_user": id_user}
+
+
+@router.get(
+    "/{id_group}/available-users",
+    summary="Uzytkownicy dostepni do dodania do grupy",
+    description=(
+        "Zwraca aktywnych uzytkownikow ktozy NIE SA jeszcze czlonkami grupy. "
+        "Uzyc w autocomplete formularza 'Dodaj czlonka'. "
+        "Opcjonalny parametr `search` filtruje po username lub fullname."
+    ),
+    dependencies=[require_permission("approval.manage_groups")],
+)
+async def list_available_users(
+    id_group: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    search: str = Query("", max_length=100),
+):
+    await _check_module_enabled(db, redis)
+ 
+    params: dict = {"g": id_group}
+    search_clause = ""
+    if search.strip():
+        search_clause = "AND (u.[Username] LIKE :q OR u.[FullName] LIKE :q)"
+        params["q"] = f"%{search.strip()}%"
+ 
+    rows = await db.execute(
+        text(
+            f"SELECT u.[ID_USER], u.[Username], u.[FullName] "
+            f"FROM [{_SCHEMA}].[skw_Users] u "
+            f"WHERE u.[IsActive]=1 "
+            f"  {search_clause} "
+            f"  AND u.[ID_USER] NOT IN ("
+            f"      SELECT [id_user] FROM [{_SCHEMA}].[skw_approval_group_members] "
+            f"      WHERE [id_group]=:g"
+            f"  ) "
+            f"ORDER BY u.[FullName] ASC"
+        ),
+        params,
+    )
+    return {
+        "id_group": id_group,
+        "data": [
+            {"id_user": r[0], "username": r[1], "full_name": r[2]}
+            for r in rows.fetchall()
+        ],
+    }
+ 

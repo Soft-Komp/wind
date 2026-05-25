@@ -262,7 +262,7 @@ async def _fetch_from_db(db: AsyncSession, key: str) -> Optional[str]:
         result = await db.execute(
             text("""
                 SELECT ConfigValue
-                FROM dbo_ext.skw_SystemConfig
+                FROM dbo.skw_SystemConfig
                 WHERE ConfigKey  = :key
                 AND IsActive   = 1
             """),
@@ -302,7 +302,7 @@ async def _fetch_all_from_db(db: AsyncSession) -> dict[str, str]:
         result = await db.execute(
             text("""
                 SELECT ConfigKey, ConfigValue
-                FROM dbo_ext.skw_SystemConfig
+                FROM dbo.skw_SystemConfig
                 WHERE IsActive = 1
                 ORDER BY ConfigKey
             """)

@@ -28,6 +28,8 @@ from app.api.approval.attachments   import router as attachments_router
 from app.api.approval.delegations   import router as delegations_router
 from app.api.approval.stats         import router as stats_router
 from app.api.approval.notifications import router as notifications_router
+from app.api.approval.admin         import router as admin_router
+from app.api.approval.sources       import router as sources_router
 
 router = APIRouter()
 
@@ -41,3 +43,5 @@ router.include_router(attachments_router)
 router.include_router(delegations_router)
 router.include_router(stats_router)
 router.include_router(notifications_router)
+router.include_router(admin_router)
+router.include_router(sources_router)

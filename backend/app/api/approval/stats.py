@@ -302,3 +302,93 @@ async def report_approved(
             for r in data
         ],
     }
+
+
+@router.get(
+    "/stats/my-performance",
+    summary="Moje statystyki akceptacyjne",
+    description=(
+        "Statystyki zalogowanego uzytkownika: "
+        "ile zaakceptowal/odrzucil, sredni czas reakcji (minuty), "
+        "ranking w grupach do ktorych nalezy. "
+        "**Nie wymaga** `approval.supervise` — kazdy user widzi swoje dane."
+    ),
+    dependencies=[require_permission("approval.accept")],
+)
+async def get_my_performance(
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+    days: int = Query(30, ge=1, le=365),
+):
+    await _check_module_enabled(db, redis)
+    from datetime import datetime, timedelta, timezone
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    uid   = current_user.ID_USER
+ 
+    # Akcje usera
+    actions_row = (await db.execute(
+        text(
+            f"SELECT "
+            f"  SUM(CASE WHEN l.[action]=N'accepted' THEN 1 ELSE 0 END) AS accepted, "
+            f"  SUM(CASE WHEN l.[action]=N'rejected' THEN 1 ELSE 0 END) AS rejected, "
+            f"  SUM(CASE WHEN l.[action]=N'rollback' THEN 1 ELSE 0 END) AS rollbacks, "
+            f"  COUNT(DISTINCT l.[id_instance]) AS unique_instances "
+            f"FROM [{_SCHEMA}].[skw_approval_log] l "
+            f"WHERE l.[id_user]=:u AND l.[logged_at]>=:s AND l.[is_voided]=0"
+        ),
+        {"u": uid, "s": since},
+    )).fetchone()
+ 
+    # Sredni czas od pojawienia sie dokumentu w grupie do glosu usera (minuty)
+    avg_response = (await db.execute(
+        text(
+            f"SELECT AVG(DATEDIFF(MINUTE, snap.[created_at], l.[logged_at])) "
+            f"FROM [{_SCHEMA}].[skw_approval_log] l "
+            f"JOIN [{_SCHEMA}].[skw_document_approval_snapshot_steps] snap "
+            f"     ON snap.[id_instance]=l.[id_instance] "
+            f"     AND snap.[step_order]=l.[step_order_snapshot] "
+            f"WHERE l.[id_user]=:u AND l.[action]=N'accepted' "
+            f"  AND l.[logged_at]>=:s AND l.[is_voided]=0"
+        ),
+        {"u": uid, "s": since},
+    )).scalar()
+ 
+    # Grupy do ktorych nalezy + liczba oczekujacych na akcje
+    groups_rows = await db.execute(
+        text(
+            f"SELECT g.[id_group], g.[group_name], g.[consensus_type], "
+            f"  (SELECT COUNT(*) FROM [{_SCHEMA}].[skw_document_approval_snapshot_steps] s "
+            f"   JOIN [{_SCHEMA}].[skw_document_approval_instances] i "
+            f"        ON i.[id_instance]=s.[id_instance] "
+            f"   WHERE s.[id_group]=g.[id_group] AND s.[status]=N'in_progress' "
+            f"     AND i.[status]=N'in_progress') AS pending_in_group "
+            f"FROM [{_SCHEMA}].[skw_approval_groups] g "
+            f"JOIN [{_SCHEMA}].[skw_approval_group_members] m ON m.[id_group]=g.[id_group] "
+            f"WHERE m.[id_user]=:u AND g.[is_active]=1 "
+            f"ORDER BY pending_in_group DESC"
+        ),
+        {"u": uid},
+    )
+    groups = [
+        {
+            "id_group":      r[0],
+            "group_name":    r[1],
+            "consensus_type": r[2],
+            "pending_in_group": r[3],
+        }
+        for r in groups_rows.fetchall()
+    ]
+ 
+    return {
+        "period_days": days,
+        "id_user":     uid,
+        "accepted":    actions_row[0] or 0,
+        "rejected":    actions_row[1] or 0,
+        "rollbacks":   actions_row[2] or 0,
+        "unique_instances": actions_row[3] or 0,
+        "avg_response_minutes": float(avg_response) if avg_response else None,
+        "my_groups": groups,
+        "total_pending_for_me": sum(g["pending_in_group"] for g in groups),
+    }
+ 
