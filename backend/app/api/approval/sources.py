@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import text
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled
+from app.schemas.common import BaseResponse, dt_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sources")
@@ -56,7 +57,7 @@ async def list_sources(
                 "source_name":      r[1],
                 "description":      r[2],
                 "is_active":        bool(r[3]),
-                "created_at":       r[4].isoformat() if r[4] else None,
+                "created_at":       dt_utc(r[4]),
                 "active_instances": r[5] or 0,
             }
             for r in rows.fetchall()

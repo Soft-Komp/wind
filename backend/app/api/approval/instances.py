@@ -25,6 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import (
@@ -163,8 +164,8 @@ async def get_dispatch_queue(
             "status":           r[4], "is_urgent":        bool(r[5]),
             "current_step":     r[6], "document_title":   r[7],
             "document_amount":  float(r[8]) if r[8] is not None else None,
-            "deadline_at":      r[9].isoformat() if r[9] else None,
-            "created_at":       r[10].isoformat() if r[10] else None,
+            "deadline_at":      dt_utc(r[9]),
+            "created_at":       dt_utc(r[10]),
             "fakir_numer":      r[11],
             "fakir_brutto":     float(r[12]) if r[12] is not None else None,
             "fakir_kontrahent": r[13],
@@ -195,7 +196,7 @@ async def get_my_queue(
     redis: RedisClient,
 ):
     await _check_module_enabled(db, redis)
-    user_id = current_user.ID_USER
+    user_id = current_user.id_user
 
     rows = await db.execute(
         text(
@@ -221,12 +222,12 @@ async def get_my_queue(
             "status":          r[4],  "is_urgent":       bool(r[5]),
             "current_step":    r[6],  "document_title":  r[7],
             "document_amount": float(r[8]) if r[8] is not None else None,
-            "deadline_at":     r[9].isoformat() if r[9] else None,
-            "created_at":      r[10].isoformat() if r[10] else None,
+            "deadline_at":     dt_utc(r[9]),
+            "created_at":      dt_utc(r[10]),
             "snapshot_id":     r[11], "id_group":        r[12],
             "group_name":      r[13], "consensus_type":  r[14],
             "votes_cast":      r[15], "votes_required":  r[16],
-            "step_deadline":   r[17].isoformat() if r[17] else None,
+            "step_deadline":   dt_utc(r[17]),
             "fakir_numer":     r[22],
             "fakir_brutto":    float(r[23]) if r[23] is not None else None,
             "fakir_kontrahent": r[24],
@@ -293,8 +294,8 @@ async def dispatch_document(
         id_source=body.id_source,
         id_path=resolved_path,
         id_category=body.id_category,
-        dispatched_by_user_id=current_user.ID_USER,
-        dispatched_by_username=current_user.Username,
+        dispatched_by_user_id=current_user.id_user,
+        dispatched_by_username=current_user.username,
         ip_address=ip,
     )
     audit_service.log(
@@ -354,7 +355,7 @@ async def get_instance(
     data = dict(zip(keys, r))
     for k, v in data.items():
         if hasattr(v, "isoformat"):
-            data[k] = v.isoformat()
+            data[k] = dt_utc(v)
     return data
 
 
@@ -401,14 +402,14 @@ async def accept_instance(
                     instance_id=id_instance,
                     dispatched_by=kwargs.get("dispatched_by"),
                     document_title=kwargs.get("document_title"),
-                    triggered_by_user_id=current_user.ID_USER)
+                    triggered_by_user_id=current_user.id_user)
             elif event_type == "step_advanced":
                 await publish_document_waiting(redis,
                     instance_id=id_instance,
                     id_group=kwargs.get("id_group", 0),
                     step_order=kwargs.get("step_order", 0),
                     document_title=kwargs.get("document_title"),
-                    triggered_by_user_id=current_user.ID_USER)
+                    triggered_by_user_id=current_user.id_user)
         except Exception as exc:
             logger.error("accept notify error: %s", exc)
 
@@ -416,8 +417,8 @@ async def accept_instance(
     return await accept(
         db, redis, bg,
         id_instance=id_instance,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         ip_address=ip,
         notify_fn=_notify,
@@ -459,8 +460,8 @@ async def rollback_instance(
     return await do_rollback(
         db, redis,
         id_instance=id_instance,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         has_supervise="approval.supervise" in perms,
         ip_address=ip,
@@ -495,8 +496,8 @@ async def reject_instance(
     return await reject(
         db, redis,
         id_instance=id_instance,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         has_supervise="approval.supervise" in perms,
         ip_address=ip,
@@ -537,15 +538,15 @@ async def cancel_instance(
     )).fetchone()
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instancja {id_instance} nie istnieje.")
-    if inst[0] != current_user.ID_USER and not has_supervise:
+    if inst[0] != current_user.id_user and not has_supervise:
         raise HTTPException(status_code=403,
             detail="Tylko dyspozytor lub approval.supervise moze anulowac obieg.")
 
     return await cancel(
         db, redis,
         id_instance=id_instance,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         ip_address=ip,
     )
@@ -584,8 +585,8 @@ async def forward_instance(
         db, redis,
         id_instance=id_instance,
         id_target_group=body.id_target_group,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         deadline_hours=body.deadline_hours,
         has_forward_permission=True,
@@ -628,8 +629,8 @@ async def send_to_group_instance(
         db, redis,
         id_instance=id_instance,
         id_target_group=body.id_target_group,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         comment=body.comment,
         deadline_hours=body.deadline_hours,
         has_send_to_group_permission=True,
@@ -667,8 +668,8 @@ async def mark_urgent_instance(
         db, redis,
         id_instance=id_instance,
         is_urgent=body.is_urgent,
-        id_user=current_user.ID_USER,
-        username=current_user.Username,
+        id_user=current_user.id_user,
+        username=current_user.username,
         ip_address=ip,
     )
 
@@ -736,7 +737,7 @@ async def get_instance_history(
             "consensus":         r[6], "votes_before":      r[7],
             "votes_after":       r[8], "is_voided":         bool(r[9]),
             "details":           details, "ip_address":     r[11],
-            "logged_at":         r[12].isoformat() if r[12] else None,
+            "logged_at":         dt_utc(r[12]),
         })
     return {"id_instance": id_instance, "total": len(entries), "entries": entries}
 
@@ -782,8 +783,8 @@ async def get_instance_snapshot(
             "id_group":       r[2], "group_name":     r[3],
             "consensus_type": r[4], "status":         r[5],
             "votes_cast":     r[6], "votes_required": r[7],
-            "deadline_at":    r[8].isoformat() if r[8] else None,
-            "completed_at":   r[9].isoformat() if r[9] else None,
+            "deadline_at":    dt_utc(r[8]),
+            "completed_at":   dt_utc(r[9]),
             "is_current":     r[5] == "in_progress",
             "is_complete":    r[5] == "approved",
         })
@@ -958,11 +959,11 @@ async def list_all_instances(
             "is_urgent":               bool(r[10]),
             "document_title":          r[11],
             "document_amount":         float(r[12]) if r[12] is not None else None,
-            "deadline_at":             r[13].isoformat() if r[13] else None,
-            "dispatched_at":           r[14].isoformat() if r[14] else None,
-            "completed_at":            r[15].isoformat() if r[15] else None,
-            "created_at":              r[16].isoformat() if r[16] else None,
-            "updated_at":              r[17].isoformat() if r[17] else None,
+            "deadline_at":             dt_utc(r[13]),
+            "dispatched_at":           dt_utc(r[14]),
+            "completed_at":            dt_utc(r[15]),
+            "created_at":              dt_utc(r[16]),
+            "updated_at":              dt_utc(r[17]),
             "dispatched_by":           r[18],
             "dispatched_by_username":  r[19],
             "dispatched_by_fullname":  r[20],
@@ -1095,7 +1096,7 @@ async def get_instance_votes(
             "full_name": r[2],
             "has_voted": has_voted,
             "vote":      r[3],          # "accepted" | "rejected" | None
-            "voted_at":  r[4].isoformat() if r[4] else None,
+            "voted_at":  dt_utc(r[4]),
         })
 
     # Aktywne delegacje dla tej grupy
@@ -1131,7 +1132,7 @@ async def get_instance_votes(
             "id_user_to":     r[2],
             "from_username":  r[3],
             "to_username":    r[4],
-            "valid_to":       r[5].isoformat() if r[5] else None,
+            "valid_to":       dt_utc(r[5]),
         }
         for r in delegations_rows.fetchall()
     ]
@@ -1164,7 +1165,7 @@ async def get_instance_votes(
         "votes_rejected":   voted_rejected,
         "total_members":    total_members,
         "consensus_reached": consensus_reached,
-        "step_deadline":    step_deadline.isoformat() if step_deadline else None,
+        "step_deadline":    dt_utc(step_deadline),
         "members":          members,
         "active_delegations": delegations,
         "summary": {
@@ -1229,7 +1230,7 @@ async def get_instance_can_act(
     votes_cast     = inst[5] or 0
     votes_required = inst[6] or 0
     is_in_progress = inst_status == "in_progress"
-    is_dispatcher  = dispatched_by == current_user.ID_USER
+    is_dispatcher  = dispatched_by == current_user.id_user
  
     # Pobierz uprawnienia usera
     perms = await _get_role_permissions(current_user.role_id, db, redis)
@@ -1246,7 +1247,7 @@ async def get_instance_can_act(
                 f"SELECT 1 FROM [{_SCHEMA}].[skw_approval_group_members] "
                 f"WHERE [id_group]=:g AND [id_user]=:u"
             ),
-            {"g": id_group, "u": current_user.ID_USER},
+            {"g": id_group, "u": current_user.id_user},
         )).fetchone()
         is_member = member_row is not None
  
@@ -1261,7 +1262,7 @@ async def get_instance_can_act(
                 f"  AND [valid_from]<=:now AND [valid_to]>=:now "
                 f"  AND ([id_group]=:g OR [id_group] IS NULL)"
             ),
-            {"u": current_user.ID_USER, "g": id_group,
+            {"u": current_user.id_user, "g": id_group,
              "now": now_naive},
         )).fetchone()
         has_delegation = deleg is not None
@@ -1278,13 +1279,13 @@ async def get_instance_can_act(
                 f"  AND [step_order_snapshot]=:step "
                 f"  AND [action]=N'accepted' AND [is_voided]=0"
             ),
-            {"i": id_instance, "u": current_user.ID_USER, "step": current_step},
+            {"i": id_instance, "u": current_user.id_user, "step": current_step},
         )).fetchone()
         already_voted = voted is not None
  
     return {
         "id_instance":   id_instance,
-        "id_user":       current_user.ID_USER,
+        "id_user":       current_user.id_user,
         "instance_status": inst_status,
         "is_member":     is_member,
         "has_delegation": has_delegation,
@@ -1537,7 +1538,7 @@ async def get_instance_timeline(
             try: details = _json.loads(r[8])
             except Exception: details = r[8]
         timeline.append({
-            "ts":      r[9].isoformat() if r[9] else None,
+            "ts":      dt_utc(r[9]),
             "type":    "log_entry",
             "id":      r[0],
             "actor":   r[1] or "system",

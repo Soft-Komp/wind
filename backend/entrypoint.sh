@@ -155,6 +155,13 @@ log_section "KROK 2: Katalogi robocze"
 mkdir -p /app/logs /app/snapshots /app/archives
 log_ok "Katalogi gotowe: /app/logs, /app/snapshots, /app/archives"
 
+# Katalog załączników approval — tworzony tu na wypadek gdyby
+# bind mount nadpisał obraz i katalog nie istniał
+APPROVAL_DIR="${APPROVAL_ATTACHMENTS_DIR:-/data/approval_attachments}"
+mkdir -p "$APPROVAL_DIR" 2>/dev/null \
+    && log_ok "Katalog załączników gotowy: ${APPROVAL_DIR}" \
+    || log_warn "Nie można utworzyć katalogu załączników: ${APPROVAL_DIR} (sprawdź uprawnienia wolumenu)"
+
 # =============================================================================
 # KROK 3: Czekaj na MSSQL
 # =============================================================================

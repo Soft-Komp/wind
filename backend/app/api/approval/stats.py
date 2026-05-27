@@ -22,6 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled, _check_feature_flag
@@ -74,7 +75,7 @@ async def get_overview(
     now = _now_naive()
     return {
         "period_days":           days,
-        "since":                 since.isoformat(),
+        "since":                 dt_utc(since),
         "by_status":             by_status,
         "total":                 sum(by_status.values()),
         "avg_completion_hours":  float(avg_hours) if avg_hours else None,
@@ -274,8 +275,8 @@ async def report_approved(
                 r[0], r[1], r[2] or "", r[3] or "",
                 str(r[4]) if r[4] is not None else "",
                 r[5] or "",
-                r[6].isoformat() if r[6] else "",
-                r[7].isoformat() if r[7] else "",
+                dt_utc(r[6]) or "",
+                dt_utc(r[7]) or "",
                 r[8] or "",
             ])
         output.seek(0)
@@ -295,8 +296,8 @@ async def report_approved(
                 "document_title": r[3],
                 "document_amount": float(r[4]) if r[4] else None,
                 "dispatched_by":  r[5],
-                "dispatched_at":  r[6].isoformat() if r[6] else None,
-                "completed_at":   r[7].isoformat() if r[7] else None,
+                "dispatched_at":  dt_utc(r[6]),
+                "completed_at":   dt_utc(r[7]),
                 "path_name":      r[8],
             }
             for r in data
@@ -324,7 +325,7 @@ async def get_my_performance(
     await _check_module_enabled(db, redis)
     from datetime import datetime, timedelta, timezone
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
-    uid   = current_user.ID_USER
+    uid   = current_user.id_user
  
     # Akcje usera
     actions_row = (await db.execute(

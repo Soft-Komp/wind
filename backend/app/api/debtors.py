@@ -47,7 +47,7 @@ from app.core.dependencies import (
     WaproDB,
     require_permission,
 )
-from app.schemas.common import BaseResponse
+from app.schemas.common import BaseResponse, dt_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -855,11 +855,11 @@ async def monit_cost_preview(
             "id_rozrachunku": id_roz,
             "numer_faktury":  row.get("NumerFaktury"),
             "data_wystawienia": (
-                row["DataWystawienia"].isoformat()
+                dt_utc(row["DataWystawienia"])
                 if row.get("DataWystawienia") else None
             ),
             "termin_platnosci": (
-                row["TerminPlatnosci"].isoformat()
+                dt_utc(row["TerminPlatnosci"])
                 if row.get("TerminPlatnosci") else None
             ),
             "kwota_brutto":   float(row.get("KwotaBrutto") or 0),
@@ -902,7 +902,7 @@ async def monit_cost_preview(
             "parametry": {
                 "include_odsetki": _include_odsetki,
                 "include_koszty":  _include_koszty,
-                "do_daty":         do_daty.isoformat() if do_daty else None,
+                "do_daty":         dt_utc(do_daty),
             },
             # Pozycje faktur ze szczegółami
             "pozycje": pozycje,

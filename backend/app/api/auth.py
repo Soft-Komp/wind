@@ -50,7 +50,7 @@ from app.core.dependencies import (
     get_current_user,
     require_permission,
 )
-from app.schemas.common import BaseResponse, MessageData, PaginatedData
+from app.schemas.common import BaseResponse, dt_utc, MessageData, PaginatedData
 
 # ── Nowe importy v2.0 — HttpOnly cookie ──────────────────────────────────────
 import app.core.cookie_manager as _cookie_module
@@ -793,7 +793,7 @@ async def get_me(
         "role_name": role_name,
         "is_active": bool(current_user.is_active),
         "last_login_at": (
-            current_user.last_login_at.isoformat()
+            dt_utc(current_user.last_login_at)
             if current_user.last_login_at
             else None
         ),
@@ -943,7 +943,7 @@ async def start_impersonation(
         data={
             "access_token": result.access_token,
             "token_type": result.token_type,
-            "expires_at": result.expires_at.isoformat(),
+            "expires_at": dt_utc(result.expires_at),
             "is_impersonation": True,
             "impersonated_user_id": user_id,
             "message": "Impersonacja aktywna. Użyj access_token do dalszych żądań.",
@@ -1159,8 +1159,8 @@ async def list_sessions(
     sessions = [
         {
             "session_id": row.id_token,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "created_at": dt_utc(row.created_at),
+            "expires_at": dt_utc(row.expires_at),
             "ip_address": row.ip_address,
             "user_agent": (row.user_agent or "")[:100],
         }
@@ -1227,7 +1227,7 @@ def _raise_from_auth_error(exc: Exception) -> None:
         if locked_until:
             extra_errors.append({
                 "field": "account",
-                "message": f"Konto zablokowane do: {locked_until.isoformat() if hasattr(locked_until, 'isoformat') else locked_until}",
+                "message": f"Konto zablokowane do: {dt_utc(locked_until) if hasattr(locked_until, 'isoformat') else locked_until}",
             })
 
         raise HTTPException(

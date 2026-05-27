@@ -55,10 +55,10 @@ def _row_to_dict(r) -> dict:
     return {
         "id_delegation": r[0], "id_user_from": r[1], "id_user_to": r[2],
         "id_group": r[3],
-        "valid_from": r[4].isoformat() if r[4] else None,
-        "valid_to":   r[5].isoformat() if r[5] else None,
+        "valid_from": dt_utc(r[4]),
+        "valid_to":   dt_utc(r[5]),
         "reason": r[6], "is_active": bool(r[7]),
-        "created_at": r[8].isoformat() if r[8] else None,
+        "created_at": dt_utc(r[8]),
         "to_username": r[9], "to_fullname": r[10], "group_name": r[11],
     }
 
@@ -79,7 +79,7 @@ async def list_my_delegations(current_user: CurrentUser, db: DB, redis: RedisCli
              f"LEFT JOIN [{_SCHEMA}].[skw_Users] ut ON ut.[ID_USER]=d.[id_user_to] "
              f"LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g ON g.[id_group]=d.[id_group] "
              f"WHERE d.[id_user_from]=:u {where} ORDER BY d.[valid_from] DESC"),
-        {"u": current_user.ID_USER},
+        {"u": current_user.id_user},
     )
     return {"data": [_row_to_dict(r) for r in rows.fetchall()]}
 
@@ -123,15 +123,15 @@ async def create_delegation(body: DelegationCreateBody, current_user: CurrentUse
     valid_from = body.valid_from.replace(tzinfo=None)
     valid_to   = body.valid_to.replace(tzinfo=None)
     await validate_delegation_create(
-        db, id_user_from=current_user.ID_USER, id_user_to=body.id_user_to,
+        db, id_user_from=current_user.id_user, id_user_to=body.id_user_to,
         id_group=body.id_group, valid_from=valid_from, valid_to=valid_to,
     )
     result = await db.execute(
         text(f"INSERT INTO [{_SCHEMA}].[skw_approval_delegations] "
              f"([id_user_from],[id_user_to],[id_group],[valid_from],[valid_to],[reason],[created_by]) "
              f"OUTPUT INSERTED.[id_delegation] VALUES (:uf,:ut,:g,:vf,:vt,:r,:by)"),
-        {"uf": current_user.ID_USER, "ut": body.id_user_to, "g": body.id_group,
-         "vf": valid_from, "vt": valid_to, "r": body.reason, "by": current_user.ID_USER},
+        {"uf": current_user.id_user, "ut": body.id_user_to, "g": body.id_group,
+         "vf": valid_from, "vt": valid_to, "r": body.reason, "by": current_user.id_user},
     )
     new_id = result.fetchone()[0]
     await db.commit()
@@ -163,16 +163,16 @@ async def initiate_cancel_delegation(
     if not bool(r[1]): raise HTTPException(status_code=409, detail="Delegacja juz nieaktywna.")
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    if r[0] != current_user.ID_USER and "approval.supervise" not in perms:
+    if r[0] != current_user.id_user and "approval.supervise" not in perms:
         raise HTTPException(status_code=403, detail="Mozesz anulowac tylko swoje delegacje.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_delegation, scope=_SCOPE,
-        initiated_by=current_user.ID_USER,
+        initiated_by=current_user.id_user,
         extra={"id_group": r[2]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_delegation_cancel_initiated",
-        "id_delegation": id_delegation, "initiated_by": current_user.ID_USER,
+        "id_delegation": id_delegation, "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -206,7 +206,7 @@ async def confirm_cancel_delegation(
         await invalidate_group_cache(redis, int(id_group))
     logger.warning(orjson.dumps({
         "event": "approval_delegation_cancelled",
-        "id_delegation": id_delegation, "cancelled_by": current_user.ID_USER,
+        "id_delegation": id_delegation, "cancelled_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())

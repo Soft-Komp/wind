@@ -13,6 +13,7 @@ UWAGA: /unread-count MUSI byc przed /{id_notification}/read (FastAPI routing ord
 """
 import logging
 from datetime import datetime, timezone
+from app.schemas.common import BaseResponse, dt_utc
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import text
@@ -48,7 +49,7 @@ async def list_notifications(
     total = (await db.execute(
         text(f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_user_notifications] "
              f"WHERE [id_user]=:u {where}"),
-        {"u": current_user.ID_USER},
+        {"u": current_user.id_user},
     )).scalar() or 0
 
     rows = await db.execute(
@@ -60,7 +61,7 @@ async def list_notifications(
             f"ORDER BY [is_read] ASC,[created_at] DESC "
             f"OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
         ),
-        {"u": current_user.ID_USER, "offset": offset, "limit": per_page},
+        {"u": current_user.id_user, "offset": offset, "limit": per_page},
     )
     return {
         "total": total, "page": page, "per_page": per_page,
@@ -72,8 +73,8 @@ async def list_notifications(
                 "title":              r[3],
                 "message":            r[4],
                 "is_read":            bool(r[5]),
-                "read_at":            r[6].isoformat() if r[6] else None,
-                "created_at":         r[7].isoformat() if r[7] else None,
+                "read_at":            dt_utc(r[6]),
+                "created_at":         dt_utc(r[7]),
             }
             for r in rows.fetchall()
         ],
@@ -95,7 +96,7 @@ async def get_unread_count(
     current_user: CurrentUser, db: DB, redis: RedisClient,
 ):
     await _check_module_enabled(db, redis)
-    cache_key = f"notif_unread:{current_user.ID_USER}"
+    cache_key = f"notif_unread:{current_user.id_user}"
     cached = await redis.get(cache_key)
     if cached is not None:
         count = int(cached)
@@ -103,10 +104,10 @@ async def get_unread_count(
         count = (await db.execute(
             text(f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_user_notifications] "
                  f"WHERE [id_user]=:u AND [is_read]=0"),
-            {"u": current_user.ID_USER},
+            {"u": current_user.id_user},
         )).scalar() or 0
         await redis.set(cache_key, count, ex=_NOTIF_TTL)
-    return {"id_user": current_user.ID_USER, "unread_count": max(0, count)}
+    return {"id_user": current_user.id_user, "unread_count": max(0, count)}
 
 
 @router.post(
@@ -129,7 +130,7 @@ async def mark_read(
     r = (await db.execute(
         text(f"SELECT [is_read] FROM [{_SCHEMA}].[skw_user_notifications] "
              f"WHERE [id_notification]=:n AND [id_user]=:u"),
-        {"n": id_notification, "u": current_user.ID_USER},
+        {"n": id_notification, "u": current_user.id_user},
     )).fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Powiadomienie nie istnieje.")
@@ -141,11 +142,11 @@ async def mark_read(
             f"SET [is_read]=1,[read_at]=:now "
             f"WHERE [id_notification]=:n AND [id_user]=:u AND [is_read]=0"
         ),
-        {"now": now, "n": id_notification, "u": current_user.ID_USER},
+        {"now": now, "n": id_notification, "u": current_user.id_user},
     )
     await db.commit()
     if was_unread:
-        cache_key = f"notif_unread:{current_user.ID_USER}"
+        cache_key = f"notif_unread:{current_user.id_user}"
         try:
             val = await redis.get(cache_key)
             if val is not None:
@@ -171,13 +172,13 @@ async def mark_all_read(
             f"UPDATE [{_SCHEMA}].[skw_user_notifications] "
             f"SET [is_read]=1,[read_at]=:now WHERE [id_user]=:u AND [is_read]=0"
         ),
-        {"now": now, "u": current_user.ID_USER},
+        {"now": now, "u": current_user.id_user},
     )
     updated = result.rowcount
     await db.commit()
     try:
-        await redis.set(f"notif_unread:{current_user.ID_USER}", 0, ex=_NOTIF_TTL)
+        await redis.set(f"notif_unread:{current_user.id_user}", 0, ex=_NOTIF_TTL)
     except Exception as exc:
         logger.warning("mark_all_read | Redis SET error: %s", exc)
-    logger.info("notifications.read_all | user=%d marked=%d", current_user.ID_USER, updated)
+    logger.info("notifications.read_all | user=%d marked=%d", current_user.id_user, updated)
     return {"message": f"Oznaczono {updated} powiadomien.", "updated_count": updated, "unread_count": 0}

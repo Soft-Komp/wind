@@ -72,7 +72,9 @@ RUN groupadd --gid 1001 appgroup \
 # Katalogi robocze z odpowiednimi uprawnieniami
 # ─────────────────────────────────────────────────────────────────────────────
 RUN mkdir -p /app/logs /app/snapshots /app/archives \
-    && chown -R appuser:appgroup /app
+    && mkdir -p /data/approval_attachments \
+    && chown -R appuser:appgroup /app \
+    && chown -R appuser:appgroup /data
 
 WORKDIR /app
 

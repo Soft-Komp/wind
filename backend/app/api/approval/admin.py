@@ -13,6 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from app.schemas.common import BaseResponse, dt_utc
 
 import orjson
 from fastapi import APIRouter, HTTPException, status
@@ -145,7 +146,7 @@ async def get_admin_status(
             )).fetchone()
             if cron_row:
                 last_deadline_cron = {
-                    "logged_at": cron_row[0].isoformat() if cron_row[0] else None,
+                    "logged_at": dt_utc(cron_row[0]),
                     "action":    cron_row[1],
                 }
         except Exception as exc:
@@ -189,11 +190,11 @@ async def get_admin_status(
 
     logger.info(
         "admin_status | user=%d module_enabled=%s instances=%s",
-        current_user.ID_USER, module_enabled, instances,
+        current_user.id_user, module_enabled, instances,
     )
 
     return {
-        "ts":                now.isoformat(),
+        "ts":                dt_utc(now),
         "module_enabled":    module_enabled,
         "flags":             flags,
         "instances": {
@@ -273,7 +274,7 @@ async def cleanup_attachments(
             "file_name":     file_name,
             "file_path":     file_path,
             "file_size":     file_size,
-            "deleted_at":    deleted_at.isoformat() if deleted_at else None,
+            "deleted_at":    dt_utc(deleted_at),
         }
 
         if p is None or not p.exists():
@@ -325,7 +326,7 @@ async def cleanup_attachments(
             "not_found_count": len(not_found),
             "errors_count":    len(errors),
             "freed_mb":        round(freed_bytes / (1024 * 1024), 2),
-            "executed_by":     current_user.ID_USER,
+            "executed_by":     current_user.id_user,
             "ts":              datetime.now(timezone.utc).isoformat(),
         }).decode()
     )

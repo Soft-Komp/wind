@@ -14,6 +14,7 @@ import orjson
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from app.schemas.common import BaseResponse, dt_utc
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
@@ -169,7 +170,7 @@ async def get_filter(id_filter: int, current_user: CurrentUser, db: DB, redis: R
     return {"id_filter": r[0], "filter_name": r[1], "filter_type": r[2],
             "id_path": r[3], "id_source": r[4], "priority": r[5],
             "is_active": bool(r[6]), "universal_function": r[7],
-            "created_at": r[8].isoformat() if r[8] else None,
+            "created_at": dt_utc(r[8]),
             "conditions": [{"id_condition": cr[0], "field_name": cr[1],
                              "operator": cr[2], "field_value": cr[3]}
                             for cr in cond_rows.fetchall()]}
@@ -215,11 +216,11 @@ async def initiate_delete_filter(
     if not r: raise HTTPException(status_code=404, detail="Filtr nie istnieje.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_filter, scope=_SCOPE,
-        initiated_by=current_user.ID_USER, extra={"filter_name": r[0]},
+        initiated_by=current_user.id_user, extra={"filter_name": r[0]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_filter_delete_initiated", "id_filter": id_filter,
-        "filter_name": r[0], "initiated_by": current_user.ID_USER,
+        "filter_name": r[0], "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -249,7 +250,7 @@ async def confirm_delete_filter(
     await db.commit()
     logger.warning(orjson.dumps({
         "event": "approval_filter_deleted", "id_filter": id_filter,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())

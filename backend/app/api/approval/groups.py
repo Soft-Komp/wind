@@ -18,6 +18,7 @@ import logging
 import orjson
 from datetime import datetime, timezone
 from typing import Optional
+from app.schemas.common import BaseResponse, dt_utc
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -88,8 +89,8 @@ async def list_groups(
         "data": [
             {"id_group": r[0], "group_name": r[1], "consensus_type": r[2],
              "description": r[3], "is_active": bool(r[4]),
-             "created_at": r[5].isoformat() if r[5] else None,
-             "updated_at": r[6].isoformat() if r[6] else None,
+             "created_at": dt_utc(r[5]),
+             "updated_at": dt_utc(r[6]),
              "member_count": r[7]}
             for r in rows.fetchall()
         ],
@@ -123,7 +124,7 @@ async def create_group(
     )
     new_id = result.fetchone()[0]
     await db.commit()
-    logger.info("group.create | id=%d name=%r by=%d", new_id, body.group_name, current_user.ID_USER)
+    logger.info("group.create | id=%d name=%r by=%d", new_id, body.group_name, current_user.id_user)
     return {"id_group": new_id, "group_name": body.group_name, "consensus_type": body.consensus_type}
 
 
@@ -144,8 +145,8 @@ async def get_group(id_group: int, current_user: CurrentUser, db: DB, redis: Red
     return {
         "id_group": r[0], "group_name": r[1], "consensus_type": r[2],
         "description": r[3], "is_active": bool(r[4]),
-        "created_at": r[5].isoformat() if r[5] else None,
-        "updated_at": r[6].isoformat() if r[6] else None,
+        "created_at": dt_utc(r[5]),
+        "updated_at": dt_utc(r[6]),
     }
 
 
@@ -236,12 +237,12 @@ async def initiate_delete_group(
 
     token, ttl = await generate_delete_token(
         redis, entity_id=id_group, scope=_SCOPE,
-        initiated_by=current_user.ID_USER,
+        initiated_by=current_user.id_user,
         extra={"group_name": r[0]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_group_delete_initiated", "id_group": id_group,
-        "group_name": r[0], "initiated_by": current_user.ID_USER,
+        "group_name": r[0], "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -287,7 +288,7 @@ async def confirm_delete_group(
     await invalidate_group_cache(redis, id_group)
     logger.warning(orjson.dumps({
         "event": "approval_group_deleted", "id_group": id_group,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -316,7 +317,7 @@ async def list_members(id_group: int, current_user: CurrentUser, db: DB, redis: 
     )
     members = [
         {"id": r[0], "id_user": r[1], "username": r[2], "full_name": r[3],
-         "assigned_at": r[4].isoformat() if r[4] else None}
+         "assigned_at": dt_utc(r[4])}
         for r in rows.fetchall()
     ]
     return {"id_group": id_group, "members": members, "count": len(members)}
@@ -353,7 +354,7 @@ async def add_member(
             f"INSERT INTO [{_SCHEMA}].[skw_approval_group_members] "
             f"([id_group],[id_user],[assigned_by]) OUTPUT INSERTED.[id] VALUES (:g,:u,:by)"
         ),
-        {"g": id_group, "u": body.id_user, "by": current_user.ID_USER},
+        {"g": id_group, "u": body.id_user, "by": current_user.id_user},
     )
     new_id = result.fetchone()[0]
     await db.commit()

@@ -38,7 +38,7 @@ from app.core.dependencies import (
     RequestID,
     require_permission,
 )
-from app.schemas.common import BaseResponse
+from app.schemas.common import BaseResponse, dt_utc
 from app.services.user_service import UserListParams
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ async def create_user(
             "created_by": current_user.id_user,
             "request_id": request_id,
             "ip": client_ip,
-            "ts": datetime.utcnow().isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
         }).decode()
     )
 

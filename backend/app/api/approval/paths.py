@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled
@@ -72,8 +73,8 @@ async def list_paths(current_user: CurrentUser, db: DB, redis: RedisClient,
     )
     return {"data": [{"id_path": r[0], "path_name": r[1], "description": r[2],
                       "is_active": bool(r[3]),
-                      "created_at": r[4].isoformat() if r[4] else None,
-                      "updated_at": r[5].isoformat() if r[5] else None,
+                      "created_at": dt_utc(r[4]),
+                      "updated_at": dt_utc(r[5]),
                       "step_count": r[6]} for r in rows.fetchall()]}
 
 
@@ -90,7 +91,7 @@ async def create_path(body: PathCreateBody, current_user: CurrentUser, db: DB, r
     result = await db.execute(
         text(f"INSERT INTO [{_SCHEMA}].[skw_approval_paths] ([path_name],[description],[created_by]) "
              f"OUTPUT INSERTED.[id_path] VALUES (:n,:d,:by)"),
-        {"n": body.path_name, "d": body.description, "by": current_user.ID_USER},
+        {"n": body.path_name, "d": body.description, "by": current_user.id_user},
     )
     new_id = result.fetchone()[0]
     await db.commit()
@@ -117,7 +118,7 @@ async def get_path(id_path: int, current_user: CurrentUser, db: DB, redis: Redis
         {"p": id_path},
     )
     return {"id_path": r[0], "path_name": r[1], "description": r[2], "is_active": bool(r[3]),
-            "created_at": r[4].isoformat() if r[4] else None,
+            "created_at": dt_utc(r[4]),
             "steps": [{"id_step": sr[0], "step_order": sr[1], "id_group": sr[2],
                         "group_name": sr[3], "consensus_type": sr[4], "deadline_hours": sr[5]}
                        for sr in steps_rows.fetchall()]}
@@ -152,7 +153,7 @@ async def update_path(id_path: int, body: PathPatchBody,
     await db.execute(
         text(f"INSERT INTO [{_SCHEMA}].[skw_approval_path_change_log] "
              f"([id_path],[changed_by],[change_type],[new_value]) VALUES (:p,:by,N'meta_updated',:nv)"),
-        {"p": id_path, "by": current_user.ID_USER,
+        {"p": id_path, "by": current_user.id_user,
          "nv": json.dumps({k: str(v) for k, v in params.items() if k != "p"})},
     )
     await db.commit()
@@ -194,11 +195,11 @@ async def initiate_delete_path(
             detail="Sciezka jest uzywana w aktywnych obiegach. Zakoncz obiegi przed dezaktywacja.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_path, scope=_SCOPE,
-        initiated_by=current_user.ID_USER, extra={"path_name": r[0]},
+        initiated_by=current_user.id_user, extra={"path_name": r[0]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_path_delete_initiated", "id_path": id_path,
-        "path_name": r[0], "initiated_by": current_user.ID_USER,
+        "path_name": r[0], "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -228,7 +229,7 @@ async def confirm_delete_path(
     await db.commit()
     logger.warning(orjson.dumps({
         "event": "approval_path_deleted", "id_path": id_path,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -250,7 +251,7 @@ async def list_steps(id_path: int, current_user: CurrentUser, db: DB, redis: Red
     return {"id_path": id_path, "steps": [
         {"id_step": r[0], "step_order": r[1], "id_group": r[2],
          "group_name": r[3], "consensus_type": r[4], "deadline_hours": r[5],
-         "created_at": r[6].isoformat() if r[6] else None}
+         "created_at": dt_utc(r[6])}
         for r in rows.fetchall()
     ]}
 

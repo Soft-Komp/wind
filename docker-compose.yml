@@ -74,6 +74,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: windykacja_api
+    ports:
+      - "8000:8000"
     env_file:
       - .env
     environment:
@@ -98,7 +100,7 @@ services:
       - ./archives:/app/archives
       - ./pdf_cache:/app/pdf_cache
       # Volume dla załączników modułu approval
-      - approval_data:/data/approval_attachments
+      - ./data/approval_attachments:/data/approval_attachments
     depends_on:
       redis:
         condition: service_healthy

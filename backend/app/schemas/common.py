@@ -33,6 +33,17 @@ from enum import Enum
 from typing import Any, Generic, TypeVar
 
 import orjson
+from datetime import timezone as _UTC_TZ
+
+
+def dt_utc(v) -> str | None:
+    """Naive datetime z MSSQL → ISO 8601 z jawnym +00:00. None → None."""
+    if v is None:
+        return None
+    if hasattr(v, "tzinfo") and v.tzinfo is None:
+        return v.isoformat() + "+00:00"
+    return v.isoformat()
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
@@ -199,9 +210,21 @@ class BaseResponse(BaseModel, Generic[DataT]):
     def to_json_bytes(self) -> bytes:
         """
         Serializuje odpowiedź do JSON bytes używając orjson (szybszy niż stdlib).
-        Używany przez custom JSONResponse w main.py.
+        Naive datetimes z MSSQL traktowane jako UTC — zwracane z +00:00.
         """
-        return orjson.dumps(self.model_dump(mode="json"))
+        def _dt_handler(obj):
+            from datetime import datetime
+            if isinstance(obj, datetime):
+                if obj.tzinfo is None:
+                    return obj.isoformat() + "+00:00"
+                return obj.isoformat()
+            raise TypeError(f"Nieserializowalny typ: {type(obj)!r}")
+
+        return orjson.dumps(
+            self.model_dump(mode="python"),
+            default=_dt_handler,
+            option=orjson.OPT_PASSTHROUGH_DATETIME,
+        )
 
 
 class PaginatedData(BaseModel, Generic[DataT]):

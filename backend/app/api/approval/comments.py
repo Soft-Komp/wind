@@ -19,6 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled, _check_feature_flag
@@ -66,9 +67,9 @@ async def list_comments(id_instance: int, current_user: CurrentUser, db: DB, red
             "id_comment": r[0], "parent_id": r[1], "id_user": r[2],
             "username": r[3], "full_name": r[4],
             "content": "[usunieto]" if is_del else r[5], "is_deleted": is_del,
-            "created_at": r[7].isoformat() if r[7] else None,
-            "updated_at": r[8].isoformat() if r[8] else None,
-            "can_edit": (r[2] == current_user.ID_USER) and not is_del,
+            "created_at": dt_utc(r[7]),
+            "updated_at": dt_utc(r[8]),
+            "can_edit": (r[2] == current_user.id_user) and not is_del,
         })
     return {"id_instance": id_instance, "comments": items, "total": len(items)}
 
@@ -92,7 +93,7 @@ async def create_comment(id_instance: int, body: CommentCreateBody,
         text(f"INSERT INTO [{_SCHEMA}].[skw_approval_comments] "
              f"([id_instance],[id_user],[parent_id],[content]) "
              f"OUTPUT INSERTED.[id_comment] VALUES (:i,:u,:p,:c)"),
-        {"i": id_instance, "u": current_user.ID_USER,
+        {"i": id_instance, "u": current_user.id_user,
          "p": body.parent_id, "c": body.content.strip()},
     )
     new_id = result.fetchone()[0]
@@ -115,7 +116,7 @@ async def update_comment(id_instance: int, id_comment: int, body: CommentPatchBo
         {"c": id_comment, "i": id_instance},
     )).fetchone()
     if not r: raise HTTPException(status_code=404, detail="Komentarz nie istnieje.")
-    if r[0] != current_user.ID_USER:
+    if r[0] != current_user.id_user:
         raise HTTPException(status_code=403, detail="Mozesz edytowac tylko swoje komentarze.")
     if bool(r[1]):
         raise HTTPException(status_code=409, detail="Nie mozna edytowac usunietego komentarza.")
@@ -151,17 +152,17 @@ async def initiate_delete_comment(
     if bool(r[1]): raise HTTPException(status_code=409, detail="Komentarz juz usuniety.")
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    if r[0] != current_user.ID_USER and "approval.supervise" not in perms:
+    if r[0] != current_user.id_user and "approval.supervise" not in perms:
         raise HTTPException(status_code=403, detail="Mozesz usunac tylko swoje komentarze.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_comment, scope=_SCOPE,
-        initiated_by=current_user.ID_USER,
+        initiated_by=current_user.id_user,
         extra={"id_instance": id_instance},
     )
     logger.warning(orjson.dumps({
         "event": "approval_comment_delete_initiated",
         "id_comment": id_comment, "id_instance": id_instance,
-        "initiated_by": current_user.ID_USER,
+        "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -196,7 +197,7 @@ async def confirm_delete_comment(
     logger.warning(orjson.dumps({
         "event": "approval_comment_deleted",
         "id_comment": id_comment, "id_instance": id_instance,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())

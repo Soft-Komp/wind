@@ -73,7 +73,7 @@ from app.schemas.faktura_akceptacja import (
     FakturaResetRequest,
     FakturaResetResponse,
 )
-from app.schemas.common import BaseResponse
+from app.schemas.common import BaseResponse, dt_utc
 from app.services import faktura_akceptacja_service as svc
 from app.services.config_service import get_config_value
 
@@ -172,7 +172,7 @@ async def list_faktury(
             "filters":    {"priorytet": priorytet, "status": status_f, "search": search},
             "ip":         client_ip,
             "request_id": request_id,
-            "ts":         __import__("datetime").datetime.utcnow().isoformat(),
+            "ts":         __import__("datetime").datetime.now(timezone.utc).isoformat(),
         }).decode()
     )
 

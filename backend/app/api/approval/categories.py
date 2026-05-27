@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled
@@ -52,7 +53,7 @@ async def list_categories(current_user: CurrentUser, db: DB, redis: RedisClient,
              f"FROM [{_SCHEMA}].[skw_document_categories] {where} ORDER BY [category_name] ASC"),
     )
     return {"data": [{"id_category": r[0], "category_name": r[1], "description": r[2],
-                      "is_active": bool(r[3]), "created_at": r[4].isoformat() if r[4] else None}
+                      "is_active": bool(r[3]), "created_at": dt_utc(r[4])}
                      for r in rows.fetchall()]}
 
 
@@ -92,8 +93,8 @@ async def get_category(id_category: int, current_user: CurrentUser,
         raise HTTPException(status_code=404, detail="Kategoria nie istnieje.")
     return {"id_category": r[0], "category_name": r[1], "description": r[2],
             "is_active": bool(r[3]),
-            "created_at": r[4].isoformat() if r[4] else None,
-            "updated_at": r[5].isoformat() if r[5] else None}
+            "created_at": dt_utc(r[4]),
+            "updated_at": dt_utc(r[5])}
 
 
 @router.patch("/{id_category}", summary="Aktualizacja kategorii",
@@ -139,11 +140,11 @@ async def initiate_delete_category(
         raise HTTPException(status_code=404, detail="Kategoria nie istnieje.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_category, scope=_SCOPE,
-        initiated_by=current_user.ID_USER, extra={"category_name": r[0]},
+        initiated_by=current_user.id_user, extra={"category_name": r[0]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_category_delete_initiated", "id_category": id_category,
-        "category_name": r[0], "initiated_by": current_user.ID_USER,
+        "category_name": r[0], "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -175,7 +176,7 @@ async def confirm_delete_category(
     await db.commit()
     logger.warning(orjson.dumps({
         "event": "approval_category_deleted", "id_category": id_category,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())

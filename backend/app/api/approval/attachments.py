@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from app.schemas.common import BaseResponse, dt_utc
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -72,7 +73,7 @@ async def list_attachments(id_instance: int, current_user: CurrentUser,
     return {"id_instance": id_instance, "attachments": [
         {"id_attachment": r[0], "id_user": r[1], "username": r[2],
          "file_name": r[3], "file_size": r[4], "mime_type": r[5],
-         "created_at": r[6].isoformat() if r[6] else None}
+         "created_at": dt_utc(r[6])}
         for r in rows.fetchall()
     ]}
 
@@ -123,7 +124,7 @@ async def upload_attachment(id_instance: int, file: UploadFile,
         text(f"INSERT INTO [{_SCHEMA}].[skw_approval_attachments] "
              f"([id_instance],[id_user],[file_name],[file_path],[file_size],[mime_type]) "
              f"OUTPUT INSERTED.[id_attachment] VALUES (:i,:u,:fn,:fp,:fs,:mt)"),
-        {"i": id_instance, "u": current_user.ID_USER,
+        {"i": id_instance, "u": current_user.id_user,
          "fn": file.filename or safe_name, "fp": str(file_path),
          "fs": len(content), "mt": detected_mime},
     )
@@ -132,7 +133,7 @@ async def upload_attachment(id_instance: int, file: UploadFile,
     logger.warning(orjson.dumps({
         "event": "approval_attachment_uploaded", "id_attachment": new_id,
         "id_instance": id_instance, "file_size": len(content), "mime": detected_mime,
-        "uploaded_by": current_user.ID_USER, "ts": datetime.now(timezone.utc).isoformat(),
+        "uploaded_by": current_user.id_user, "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
     return {"id_attachment": new_id, "file_name": file.filename,
             "file_size": len(content), "mime_type": detected_mime}
@@ -185,17 +186,17 @@ async def initiate_delete_attachment(
     if bool(r[1]): raise HTTPException(status_code=409, detail="Zalacznik juz usuniety.")
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    if r[0] != current_user.ID_USER and "approval.supervise" not in perms:
+    if r[0] != current_user.id_user and "approval.supervise" not in perms:
         raise HTTPException(status_code=403, detail="Mozesz usunac tylko swoje zalaczniki.")
     token, ttl = await generate_delete_token(
         redis, entity_id=id_attachment, scope=_SCOPE,
-        initiated_by=current_user.ID_USER,
+        initiated_by=current_user.id_user,
         extra={"id_instance": id_instance, "file_name": r[2]},
     )
     logger.warning(orjson.dumps({
         "event": "approval_attachment_delete_initiated",
         "id_attachment": id_attachment, "id_instance": id_instance,
-        "file_name": r[2], "initiated_by": current_user.ID_USER,
+        "file_name": r[2], "initiated_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
@@ -224,13 +225,13 @@ async def confirm_delete_attachment(
         text(f"UPDATE [{_SCHEMA}].[skw_approval_attachments] "
              f"SET [is_deleted]=1,[deleted_at]=:now,[deleted_by]=:by "
              f"WHERE [id_attachment]=:a AND [id_instance]=:i"),
-        {"now": now, "by": current_user.ID_USER, "a": id_attachment, "i": id_instance},
+        {"now": now, "by": current_user.id_user, "a": id_attachment, "i": id_instance},
     )
     await db.commit()
     logger.warning(orjson.dumps({
         "event": "approval_attachment_deleted",
         "id_attachment": id_attachment, "id_instance": id_instance,
-        "deleted_by": current_user.ID_USER,
+        "deleted_by": current_user.id_user,
         "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
         "ts": datetime.now(timezone.utc).isoformat(),
     }).decode())
