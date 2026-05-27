@@ -172,7 +172,7 @@ async def list_faktury(
             "filters":    {"priorytet": priorytet, "status": status_f, "search": search},
             "ip":         client_ip,
             "request_id": request_id,
-            "ts":         __import__("datetime").datetime.now(timezone.utc).isoformat(),
+            "ts":         __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         }).decode()
     )
 
