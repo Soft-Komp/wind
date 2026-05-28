@@ -38,6 +38,7 @@ from app.services.approval_service import (
     mark_urgent,
 )
 from app.services import audit_service
+from app.services import approval_sse_service as sse
 
 from app.services.approval_service import rollback as do_rollback
 from app.services.approval_service_ext import forward, send_to_group
@@ -273,6 +274,7 @@ async def dispatch_document(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     await _check_module_enabled(db, redis)
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
@@ -312,13 +314,25 @@ async def dispatch_document(
         },
         details={"auto_filter": body.id_path is None},
     )
-    return {
+
+    result = {
         "id_instance":  instance.id_instance,
         "status":       instance.status,
         "id_path":      instance.id_path,
         "current_step": instance.current_step,
         "message":      "Dokument przekazany do obiegu.",
     }
+
+    # SSE ping po commit — non-blocking, błąd nie wpływa na odpowiedź HTTP
+    bg.add_task(
+        sse.on_dispatch,
+        redis=redis,
+        db=db,
+        id_instance=instance.id_instance,
+        id_dispatched_by=current_user.id_user,
+    )
+
+    return result
 
 
 
@@ -393,36 +407,32 @@ async def accept_instance(
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
 
-    from app.services.event_service import publish_document_approved, publish_document_waiting
-
-    async def _notify(event_type: str, **kwargs):
-        try:
-            if event_type == "approved":
-                await publish_document_approved(redis,
-                    instance_id=id_instance,
-                    dispatched_by=kwargs.get("dispatched_by"),
-                    document_title=kwargs.get("document_title"),
-                    triggered_by_user_id=current_user.id_user)
-            elif event_type == "step_advanced":
-                await publish_document_waiting(redis,
-                    instance_id=id_instance,
-                    id_group=kwargs.get("id_group", 0),
-                    step_order=kwargs.get("step_order", 0),
-                    document_title=kwargs.get("document_title"),
-                    triggered_by_user_id=current_user.id_user)
-        except Exception as exc:
-            logger.error("accept notify error: %s", exc)
-
-
-    return await accept(
+    # notify_fn=None — stary mechanizm zastąpiony przez approval_sse_service
+    result = await accept(
         db, redis, bg,
         id_instance=id_instance,
         id_user=current_user.id_user,
         username=current_user.username,
         comment=body.comment,
         ip_address=ip,
-        notify_fn=_notify,
+        notify_fn=None,
     )
+
+    # SSE po commit — on_accept pobiera aktualny stan z DB (po commit)
+    # next_group_id=None: on_accept odczyta current_group_id z meta po commit
+    bg.add_task(
+        sse.on_accept,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+        step_complete=result.get("step_complete", False),
+        approved_terminal=result.get("approved", False),
+        next_step=result.get("next_step"),
+        next_group_id=None,
+    )
+
+    return result
 
 
 # =============================================================================
@@ -453,11 +463,13 @@ async def rollback_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    return await do_rollback(
+
+    result = await do_rollback(
         db, redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
@@ -466,6 +478,19 @@ async def rollback_instance(
         has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
+
+    # to_step i new_status z result — rollback() je zwraca
+    bg.add_task(
+        sse.on_rollback,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+        to_step=result.get("to_step", 0),
+        new_status=result.get("new_status", "pending_dispatch"),
+    )
+
+    return result
 
 
 # =============================================================================
@@ -489,11 +514,13 @@ async def reject_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    return await reject(
+
+    result = await reject(
         db, redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
@@ -502,6 +529,16 @@ async def reject_instance(
         has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
+
+    bg.add_task(
+        sse.on_reject,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+    )
+
+    return result
 
 
 # =============================================================================
@@ -525,31 +562,31 @@ async def cancel_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-    has_supervise = "approval.supervise" in perms
 
-    inst = (await db.execute(
-        text(f"SELECT [dispatched_by] FROM [{_SCHEMA}].[skw_document_approval_instances] "
-             f"WHERE [id_instance] = :i"),
-        {"i": id_instance},
-    )).fetchone()
-    if not inst:
-        raise HTTPException(status_code=404, detail=f"Instancja {id_instance} nie istnieje.")
-    if inst[0] != current_user.id_user and not has_supervise:
-        raise HTTPException(status_code=403,
-            detail="Tylko dyspozytor lub approval.supervise moze anulowac obieg.")
-
-    return await cancel(
+    result = await cancel(
         db, redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
         username=current_user.username,
         comment=body.comment,
+        has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
+
+    bg.add_task(
+        sse.on_cancel,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+    )
+
+    return result
 
 
 # =============================================================================
@@ -579,9 +616,11 @@ async def forward_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
-    return await forward(
+
+    result = await forward(
         db, redis,
         id_instance=id_instance,
         id_target_group=body.id_target_group,
@@ -592,6 +631,17 @@ async def forward_instance(
         has_forward_permission=True,
         ip_address=ip,
     )
+
+    bg.add_task(
+        sse.on_forward,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+        id_target_group=body.id_target_group,
+    )
+
+    return result
 
 
 # =============================================================================
@@ -621,11 +671,11 @@ async def send_to_group_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
-    from app.core.dependencies import _get_role_permissions
-    perms = await _get_role_permissions(current_user.role_id, db, redis)
-    return await send_to_group(
+
+    result = await send_to_group(
         db, redis,
         id_instance=id_instance,
         id_target_group=body.id_target_group,
@@ -634,9 +684,19 @@ async def send_to_group_instance(
         comment=body.comment,
         deadline_hours=body.deadline_hours,
         has_send_to_group_permission=True,
-        has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
+
+    bg.add_task(
+        sse.on_send_to_group,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+        id_target_group=body.id_target_group,
+    )
+
+    return result
 
 
 # =============================================================================
@@ -662,16 +722,29 @@ async def mark_urgent_instance(
     db:           DB,
     redis:        RedisClient,
     request:      Request,
+    bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
-    return await mark_urgent(
+
+    result = await mark_urgent(
         db, redis,
         id_instance=id_instance,
-        is_urgent=body.is_urgent,
         id_user=current_user.id_user,
         username=current_user.username,
+        is_urgent=body.is_urgent,
         ip_address=ip,
     )
+
+    bg.add_task(
+        sse.on_mark_urgent,
+        redis=redis,
+        db=db,
+        id_instance=id_instance,
+        id_user=current_user.id_user,
+        is_urgent=body.is_urgent,
+    )
+
+    return result
 
 
 # =============================================================================

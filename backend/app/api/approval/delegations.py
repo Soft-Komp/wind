@@ -16,14 +16,16 @@ import orjson
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
+from app.schemas.common import BaseResponse, dt_utc
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
 from app.services.approval_service import _check_module_enabled, _check_feature_flag
 from app.services.approval_service_ext import validate_delegation_create, invalidate_group_cache
 from app.api.approval._delete_helpers import generate_delete_token, verify_delete_token
+from app.services import approval_sse_service as sse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/delegations")
@@ -115,8 +117,14 @@ async def list_all_delegations(current_user: CurrentUser, db: DB, redis: RedisCl
              summary="Utworz delegacje uprawnien",
              responses={409: {"description": "Konflikt"}, 422: {"description": "Blad walidacji"}},
              dependencies=[require_permission("approval.manage_delegations")])
-async def create_delegation(body: DelegationCreateBody, current_user: CurrentUser,
-                            db: DB, redis: RedisClient):
+async def create_delegation(
+    body:         DelegationCreateBody,
+    current_user: CurrentUser,
+    db:           DB,
+    redis:        RedisClient,
+    request:      Request,
+    bg:           BackgroundTasks,
+):
     await _check_module_enabled(db, redis)
     await _check_feature_flag(db, redis, "APPROVAL_DELEGATIONS_ENABLED",
                                error_msg="Delegacje sa wylaczone.")
@@ -137,6 +145,19 @@ async def create_delegation(body: DelegationCreateBody, current_user: CurrentUse
     await db.commit()
     if body.id_group:
         await invalidate_group_cache(redis, body.id_group)
+
+    # SSE po commit — informuje obie strony delegacji i admins
+    bg.add_task(
+        sse.on_delegation_change,
+        redis=redis,
+        id_user_from=current_user.id_user,
+        id_user_to=body.id_user_to,
+        action="created",
+        id_group=body.id_group,
+        valid_from=body.valid_from.isoformat(),
+        valid_to=body.valid_to.isoformat(),
+    )
+
     return {"id_delegation": new_id, "message": "Delegacja utworzona."}
 
 
@@ -189,25 +210,55 @@ async def initiate_cancel_delegation(
     dependencies=[require_permission("approval.manage_delegations")],
 )
 async def confirm_cancel_delegation(
-    id_delegation: int, body: ConfirmDeleteBody,
-    current_user: CurrentUser, db: DB, redis: RedisClient, request: Request,
+    id_delegation: int,
+    body:          ConfirmDeleteBody,
+    current_user:  CurrentUser,
+    db:            DB,
+    redis:         RedisClient,
+    request:       Request,
+    bg:            BackgroundTasks,
 ):
     await _check_module_enabled(db, redis)
     payload = await verify_delete_token(redis, token=body.delete_token,
                                         entity_id=id_delegation, scope=_SCOPE)
     id_group = payload.get("id_group")
+
+    # Pobierz user IDs przed UPDATE (potrzebne do SSE payload)
+    # Wykonywane przed commit — w tej samej transakcji, zero narzutu
+    deleg_row = (await db.execute(
+        text(f"SELECT [id_user_from], [id_user_to] "
+             f"FROM [{_SCHEMA}].[skw_approval_delegations] "
+             f"WHERE [id_delegation] = :d"),
+        {"d": id_delegation},
+    )).fetchone()
+
     await db.execute(
         text(f"UPDATE [{_SCHEMA}].[skw_approval_delegations] "
              f"SET [is_active]=0 WHERE [id_delegation]=:d"),
         {"d": id_delegation},
     )
     await db.commit()
+
     if id_group:
         await invalidate_group_cache(redis, int(id_group))
+
     logger.warning(orjson.dumps({
-        "event": "approval_delegation_cancelled",
-        "id_delegation": id_delegation, "cancelled_by": current_user.id_user,
-        "ip": request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "event":          "approval_delegation_cancelled",
+        "id_delegation":  id_delegation,
+        "cancelled_by":   current_user.id_user,
+        "ip":             request.headers.get("X-Forwarded-For", getattr(request.client, "host", None)),
+        "ts":             datetime.now(timezone.utc).isoformat(),
     }).decode())
+
+    # SSE po commit — tylko jeśli udało się pobrać dane delegacji
+    if deleg_row:
+        bg.add_task(
+            sse.on_delegation_change,
+            redis=redis,
+            id_user_from=deleg_row[0],
+            id_user_to=deleg_row[1],
+            action="cancelled",
+            id_group=int(id_group) if id_group else None,
+        )
+
     return {"id_delegation": id_delegation, "is_active": False, "message": "Delegacja anulowana."}

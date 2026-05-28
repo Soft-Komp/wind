@@ -67,9 +67,15 @@ EventType = Literal[
     "faktura_zakonczona",
     "faktura_zresetowana",
     "faktura_wymaga_interwencji",
-    "document_waiting",   # dokument trafil do kolejki grupy
-    "document_approved",  # obieg zakonczony akceptacja
-    "document_rollback",  # dokument cofniety
+    "document_waiting",       # dokument trafil do kolejki grupy
+    "document_approved",      # obieg zakonczony akceptacja
+    "document_rollback",      # dokument cofniety
+    # Moduł Obiegu Dokumentów — Sprint 3 (approval_sse_service.py)
+    "dispatch_ack",           # ping potwierdzajacy dispatch (dyspozytor + admins)
+    "approval_update",        # generyczna zmiana stanu instancji
+    "document_rejected",      # terminal: odrzucony
+    "document_cancelled",     # terminal: anulowany
+    "delegation_update",      # zmiana delegacji (create / cancel)
 ]
 
 # Poziomy powiadomień systemowych
