@@ -1597,11 +1597,12 @@ async def get_instance_timeline(
     # 1. Wpisy z approval_log
     log_rows = await db.execute(
         text(
-            f"SELECT [id_log],[username_snapshot],[action],[step_order_snapshot],"
-            f"  [id_group_snapshot],[votes_before],[votes_after],[is_voided],"
-            f"  [details],[logged_at] "
-            f"FROM [{_SCHEMA}].[skw_approval_log] "
-            f"WHERE [id_instance]=:i ORDER BY [logged_at] ASC"
+            f"SELECT l.[id_log], l.[username_snapshot], l.[action], l.[step_order_snapshot], "
+            f"  l.[id_group_snapshot], l.[votes_before], l.[votes_after], l.[is_voided], "
+            f"  l.[details], l.[logged_at], u.[FullName] "
+            f"FROM [{_SCHEMA}].[skw_approval_log] l "
+            f"LEFT JOIN [{_SCHEMA}].[skw_Users] u ON u.[ID_USER] = l.[id_user] "
+            f"WHERE l.[id_instance]=:i ORDER BY l.[logged_at] ASC"
         ),
         {"i": id_instance},
     )
@@ -1614,7 +1615,8 @@ async def get_instance_timeline(
             "ts":      dt_utc(r[9]),
             "type":    "log_entry",
             "id":      r[0],
-            "actor":   r[1] or "system",
+            # r[10] = FullName (może być NULL), r[1] = username_snapshot (fallback)
+            "actor":   r[10] or r[1] or "system",
             "action":  r[2],
             "action_display": _ACTION_DISPLAY.get(r[2], r[2]),
             "step":    r[3],
@@ -1627,8 +1629,8 @@ async def get_instance_timeline(
     try:
         comment_rows = await db.execute(
             text(
-                f"SELECT c.[id_comment],u.[Username],c.[content],c.[is_deleted],"
-                f"  c.[created_at],c.[parent_id] "
+                f"SELECT c.[id_comment], u.[Username], c.[content], c.[is_deleted], "
+                f"  c.[created_at], c.[parent_id], u.[FullName] "
                 f"FROM [{_SCHEMA}].[skw_approval_comments] c "
                 f"LEFT JOIN [{_SCHEMA}].[skw_Users] u ON u.[ID_USER]=c.[id_user] "
                 f"WHERE c.[id_instance]=:i ORDER BY c.[created_at] ASC"
@@ -1641,7 +1643,8 @@ async def get_instance_timeline(
                 "ts":        r[4].isoformat() if r[4] else None,
                 "type":      "comment",
                 "id":        r[0],
-                "actor":     r[1] or "?",
+                # r[6] = FullName (może być NULL), r[1] = Username (fallback)
+                "actor":     r[6] or r[1] or "?",
                 "content":   "[usunieto]" if is_del else r[2],
                 "is_deleted": is_del,
                 "parent_id": r[5],

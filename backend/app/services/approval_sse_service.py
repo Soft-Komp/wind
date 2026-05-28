@@ -481,8 +481,16 @@ async def on_accept(
             )
 
             # ── Powiadomienie nowej grupy (przejście etapu) ────────────────
-            if step_complete and next_group_id:
-                next_members = await _fetch_group_members(db, redis, next_group_id)
+            # next_group_id=None oznacza że router nie podał wartości —
+            # fallback na current_group_id z meta (po commit DB zawiera już
+            # nowy krok i grupę, więc current_group_id = nowa grupa)
+            effective_next_group = next_group_id or meta.get("current_group_id")
+            effective_next_step  = next_step or meta.get("current_step")
+
+            if step_complete and effective_next_group:
+                next_members = await _fetch_group_members(
+                    db, redis, effective_next_group
+                )
                 if next_members:
                     await _publish_to_users(
                         redis,
@@ -490,8 +498,8 @@ async def on_accept(
                         event_type="document_waiting",
                         data={
                             **base,
-                            "step_order": next_step,
-                            "id_group":   next_group_id,
+                            "step_order": effective_next_step,
+                            "id_group":   effective_next_group,
                         },
                         actor_user_id=id_user,
                         include_admins=False,
