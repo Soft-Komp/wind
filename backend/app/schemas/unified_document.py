@@ -140,7 +140,8 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
     Zrodlo: skw_faktury_akceptacja_naglowek (widok BUF_DOKUMENT + KONTRAHENT).
 
     Mapowanie pol (z document_source_field_mappings seed):
-        ID_BUF_DOKUMENT  → id_document
+        KSEF_ID          → id_document  (glowny klucz zewnetrzny systemu)
+        ID_BUF_DOKUMENT  → raw_data["id_buf_dokument"]  (wewnetrzny INT WAPRO)
         NUMER            → doc_number
         DataWystawienia  → doc_date (DATE z Clarion INT przez TRY_CAST)
         WARTOSC_BRUTTO   → amount_gross
@@ -160,45 +161,92 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
     ) -> UnifiedDocument | None:
         """
         Pobiera naglowek faktury z widoku skw_faktury_akceptacja_naglowek.
-        id_document = ID_BUF_DOKUMENT jako string.
+
+        id_document = KSEF_ID (string, np. '6842027416-20260410-596ACB000003-4E').
+
+        HISTORIA BLEDU (naprawione):
+            Poprzednia implementacja proba int(id_document) → ValueError dla KSEF_ID
+            → natychmiastowy return None bez zadnego zapytania do bazy.
+            Caly system (skw_faktura_akceptacja.numer_ksef, dispatch, validate, frontend)
+            uzywa KSEF_ID jako id_document dla zrodla fakir.
+            Naprawa: WHERE KSEF_ID = :ksef_id zamiast WHERE ID_BUF_DOKUMENT = :id.
         """
-        try:
-            buf_id = int(id_document)
-        except ValueError:
-            logger.warning("FakirAdapter | niepoprawny id_document: %r", id_document)
+        ksef_id = id_document.strip() if id_document else ""
+
+        logger.debug(
+            "FakirAdapter.get_document | START id_document_raw=%r ksef_id=%r",
+            id_document,
+            ksef_id,
+        )
+
+        if not ksef_id:
+            logger.warning(
+                "FakirAdapter.get_document | ODRZUCONO pusty id_document raw=%r",
+                id_document,
+            )
             return None
 
-        row = await db.execute(
-            text(
-                f"SELECT "
-                f"  f.[ID_BUF_DOKUMENT], "
-                f"  f.[NUMER], "
-                f"  f.[DataWystawienia], "
-                f"  f.[WARTOSC_BRUTTO], "
-                f"  f.[WARTOSC_NETTO], "
-                f"  f.[KWOTA_VAT], "
-                f"  f.[NazwaKontrahenta], "
-                f"  f.[EmailKontrahenta], "
-                f"  f.[KOD_STATUSU], "
-                f"  f.[StatusOpis], "
-                f"  f.[TerminPlatnosci], "
-                f"  f.[FORMA_PLATNOSCI], "
-                f"  f.[UWAGI], "
-                f"  f.[NIP] "
-                f"FROM [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] f "
-                f"WHERE f.[ID_BUF_DOKUMENT] = :id"
-            ),
-            {"id": buf_id},
-        )
-        r = row.fetchone()
+        try:
+            sql_result = await db.execute(
+                text(
+                    f"SELECT "
+                    f"  f.[KSEF_ID], "
+                    f"  f.[ID_BUF_DOKUMENT], "
+                    f"  f.[NUMER], "
+                    f"  f.[DataWystawienia], "
+                    f"  f.[WARTOSC_BRUTTO], "
+                    f"  f.[WARTOSC_NETTO], "
+                    f"  f.[KWOTA_VAT], "
+                    f"  f.[NazwaKontrahenta], "
+                    f"  f.[EmailKontrahenta], "
+                    f"  f.[KOD_STATUSU], "
+                    f"  f.[StatusOpis], "
+                    f"  f.[TerminPlatnosci], "
+                    f"  f.[FORMA_PLATNOSCI], "
+                    f"  f.[UWAGI] "
+                    f"FROM [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] f "
+                    f"WHERE f.[KSEF_ID] = :ksef_id"
+                ),
+                {"ksef_id": ksef_id},
+            )
+        except Exception as exc:
+            logger.error(
+                "FakirAdapter.get_document | BLAD SQL ksef_id=%r exc_type=%s exc=%s",
+                ksef_id,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        r = sql_result.fetchone()
+
         if not r:
+            logger.warning(
+                "FakirAdapter.get_document | NOT FOUND ksef_id=%r — "
+                "brak wiersza w skw_faktury_akceptacja_naglowek. "
+                "Diagnostyka: (1) czy KSEF_ID istnieje w dbo.BUF_DOKUMENT; "
+                "(2) czy rekord przechodzi filtry widoku PRG_KOD=3 AND TYP='Z' "
+                "AND KSEF_ID IS NOT NULL; (3) czy kolumna KSEF_ID jest w SELECT widoku.",
+                ksef_id,
+            )
             return None
 
         (
-            buf_id_val, numer, data_wyst, wartosc_brutto, wartosc_netto, kwota_vat,
-            nazwa_kont, email_kont, kod_statusu, status_opis,
-            termin_platnosci, forma_platnosci, uwagi, nip,
+            ksef_id_db, buf_id_val, numer, data_wyst, wartosc_brutto, wartosc_netto,
+            kwota_vat, nazwa_kont, email_kont, kod_statusu, status_opis,
+            termin_platnosci, forma_platnosci, uwagi,
         ) = r
+
+        logger.debug(
+            "FakirAdapter.get_document | ZNALEZIONO ksef_id=%r buf_id=%r "
+            "numer=%r kontrahent=%r brutto=%r",
+            ksef_id_db,
+            buf_id_val,
+            numer,
+            nazwa_kont,
+            wartosc_brutto,
+        )
 
         # Przelicz date (moze byc DATE lub INT Clarion — widok juz konwertuje)
         doc_date: date | None = None
@@ -218,6 +266,8 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
         amount_vat   = Decimal(str(kwota_vat))      if kwota_vat      is not None else None
 
         raw: dict = {
+            "id_buf_dokument":   buf_id_val,   # wewnetrzny INT WAPRO — do diagnostyki
+            "ksef_id_db":        ksef_id_db,   # wartosc z bazy (weryfikacja round-trip)
             "email_kontrahenta": email_kont,
             "status_zewnetrzny": kod_statusu,
             "status_opis":       status_opis,
@@ -234,8 +284,8 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
         src = src_row.fetchone()
         id_source = src[0] if src else 1  # fallback: 1 = fakir per seed
 
-        return UnifiedDocument(
-            id_document=str(buf_id_val),
+        unified = UnifiedDocument(
+            id_document=ksef_id,          # KSEF_ID — kontrakt systemu, nie buf_id_val
             id_source=id_source,
             source_name="fakir",
             doc_number=numer,
@@ -244,12 +294,24 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
             amount_net=amount_net,
             amount_vat=amount_vat,
             contractor_name=nazwa_kont,
-            nip=str(nip).strip() if nip else None,
+            nip=None,  # kolumna NIP nie istnieje w widoku skw_faktury_akceptacja_naglowek
             document_type=status_opis or kod_statusu,
             payment_term=payment_term,
             payment_method=forma_platnosci,
             raw_data=raw,
         )
+
+        logger.debug(
+            "FakirAdapter.get_document | RETURN id_document=%r id_source=%r "
+            "doc_number=%r amount_gross=%r contractor=%r",
+            unified.id_document,
+            unified.id_source,
+            unified.doc_number,
+            unified.amount_gross,
+            unified.contractor_name,
+        )
+
+        return unified
 
     def get_document_title(self, doc: UnifiedDocument) -> str:
         parts = []

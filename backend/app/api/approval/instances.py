@@ -1381,10 +1381,10 @@ async def validate_dispatch(
             doc = await adapter.get_document(db, body.id_document)
             if doc:
                 result["document_info"] = {
-                    "title":      doc.title,
-                    "amount":     float(doc.amount) if doc.amount else None,
+                    "title":      adapter.get_document_title(doc),
+                    "amount":     float(doc.amount_gross) if doc.amount_gross else None,
                     "contractor": doc.contractor_name,
-                    "date":       str(doc.document_date) if doc.document_date else None,
+                    "date":       str(doc.doc_date) if doc.doc_date else None,
                 }
             else:
                 result["warnings"].append(
