@@ -837,31 +837,75 @@ async def get_instance_snapshot(
     redis:        RedisClient,
 ):
     await _check_module_enabled(db, redis)
+
+    # Pobierz status instancji — potrzebny do override kroków w stanach terminalnych
+    inst = (await db.execute(
+        text(
+            f"SELECT [status] "
+            f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
+            f"WHERE [id_instance] = :i"
+        ),
+        {"i": id_instance},
+    )).fetchone()
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instancja {id_instance} nie istnieje.")
+
+    instance_status = inst[0]
+    # Stany terminalne w których obieg zakończył się bez ukończenia wszystkich kroków
+    _TERMINAL = {"rejected", "cancelled"}
+
     rows = await db.execute(
         text(
             f"SELECT s.[id_snapshot], s.[step_order], s.[id_group], "
             f"  g.[group_name], g.[consensus_type], "
             f"  s.[status], s.[votes_cast], s.[votes_required], "
-            f"  s.[deadline_at], s.[completed_at] "
+            f"  s.[deadline_at], s.[completed_at], "
+            f"  fwd.[fwd_from_group_name] "
             f"FROM [{_SCHEMA}].[skw_document_approval_snapshot_steps] s "
             f"JOIN [{_SCHEMA}].[skw_approval_groups] g ON g.[id_group] = s.[id_group] "
+            # Notka o forwardzie — dopasowanie po step_order_snapshot (niezawodne
+            # po substytucji bo step_order nie zmienia się przy forward)
+            f"OUTER APPLY ( "
+            f"  SELECT TOP 1 fg.[group_name] AS fwd_from_group_name "
+            f"  FROM [{_SCHEMA}].[skw_approval_log] al "
+            f"  LEFT JOIN [{_SCHEMA}].[skw_approval_groups] fg "
+            f"    ON fg.[id_group] = al.[id_group_snapshot] "
+            f"  WHERE al.[id_instance]        = s.[id_instance] "
+            f"    AND al.[step_order_snapshot] = s.[step_order] "
+            f"    AND al.[action]              = 'forwarded' "
+            f"  ORDER BY al.[id_log] DESC "
+            f") fwd "
             f"WHERE s.[id_instance] = :i ORDER BY s.[step_order] ASC"
         ),
         {"i": id_instance},
     )
     steps = []
     for r in rows.fetchall():
+        step_status = r[5]
+        if instance_status in _TERMINAL and step_status == "in_progress":
+            step_status = instance_status
         steps.append({
-            "id_snapshot":    r[0], "step_order":     r[1],
-            "id_group":       r[2], "group_name":     r[3],
-            "consensus_type": r[4], "status":         r[5],
-            "votes_cast":     r[6], "votes_required": r[7],
-            "deadline_at":    dt_utc(r[8]),
-            "completed_at":   dt_utc(r[9]),
-            "is_current":     r[5] == "in_progress",
-            "is_complete":    r[5] == "approved",
+            "id_snapshot":          r[0],
+            "step_order":           r[1],
+            "id_group":             r[2],
+            "group_name":           r[3],
+            "consensus_type":       r[4],
+            "status":               step_status,
+            "votes_cast":           r[6],
+            "votes_required":       r[7],
+            "deadline_at":          dt_utc(r[8]),
+            "completed_at":         dt_utc(r[9]),
+            "forwarded_from_group": r[10],  # None dla normalnych kroków
+            "is_current":     False if instance_status in _TERMINAL else step_status == "in_progress",
+            "is_complete":    step_status == "approved",
         })
-    return {"id_instance": id_instance, "total_steps": len(steps), "steps": steps}
+
+    return {
+        "id_instance":     id_instance,
+        "instance_status": instance_status,
+        "total_steps":     len(steps),
+        "steps":           steps,
+    }
 
 # =============================================================================
 # PATCH — backend/app/api/approval/instances.py
@@ -1582,8 +1626,8 @@ async def get_instance_timeline(
         "rollback":          "Cofnieto obieg",
         "approved":          "Obieg zakonczony",
         "cancelled":         "Anulowano",
-        "forwarded":         "Przekazano do innej grupy",
-        "send_to_group":     "Wyslano do grupy",
+        "forwarded":     "Przekazano odpowiedzialność",
+        "send_to_group": "Wstawiono grupę do weryfikacji",
         "step_advanced":     "Przejscie do kolejnego etapu",
         "marked_urgent":     "Oznaczono jako pilny",
         "unmarked_urgent":   "Usunieto oznaczenie pilny",

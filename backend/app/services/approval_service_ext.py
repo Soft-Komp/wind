@@ -159,17 +159,69 @@ async def forward(
                 ),
             )
 
-        # Wstaw grupe docelowa na biezaca pozycje — biezaca przesuwa sie o +1
-        await insert_group_into_snapshot(
-            db, redis,
-            id_instance=id_instance,
-            position=current_step,
-            id_group=id_target_group,
-            id_user=id_user,
-            deadline_hours=deadline_hours,
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # Substytucja — oblicz votes_required dla nowej grupy
+        group_row = (await db.execute(
+            text(
+                f"SELECT [consensus_type] "
+                f"FROM [{_SCHEMA}].[skw_approval_groups] "
+                f"WHERE [id_group] = :g"
+            ),
+            {"g": id_target_group},
+        )).fetchone()
+        if not group_row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Grupa docelowa {id_target_group} nie istnieje.",
+            )
+
+        target_consensus = group_row[0]
+        if target_consensus == "AND":
+            target_members = await _get_group_members_cached(db, redis, id_target_group)
+            votes_required = max(1, len(target_members))
+        else:
+            votes_required = 1
+
+        step_deadline = (
+            now + timedelta(hours=deadline_hours) if deadline_hours else None
         )
 
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # Podmień grupę w bieżącym kroku snapshotu — bez przesuwania step_order
+        await db.execute(
+            text(
+                f"UPDATE [{_SCHEMA}].[skw_document_approval_snapshot_steps] "
+                f"SET [id_group]       = :tg, "
+                f"    [votes_required] = :vr, "
+                f"    [votes_cast]     = 0, "
+                f"    [status]         = 'in_progress', "
+                f"    [deadline_at]    = :dl, "
+                f"    [completed_at]   = NULL, "
+                f"    [updated_at]     = :now "
+                f"WHERE [id_instance] = :i AND [step_order] = :s"
+            ),
+            {
+                "tg":  id_target_group,
+                "vr":  votes_required,
+                "dl":  step_deadline,
+                "now": now,
+                "i":   id_instance,
+                "s":   current_step,
+            },
+        )
+
+        # Unieważnij ewentualne głosy starej grupy dla tego etapu
+        await db.execute(
+            text(
+                f"UPDATE [{_SCHEMA}].[skw_approval_log] "
+                f"SET [is_voided] = 1 "
+                f"WHERE [id_instance] = :i "
+                f"  AND [step_order]  = :s "
+                f"  AND [action]      = 'accepted' "
+                f"  AND [is_voided]   = 0"
+            ),
+            {"i": id_instance, "s": current_step},
+        )
 
         await _insert_approval_log(
             db,
@@ -190,23 +242,23 @@ async def forward(
         await db.commit()
 
     _jsonl_log("forwarded", {
-        "id_instance":     id_instance,
-        "id_user":         id_user,
-        "from_group":      current_group,
-        "to_group":        id_target_group,
-        "at_step":         current_step,
+        "id_instance": id_instance,
+        "id_user":     id_user,
+        "from_group":  current_group,
+        "to_group":    id_target_group,
+        "at_step":     current_step,
     })
 
     logger.info(
-        "forward | OK | id_instance=%d step=%d from_group=%d to_group=%d",
+        "forward | SUBSTITUTED | id_instance=%d step=%d from=%d to=%d",
         id_instance, current_step, current_group, id_target_group,
     )
 
     return {
-        "id_instance":     id_instance,
-        "inserted_at_step": current_step,
-        "id_target_group": id_target_group,
-        "original_step_now": current_step + 1,
+        "id_instance":      id_instance,
+        "substituted_step": current_step,
+        "from_group":       current_group,
+        "id_target_group":  id_target_group,
     }
 
 

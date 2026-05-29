@@ -95,7 +95,7 @@ async def _fetch_instance_meta(
             text(
                 f"SELECT "
                 f"  i.[id_instance], "
-                f"  i.[dispatched_by_user_id], "
+                f"  i.[dispatched_by], "
                 f"  i.[id_document], "
                 f"  i.[id_source], "
                 f"  i.[status], "
@@ -106,7 +106,6 @@ async def _fetch_instance_meta(
                 f"LEFT JOIN [{_SCHEMA}].[skw_document_approval_snapshot_steps] s "
                 f"  ON  s.[id_instance] = i.[id_instance] "
                 f"  AND s.[step_order]  = i.[current_step] "
-                f"  AND s.[is_active]   = 1 "
                 f"WHERE i.[id_instance] = :iid"
             ),
             {"iid": id_instance},
@@ -167,10 +166,8 @@ async def _fetch_all_participants(
                 f"SELECT DISTINCT gm.[id_user] "
                 f"FROM [{_SCHEMA}].[skw_document_approval_snapshot_steps] s "
                 f"JOIN [{_SCHEMA}].[skw_approval_group_members] gm "
-                f"  ON  gm.[id_group]  = s.[id_group] "
-                f"  AND gm.[is_active] = 1 "
-                f"WHERE s.[id_instance] = :iid "
-                f"  AND s.[is_active]   = 1"
+                f"  ON  gm.[id_group] = s.[id_group] "
+                f"WHERE s.[id_instance] = :iid"
             ),
             {"iid": id_instance},
         )).fetchall()
@@ -218,13 +215,29 @@ async def _fetch_group_members(
 
     # Fallback: DB
     try:
+        from datetime import datetime, timezone as _tz
+        now_naive = datetime.now(_tz.utc).replace(tzinfo=None)
+
         rows = (await db.execute(
             text(
-                f"SELECT [id_user] "
-                f"FROM [{_SCHEMA}].[skw_approval_group_members] "
-                f"WHERE [id_group] = :g AND [is_active] = 1"
+                # Bezpośredni członkowie grupy (brak kolumny is_active w tej tabeli)
+                f"SELECT gm.[id_user] "
+                f"FROM [{_SCHEMA}].[skw_approval_group_members] gm "
+                f"WHERE gm.[id_group] = :g "
+                f"UNION "
+                # Aktywni delegaci dla tej grupy lub globalnie (id_group IS NULL)
+                f"SELECT d.[id_user_to] "
+                f"FROM [{_SCHEMA}].[skw_approval_delegations] d "
+                f"WHERE d.[is_active]  = 1 "
+                f"  AND d.[valid_from] <= :now "
+                f"  AND d.[valid_to]   >= :now "
+                f"  AND (d.[id_group]  = :g OR d.[id_group] IS NULL) "
+                f"  AND d.[id_user_from] IN ("
+                f"      SELECT [id_user] FROM [{_SCHEMA}].[skw_approval_group_members] "
+                f"      WHERE [id_group] = :g"
+                f"  )"
             ),
-            {"g": id_group},
+            {"g": id_group, "now": now_naive},
         )).fetchall()
 
         members = [r[0] for r in rows]
