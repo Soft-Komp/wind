@@ -467,8 +467,17 @@ async def on_accept(
             all_parts     = await _fetch_all_participants(db, id_instance)
             recipients    = _recipient_list(meta, all_parts)
 
+            effective_next_group = next_group_id or meta.get("current_group_id")
+            effective_next_step  = next_step or meta.get("current_step")
+
+            # Pobierz członków nowej grupy WEWNĄTRZ sesji DB
+            next_members: list[int] = []
+            if step_complete and not approved_terminal and effective_next_group:
+                next_members = await _fetch_group_members(
+                    db, redis, effective_next_group
+                )
+
         if approved_terminal:
-            # ── Terminal: dokument w pełni zaakceptowany ───────────────────
             await _publish_to_users(
                 redis,
                 user_ids=recipients,
@@ -478,7 +487,6 @@ async def on_accept(
                 include_admins=True,
             )
         else:
-            # ── Normalny głos / przejście etapu ───────────────────────────
             await _publish_to_users(
                 redis,
                 user_ids=recipients,
@@ -492,30 +500,19 @@ async def on_accept(
                 include_admins=True,
             )
 
-            # ── Powiadomienie nowej grupy (przejście etapu) ────────────────
-            # next_group_id=None oznacza że router nie podał wartości —
-            # fallback na current_group_id z meta (po commit DB zawiera już
-            # nowy krok i grupę, więc current_group_id = nowa grupa)
-            effective_next_group = next_group_id or meta.get("current_group_id")
-            effective_next_step  = next_step or meta.get("current_step")
-
-            if step_complete and effective_next_group:
-                next_members = await _fetch_group_members(
-                    db, redis, effective_next_group
+            if step_complete and effective_next_group and next_members:
+                await _publish_to_users(
+                    redis,
+                    user_ids=next_members,
+                    event_type="document_waiting",
+                    data={
+                        **base,
+                        "step_order": effective_next_step,
+                        "id_group":   effective_next_group,
+                    },
+                    actor_user_id=id_user,
+                    include_admins=False,
                 )
-                if next_members:
-                    await _publish_to_users(
-                        redis,
-                        user_ids=next_members,
-                        event_type="document_waiting",
-                        data={
-                            **base,
-                            "step_order": effective_next_step,
-                            "id_group":   effective_next_group,
-                        },
-                        actor_user_id=id_user,
-                        include_admins=False,
-                    )
 
     except Exception as exc:
         logger.warning(
@@ -550,13 +547,19 @@ async def on_rollback(
     try:
         async with get_db_context() as db:
             meta = await _fetch_instance_meta(db, id_instance)
-        if not meta:
-            return
+            if not meta:
+                return
+            ts         = datetime.now(timezone.utc).isoformat()
+            base       = _build_base_data(meta, ts)
+            all_parts  = await _fetch_all_participants(db, id_instance)
+            recipients = _recipient_list(meta, all_parts)
 
-        ts         = datetime.now(timezone.utc).isoformat()
-        base       = _build_base_data(meta, ts)
-        all_parts  = await _fetch_all_participants(db, id_instance)
-        recipients = _recipient_list(meta, all_parts)
+            # Pobierz członków grupy docelowej WEWNĄTRZ sesji DB
+            target_members: list[int] = []
+            if to_step >= 1 and meta.get("current_group_id"):
+                target_members = await _fetch_group_members(
+                    db, redis, meta["current_group_id"]
+                )
 
         # 1 ── document_rollback → wszyscy ────────────────────────────────────
         await _publish_to_users(
@@ -571,27 +574,20 @@ async def on_rollback(
             actor_user_id=id_user,
             include_admins=True,
         )
-
         # 2 ── document_waiting → target group (jeśli jest etap docelowy) ─────
-        # Po rollback _fetch_instance_meta zwraca już nowy current_step i group,
-        # bo query jest po commit(). Sprawdzamy to_step >= 1.
-        if to_step >= 1 and meta.get("current_group_id"):
-            target_members = await _fetch_group_members(
-                db, redis, meta["current_group_id"]
+        if target_members:
+            await _publish_to_users(
+                redis,
+                user_ids=target_members,
+                event_type="document_waiting",
+                data={
+                    **base,
+                    "step_order": to_step,
+                    "id_group":   meta["current_group_id"],
+                },
+                actor_user_id=id_user,
+                include_admins=False,
             )
-            if target_members:
-                await _publish_to_users(
-                    redis,
-                    user_ids=target_members,
-                    event_type="document_waiting",
-                    data={
-                        **base,
-                        "step_order": to_step,
-                        "id_group":   meta["current_group_id"],
-                    },
-                    actor_user_id=id_user,
-                    include_admins=False,
-                )
 
     except Exception as exc:
         logger.warning(
@@ -717,13 +713,14 @@ async def on_forward(
     try:
         async with get_db_context() as db:
             meta = await _fetch_instance_meta(db, id_instance)
-        if not meta:
-            return
+            if not meta:
+                return
 
-        ts         = datetime.now(timezone.utc).isoformat()
-        base       = _build_base_data(meta, ts)
-        all_parts  = await _fetch_all_participants(db, id_instance)
-        recipients = _recipient_list(meta, all_parts)
+            ts         = datetime.now(timezone.utc).isoformat()
+            base       = _build_base_data(meta, ts)
+            all_parts  = await _fetch_all_participants(db, id_instance)
+            recipients = _recipient_list(meta, all_parts)
+            target_members = await _fetch_group_members(db, redis, id_target_group)
 
         # 1 ── approval_update → wszyscy ──────────────────────────────────────
         await _publish_to_users(
@@ -740,7 +737,6 @@ async def on_forward(
         )
 
         # 2 ── document_waiting → target group ────────────────────────────────
-        target_members = await _fetch_group_members(db, redis, id_target_group)
         if target_members:
             await _publish_to_users(
                 redis,
@@ -786,13 +782,14 @@ async def on_send_to_group(
     try:
         async with get_db_context() as db:
             meta = await _fetch_instance_meta(db, id_instance)
-        if not meta:
-            return
+            if not meta:
+                return
 
-        ts         = datetime.now(timezone.utc).isoformat()
-        base       = _build_base_data(meta, ts)
-        all_parts  = await _fetch_all_participants(db, id_instance)
-        recipients = _recipient_list(meta, all_parts)
+            ts         = datetime.now(timezone.utc).isoformat()
+            base       = _build_base_data(meta, ts)
+            all_parts  = await _fetch_all_participants(db, id_instance)
+            recipients = _recipient_list(meta, all_parts)
+            target_members = await _fetch_group_members(db, redis, id_target_group)
 
         await _publish_to_users(
             redis,
@@ -807,7 +804,6 @@ async def on_send_to_group(
             include_admins=True,
         )
 
-        target_members = await _fetch_group_members(db, redis, id_target_group)
         if target_members:
             await _publish_to_users(
                 redis,

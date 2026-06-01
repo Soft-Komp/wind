@@ -691,7 +691,7 @@ async def accept(
 
         # ── Krok 7: INCREMENT votes_cast ──────────────────────────────────────
         new_votes = votes_cast + 1
-        await db.execute(
+        result_votes = await db.execute(
             text(
                 f"UPDATE [{_SCHEMA}].[skw_document_approval_snapshot_steps] "
                 f"SET [votes_cast] = :v, [updated_at] = :now "
@@ -699,6 +699,17 @@ async def accept(
             ),
             {"v": new_votes, "now": now, "snap": id_snapshot},
         )
+        if result_votes.rowcount == 0:
+            logger.error(
+                "accept | KRYTYCZNY: votes_cast nie zaktualizowany | "
+                "id_instance=%d id_snapshot=%d snap_val=%d",
+                id_instance, id_snapshot, id_snapshot,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Błąd wewnętrzny: nie udało się zaktualizować licznika głosów.",
+            )
+        await db.flush()
 
         # ── Krok 8: Konsensus ─────────────────────────────────────────────────
         step_complete = new_votes >= votes_required
