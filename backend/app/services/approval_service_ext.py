@@ -216,7 +216,7 @@ async def forward(
                 f"UPDATE [{_SCHEMA}].[skw_approval_log] "
                 f"SET [is_voided] = 1 "
                 f"WHERE [id_instance] = :i "
-                f"  AND [step_order]  = :s "
+                f"  AND [step_order_snapshot]  = :s "
                 f"  AND [action]      = 'accepted' "
                 f"  AND [is_voided]   = 0"
             ),

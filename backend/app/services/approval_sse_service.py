@@ -59,6 +59,7 @@ from app.services.event_service import (
     _build_event_envelope,
     _publish_to_channel,
 )
+from app.db.session import get_db_context
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +355,6 @@ def _recipient_list(meta: dict, extra: list[int]) -> list[int]:
 
 async def on_dispatch(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_dispatched_by: int,
 ) -> None:
@@ -369,52 +369,51 @@ async def on_dispatch(
          (frontend powinien odświeżyć "Moja kolejka" natychmiast)
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
-        if not meta:
-            return
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
+            if not meta:
+                return
 
-        ts = datetime.now(timezone.utc).isoformat()
-        base = _build_base_data(meta, ts)
+            ts = datetime.now(timezone.utc).isoformat()
+            base = _build_base_data(meta, ts)
 
-        # 1 ── dispatch_ack → dyspozytor + admins ─────────────────────────────
-        await _publish_to_users(
-            redis,
-            user_ids=[id_dispatched_by],
-            event_type="dispatch_ack",
-            data={
-                **base,
-                "message": "Dokument przekazany do obiegu.",
-            },
-            actor_user_id=id_dispatched_by,
-            include_admins=True,
-        )
+            await _publish_to_users(
+                redis,
+                user_ids=[id_dispatched_by],
+                event_type="dispatch_ack",
+                data={
+                    **base,
+                    "message": "Dokument przekazany do obiegu.",
+                },
+                actor_user_id=id_dispatched_by,
+                include_admins=True,
+            )
 
-        # 2 ── document_waiting → członkowie grupy 1 ──────────────────────────
-        current_group = meta.get("current_group_id")
-        if current_group:
-            members = await _fetch_group_members(db, redis, current_group)
-            if members:
-                await _publish_to_users(
-                    redis,
-                    user_ids=members,
-                    event_type="document_waiting",
-                    data={
-                        **base,
-                        "id_group":  current_group,
-                        "is_urgent": False,
-                    },
-                    actor_user_id=id_dispatched_by,
-                    include_admins=False,   # admins dostali już w dispatch_ack
-                )
+            current_group = meta.get("current_group_id")
+            if current_group:
+                members = await _fetch_group_members(db, redis, current_group)
+                if members:
+                    await _publish_to_users(
+                        redis,
+                        user_ids=members,
+                        event_type="document_waiting",
+                        data={
+                            **base,
+                            "id_group":  current_group,
+                            "is_urgent": False,
+                        },
+                        actor_user_id=id_dispatched_by,
+                        include_admins=False,
+                    )
 
-        logger.info(
-            orjson.dumps({
-                "event":       "on_dispatch_sse_ok",
-                "id_instance": id_instance,
-                "group_step1": current_group,
-                "ts":          ts,
-            }).decode()
-        )
+            logger.info(
+                orjson.dumps({
+                    "event":       "on_dispatch_sse_ok",
+                    "id_instance": id_instance,
+                    "group_step1": current_group,
+                    "ts":          ts,
+                }).decode()
+            )
 
     except Exception as exc:
         logger.warning(
@@ -432,7 +431,6 @@ async def on_dispatch(
 
 async def on_accept(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
     step_complete: bool,
@@ -459,14 +457,15 @@ async def on_accept(
         next_group_id:    ID grupy następnego etapu (jeśli step_complete i nie terminal).
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
-        if not meta:
-            return
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
+            if not meta:
+                return
 
-        ts            = datetime.now(timezone.utc).isoformat()
-        base          = _build_base_data(meta, ts)
-        all_parts     = await _fetch_all_participants(db, id_instance)
-        recipients    = _recipient_list(meta, all_parts)
+            ts            = datetime.now(timezone.utc).isoformat()
+            base          = _build_base_data(meta, ts)
+            all_parts     = await _fetch_all_participants(db, id_instance)
+            recipients    = _recipient_list(meta, all_parts)
 
         if approved_terminal:
             # ── Terminal: dokument w pełni zaakceptowany ───────────────────
@@ -549,7 +548,8 @@ async def on_rollback(
          POMINIĘTE jeśli to_step == 0 (pending_dispatch — brak grupy docelowej)
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 
@@ -609,7 +609,6 @@ async def on_rollback(
 
 async def on_reject(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
 ) -> None:
@@ -618,7 +617,8 @@ async def on_reject(
     Terminal: document_rejected → dyspozytor + wszyscy uczestnicy + admins.
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 
@@ -656,7 +656,6 @@ async def on_reject(
 
 async def on_cancel(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
 ) -> None:
@@ -665,7 +664,8 @@ async def on_cancel(
     Terminal: document_cancelled → dyspozytor + wszyscy uczestnicy + admins.
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 
@@ -703,7 +703,6 @@ async def on_cancel(
 
 async def on_forward(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
     id_target_group: int,
@@ -716,7 +715,8 @@ async def on_forward(
       2. document_waiting → członkowie target group
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 
@@ -771,7 +771,6 @@ async def on_forward(
 
 async def on_send_to_group(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
     id_target_group: int,
@@ -785,7 +784,8 @@ async def on_send_to_group(
       2. document_waiting → członkowie target group
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 
@@ -838,7 +838,6 @@ async def on_send_to_group(
 
 async def on_mark_urgent(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
     is_urgent: bool,
@@ -849,7 +848,8 @@ async def on_mark_urgent(
     Frontend odświeża listy i drawer (ikona pilności).
     """
     try:
-        meta = await _fetch_instance_meta(db, id_instance)
+        async with get_db_context() as db:
+            meta = await _fetch_instance_meta(db, id_instance)
         if not meta:
             return
 

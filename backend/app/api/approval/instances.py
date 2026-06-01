@@ -327,7 +327,6 @@ async def dispatch_document(
     bg.add_task(
         sse.on_dispatch,
         redis=redis,
-        db=db,
         id_instance=instance.id_instance,
         id_dispatched_by=current_user.id_user,
     )
@@ -423,7 +422,6 @@ async def accept_instance(
     bg.add_task(
         sse.on_accept,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
         step_complete=result.get("step_complete", False),
@@ -483,7 +481,6 @@ async def rollback_instance(
     bg.add_task(
         sse.on_rollback,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
         to_step=result.get("to_step", 0),
@@ -533,7 +530,6 @@ async def reject_instance(
     bg.add_task(
         sse.on_reject,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
     )
@@ -581,7 +577,6 @@ async def cancel_instance(
     bg.add_task(
         sse.on_cancel,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
     )
@@ -635,7 +630,6 @@ async def forward_instance(
     bg.add_task(
         sse.on_forward,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
         id_target_group=body.id_target_group,
@@ -690,7 +684,6 @@ async def send_to_group_instance(
     bg.add_task(
         sse.on_send_to_group,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
         id_target_group=body.id_target_group,
@@ -738,7 +731,6 @@ async def mark_urgent_instance(
     bg.add_task(
         sse.on_mark_urgent,
         redis=redis,
-        db=db,
         id_instance=id_instance,
         id_user=current_user.id_user,
         is_urgent=body.is_urgent,

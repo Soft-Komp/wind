@@ -48,7 +48,7 @@ from typing import Any, Optional
 import orjson
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, select, update, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -378,6 +378,8 @@ async def get_faktury_list(
     limit: int = 50,
     priorytet: Optional[str] = None,
     status: Optional[str] = None,
+    approval_status: Optional[str] = None,
+    routing_status: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -413,6 +415,8 @@ async def get_faktury_list(
 
     filters = {
         "priorytet": priorytet, "status": status,
+        "approval_status": approval_status,
+        "routing_status": routing_status,
         "search": search, "date_from": date_from, "date_to": date_to,
         "order_by": order_by, "order_dir": order_dir_clean,
     }
@@ -459,6 +463,19 @@ async def get_faktury_list(
         {k: len(v) for k, v in przypisania_batch.items()},
     )
 
+    # Batch fetch danych approval (Sprint 3) — PEŁNA lista z WAPRO
+    # Opcja A: odpytujemy wszystkie faktury z WAPRO, nie tylko te w naszej tabeli.
+    # Koszt: jedno zapytanie z IN (wszystkie KSEF_IDs z WAPRO), może być setki pozycji.
+    # Zysk: faktury wysłane do obiegu z pominięciem POST /faktury-akceptacja
+    # są widoczne po filtrze approval_status.
+    wszystkie_ksef_ids: list[str] = list(wapro_wszystkie.keys())
+    approval_batch: dict[str, dict] = await _get_approval_batch(db, wszystkie_ksef_ids)
+    logger.info(
+        "get_faktury_list: approval_batch zwrocil %d wpisow dla %d faktur z WAPRO",
+        len(approval_batch),
+        len(wszystkie_ksef_ids),
+    )
+
     # ── Krok 3: Buduj listę items ──────────────────────────────────────────
     # Pomocnicze: parsowanie dat filtrów
     date_from_parsed = None
@@ -481,6 +498,22 @@ async def get_faktury_list(
         for ksef_id, w in wapro_wszystkie.items():
             if ksef_id in nasze_ksef_ids:
                 continue  # już w obiegu — obsłużone w Grupie B
+
+            # Pobierz dane approval dla tej faktury (może mieć obieg mimo braku
+            # wpisu w skw_faktura_akceptacja — Opcja A: pełny batch z WAPRO)
+            appr_a = approval_batch.get(ksef_id)
+
+            # Filtr approval_status — faktura bez obiegu = brak, z obiegiem = sprawdź
+            if approval_status:
+                appr_status_val = appr_a.get("status") if appr_a else None
+                if appr_status_val != approval_status:
+                    continue
+
+            if routing_status == "to_dispatch":
+                # to_dispatch = approval IS NULL OR approval.status = pending_dispatch
+                appr_status_val = appr_a.get("status") if appr_a else None
+                if appr_status_val not in (None, "pending_dispatch"):
+                    continue
 
             # Filtr priorytet: NOWE nie mają priorytetu — pomijamy jeśli filtr aktywny
             if priorytet:
@@ -508,8 +541,10 @@ async def get_faktury_list(
             wartosc_brutto = w.get("WARTOSC_BRUTTO")
             termin         = w.get("TerminPlatnosci")
 
+            # status_wewnetrzny: jeśli faktura ma obieg approval ale nie ma wpisu
+            # w naszej tabeli — oznaczamy jako "nowe" (brak rekordu skw_faktura_akceptacja)
             items_all.append({
-                "id":                None,   # jeszcze nie w naszej tabeli
+                "id":                None,
                 "numer_ksef":        ksef_id,
                 "status_wewnetrzny": "nowe",
                 "priorytet":         None,
@@ -517,7 +552,6 @@ async def get_faktury_list(
                 "is_active":         True,
                 "created_at":        None,
                 "updated_at":        None,
-                # Dane z WAPRO
                 "numer":             w.get("NUMER"),
                 "wartosc_brutto":    float(wartosc_brutto) if wartosc_brutto is not None else None,
                 "nazwa_kontrahenta": w.get("NazwaKontrahenta"),
@@ -526,6 +560,7 @@ async def get_faktury_list(
                 "kod_statusu":       w.get("KOD_STATUSU"),
                 "status_opis":       w.get("StatusOpis"),
                 "przypisani":        [],
+                "approval":          appr_a,
             })
 
     # ── Grupa B: W OBIEGU — rekordy z naszej tabeli ────────────────────────
@@ -538,6 +573,20 @@ async def get_faktury_list(
             # Filtr status
             if status and faktura.status_wewnetrzny != status:
                 continue
+
+            # Dane approval (Sprint 3) dla tej faktury
+            appr = approval_batch.get(faktura.numer_ksef)
+
+            # Filtr approval_status — przed paginacją
+            if approval_status:
+                appr_status_val = appr.get("status") if appr else None
+                if appr_status_val != approval_status:
+                    continue
+
+            if routing_status == "to_dispatch":
+                appr_status_val = appr.get("status") if appr else None
+                if appr_status_val not in (None, "pending_dispatch"):
+                    continue
 
             # Dane z WAPRO (jeśli dostępne)
             w = wapro_wszystkie.get(faktura.numer_ksef)
@@ -590,6 +639,7 @@ async def get_faktury_list(
                 "kod_statusu":       w.get("KOD_STATUSU") if w else None,
                 "status_opis":       w.get("StatusOpis") if w else None,
                 "przypisani":        przypisania_batch.get(faktura.id, []),
+                "approval":          appr,  # None jeśli faktura nigdy nie była w obiegu Sprint 3
             })
 
     logger.info(
@@ -2065,3 +2115,107 @@ async def _get_przypisania_batch(
         len(przypisania), len(faktura_ids),
     )
     return przypisania
+
+async def _get_approval_batch(
+    db: AsyncSession,
+    ksef_ids: list[str],
+) -> dict[str, dict]:
+    """
+    Pobiera dane obiegu approval (Sprint 3) dla listy faktur (po KSEF_ID).
+
+    Zwraca słownik: {numer_ksef: approval_dict}.
+
+    Strategia "aktualny obieg per faktura":
+      1. Priorytet: obieg aktywny (status NOT IN approved/cancelled)
+      2. Fallback: najnowszy zakończony (MAX id_instance)
+    Realizacja przez ROW_NUMBER() — jeden query, bez N+1.
+
+    Dla faktur bez żadnego obiegu approval — brak klucza w słowniku (sprawdzaj .get()).
+    """
+    if not ksef_ids:
+        return {}
+
+    _SCHEMA_DBO = "dbo"
+
+    # Buduj parametry dla IN (:k0, :k1, ...) — pyodbc nie wspiera list jako parametru
+    placeholders = ", ".join(f":k{i}" for i in range(len(ksef_ids)))
+    params: dict = {f"k{i}": v for i, v in enumerate(ksef_ids)}
+
+    try:
+        rows = await db.execute(
+            text(
+                f"SELECT "
+                f"  i.[id_instance], "
+                f"  i.[id_document], "
+                f"  i.[status], "
+                f"  i.[is_urgent], "
+                f"  i.[dispatched_at], "
+                f"  i.[completed_at], "
+                f"  p.[path_name], "
+                f"  g.[group_name] AS current_group_name "
+                f"FROM ("
+                f"  SELECT "
+                f"    i2.[id_instance], "
+                f"    i2.[id_document], "
+                f"    i2.[status], "
+                f"    i2.[is_urgent], "
+                f"    i2.[dispatched_at], "
+                f"    i2.[completed_at], "
+                f"    i2.[id_path], "
+                f"    i2.[current_step], "
+                f"    ROW_NUMBER() OVER ("
+                f"      PARTITION BY i2.[id_document] "
+                f"      ORDER BY "
+                f"        CASE WHEN i2.[status] NOT IN (N'approved', N'cancelled') "
+                f"             THEN 0 ELSE 1 END ASC, "
+                f"        i2.[id_instance] DESC"
+                f"    ) AS rn "
+                f"  FROM [{_SCHEMA_DBO}].[skw_document_approval_instances] i2 "
+                f"  WHERE i2.[id_document] IN ({placeholders}) "
+                f"    AND i2.[id_source] = ("
+                f"      SELECT [id_source] FROM [{_SCHEMA_DBO}].[skw_document_sources] "
+                f"      WHERE [source_name] = N'fakir'"
+                f"    )"
+                f") i "
+                f"LEFT JOIN [{_SCHEMA_DBO}].[skw_approval_paths] p "
+                f"       ON p.[id_path] = i.[id_path] "
+                f"LEFT JOIN [{_SCHEMA_DBO}].[skw_document_approval_snapshot_steps] ss "
+                f"       ON ss.[id_instance] = i.[id_instance] "
+                f"      AND ss.[step_order]   = i.[current_step] "
+                f"LEFT JOIN [{_SCHEMA_DBO}].[skw_approval_groups] g "
+                f"       ON g.[id_group] = ss.[id_group] "
+                f"WHERE i.rn = 1"
+            ),
+            params,
+        )
+    except Exception as exc:
+        logger.error(
+            "_get_approval_batch | BLAD SQL ksef_ids_count=%d exc_type=%s exc=%s",
+            len(ksef_ids),
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return {}
+
+    result: dict[str, dict] = {}
+    for r in rows.fetchall():
+        id_instance, id_document, inst_status, is_urgent, dispatched_at, \
+            completed_at, path_name, current_group_name = r
+
+        result[id_document] = {
+            "id_instance":        id_instance,
+            "status":             inst_status,
+            "is_urgent":          bool(is_urgent) if is_urgent is not None else False,
+            "dispatched_at":      dispatched_at.isoformat() if dispatched_at else None,
+            "completed_at":       completed_at.isoformat() if completed_at else None,
+            "path_name":          path_name,
+            "current_group_name": current_group_name,
+        }
+
+    logger.debug(
+        "_get_approval_batch | pobrano %d obiegow dla %d faktur",
+        len(result),
+        len(ksef_ids),
+    )
+    return result

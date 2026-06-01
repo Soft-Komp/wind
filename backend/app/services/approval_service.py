@@ -304,17 +304,12 @@ async def _insert_approval_log(
 async def _void_votes_for_step(
     db: AsyncSession, id_instance: int, step_order: int
 ) -> int:
-    """
-    Oznacza is_voided=1 dla wszystkich glosow (akcja accepted) biezacego
-    step_order i instancji. Zwraca liczbe uniewaznonych wpisow.
-    Uzywane przy rollback — głosy kasowane logicznie, rekordy pozostaja.
-    """
     result = await db.execute(
         text(
             f"UPDATE [{_SCHEMA}].[skw_approval_log] "
             f"SET [is_voided] = 1 "
             f"WHERE [id_instance] = :inst "
-            f"  AND [step_order_snapshot] = :step "
+            f"  AND [step_order_snapshot]  = :step "
             f"  AND [action] = 'accepted' "
             f"  AND [is_voided] = 0"
         ),
@@ -340,7 +335,7 @@ async def dispatch(
     *,
     id_document: str,
     id_source: int,
-    id_path: int,
+    id_path: int | None,
     id_category: int | None,
     dispatched_by_user_id: int,
     dispatched_by_username: str,
@@ -392,38 +387,43 @@ async def dispatch(
             ),
         )
 
-    # ── Krok 3: Pobierz sciezke i kroki ──────────────────────────────────────
-    path_row = await db.execute(
-        text(
-            f"SELECT [id_path], [path_name] FROM [{_SCHEMA}].[skw_approval_paths] "
-            f"WHERE [id_path] = :p AND [is_active] = 1"
-        ),
-        {"p": id_path},
-    )
-    path_data = path_row.fetchone()
-    if not path_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Sciezka akceptacyjna id={id_path} nie istnieje lub jest nieaktywna.",
-        )
+    # ── Krok 3: Pobierz sciezke i kroki (jesli id_path podany) ───────────────
+    # id_path=None → status=pending_dispatch, brak kroków snapshot
+    path_data = None
+    steps: list = []
 
-    steps_rows = await db.execute(
-        text(
-            f"SELECT s.[step_order], s.[id_group], s.[deadline_hours], "
-            f"       g.[consensus_type] "
-            f"FROM [{_SCHEMA}].[skw_approval_path_steps] s "
-            f"JOIN [{_SCHEMA}].[skw_approval_groups] g ON g.[id_group] = s.[id_group] "
-            f"WHERE s.[id_path] = :p "
-            f"ORDER BY s.[step_order] ASC"
-        ),
-        {"p": id_path},
-    )
-    steps = steps_rows.fetchall()
-    if not steps:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Sciezka id={id_path} nie ma zdefiniowanych krokow.",
+    if id_path is not None:
+        path_row = await db.execute(
+            text(
+                f"SELECT [id_path], [path_name] FROM [{_SCHEMA}].[skw_approval_paths] "
+                f"WHERE [id_path] = :p AND [is_active] = 1"
+            ),
+            {"p": id_path},
         )
+        path_data = path_row.fetchone()
+        if not path_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Sciezka akceptacyjna id={id_path} nie istnieje lub jest nieaktywna.",
+            )
+
+        steps_rows = await db.execute(
+            text(
+                f"SELECT s.[step_order], s.[id_group], s.[deadline_hours], "
+                f"       g.[consensus_type] "
+                f"FROM [{_SCHEMA}].[skw_approval_path_steps] s "
+                f"JOIN [{_SCHEMA}].[skw_approval_groups] g ON g.[id_group] = s.[id_group] "
+                f"WHERE s.[id_path] = :p "
+                f"ORDER BY s.[step_order] ASC"
+            ),
+            {"p": id_path},
+        )
+        steps = steps_rows.fetchall()
+        if not steps:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Sciezka id={id_path} nie ma zdefiniowanych krokow.",
+            )
 
     now = _utcnow_naive()
 
@@ -440,8 +440,8 @@ async def dispatch(
         id_source=id_source,
         id_path=id_path,
         id_category=id_category,
-        status="in_progress",
-        current_step=1,
+        status="pending_dispatch" if id_path is None else "in_progress",
+        current_step=0 if id_path is None else 1,
         is_urgent=False,
         dispatched_by=dispatched_by_user_id,
         dispatched_at=now,
@@ -579,7 +579,7 @@ async def accept(
         inst_row = await db.execute(
             text(
                 f"SELECT [id_instance], [status], [current_step], [id_path], "
-                f"       [dispatched_by], [document_title] "
+                f"       [dispatched_by], [document_title], [id_document] "
                 f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
                 f"WHERE [id_instance] = :i"
             ),
@@ -594,8 +594,9 @@ async def accept(
                 detail=f"Instancja {id_instance} ma status '{inst[1]}' — akcja niedostepna.",
             )
 
-        current_step = inst[2]
+        current_step   = inst[2]
         document_title = inst[5]
+        id_document    = inst[6]
 
         # ── Krok 4: Biezacy krok snapshotu ───────────────────────────────────
         snap_row = await db.execute(
@@ -803,7 +804,9 @@ async def accept(
                     ip_address=ip_address,
                 )
 
-        # ── Krok 10: Commit ───────────────────────────────────────────────────
+        # ── Krok 10: Commit ──────────────────────────────────────────────────────────────────────────
+        if approved_terminal:
+            await _sync_faktura_akceptacja_status(db, id_document, "approved")
         await db.commit()
 
     # ── Krok 11: Powiadomienia (background, poza lockiem) ─────────────────────
@@ -896,7 +899,7 @@ async def rollback(
         # ── Krok 2: Instancja ─────────────────────────────────────────────────
         inst_row = await db.execute(
             text(
-                f"SELECT [status], [current_step], [dispatched_by], [document_title] "
+                f"SELECT [status], [current_step], [id_document] "
                 f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
                 f"WHERE [id_instance] = :i"
             ),
@@ -911,7 +914,9 @@ async def rollback(
                 detail=f"Instancja {id_instance} ma status '{inst[0]}' — rollback niedostepny.",
             )
 
-        current_step = inst[1]
+        current_status = inst[0]
+        current_step   = inst[1]
+        id_document    = inst[2]
 
         # ── Krok 3: Uprawnienia ───────────────────────────────────────────────
         # Sprawdz czlonkostwo w biezacej grupie
@@ -1091,7 +1096,7 @@ async def reject(
     async with approval_lock(redis, id_instance):
         inst_row = await db.execute(
             text(
-                f"SELECT [status], [current_step] "
+                f"SELECT [status], [current_step], [id_document] "
                 f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
                 f"WHERE [id_instance] = :i"
             ),
@@ -1105,8 +1110,8 @@ async def reject(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Instancja {id_instance} ma status '{inst[0]}' — odrzucenie niedostepne.",
             )
-
         current_step = inst[1]
+        id_document  = inst[2]
 
         # Sprawdz uprawnienia (czlonek grupy lub supervise)
         if not has_supervise:
@@ -1149,10 +1154,11 @@ async def reject(
             username_snapshot=username,
             action="rejected",
             step_order_snapshot=current_step,
-            details={"comment": comment.strip(), "has_supervise": has_supervise},
+            details={"comment": comment.strip() if comment else None, "has_supervise": has_supervise},
             ip_address=ip_address,
         )
 
+        await _sync_faktura_akceptacja_status(db, id_document, "rejected")
         await db.commit()
 
     _jsonl_log("rejected", {
@@ -1173,6 +1179,7 @@ async def cancel(
     id_user: int,
     username: str,
     comment: str | None = None,
+    has_supervise: bool = False,
     ip_address: str | None = None,
 ) -> dict:
     """
@@ -1184,7 +1191,7 @@ async def cancel(
     async with approval_lock(redis, id_instance):
         inst_row = await db.execute(
             text(
-                f"SELECT [status], [dispatched_by] "
+                f"SELECT [status], [dispatched_by], [id_document] "
                 f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
                 f"WHERE [id_instance] = :i"
             ),
@@ -1195,6 +1202,7 @@ async def cancel(
             raise HTTPException(status_code=404, detail=f"Instancja {id_instance} nie istnieje.")
 
         current_status = inst[0]
+        id_document    = inst[2]
         if current_status in ("approved", "cancelled"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1222,6 +1230,7 @@ async def cancel(
             ip_address=ip_address,
         )
 
+        await _sync_faktura_akceptacja_status(db, id_document, "cancelled")
         await db.commit()
 
     _jsonl_log("cancelled", {
@@ -1889,4 +1898,51 @@ async def validate_delegation_create(
                 f"Uzytkownik {id_user_to} jest juz aktywnym delegatem innej osoby. "
                 "Sub-delegacje (delegowanie delegata) sa niedozwolone."
             ),
+        )
+
+async def _sync_faktura_akceptacja_status(
+    db: AsyncSession,
+    id_document: str,
+    approval_status: str,
+) -> None:
+    """
+    Synchronizuje status_wewnetrzny w skw_faktura_akceptacja
+    po zakończeniu obiegu Sprint 3.
+
+    Mapowanie:
+        approved  → zaakceptowana
+        rejected  → w_toku  (odrzucona — czeka na decyzję referenta)
+        cancelled → anulowana
+
+    UPDATE jest idempotentny — jeśli rekord nie istnieje, nic się nie dzieje.
+    """
+    mapping = {
+        "approved":  "zaakceptowana",
+        "rejected":  "w_toku",
+        "cancelled": "anulowana",
+    }
+    nowy_status = mapping.get(approval_status)
+    if not nowy_status:
+        return
+
+    try:
+        await db.execute(
+            text(
+                f"UPDATE [dbo].[skw_faktura_akceptacja] "
+                f"SET [status_wewnetrzny] = :s, "
+                f"    [UpdatedAt] = GETDATE() "
+                f"WHERE [numer_ksef] = :k "
+                f"  AND [IsActive] = 1"
+            ),
+            {"s": nowy_status, "k": id_document},
+        )
+        logger.debug(
+            "_sync_faktura_akceptacja_status | id_document=%r approval_status=%r → status_wewnetrzny=%r",
+            id_document, approval_status, nowy_status,
+        )
+    except Exception as exc:
+        # Nie przerywaj głównego flow — sync jest best-effort
+        logger.warning(
+            "_sync_faktura_akceptacja_status | BLAD UPDATE id_document=%r exc=%s",
+            id_document, exc,
         )
