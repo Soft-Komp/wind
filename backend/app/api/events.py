@@ -285,8 +285,8 @@ async def _sse_generator(
                 raw_data = message.get("data", b"")
                 try:
                     payload = orjson.loads(raw_data)
-                    # envelope z event_service.py używa klucza "type", nie "event"
-                    event_type = payload.get("type", "message")
+                    # approval_sse_service używa klucza "event", starszy kod używał "type"
+                    event_type = payload.get("event") or payload.get("type") or "message"
                     yield _sse_event(event_type, payload)
                 except (orjson.JSONDecodeError, Exception):
                     # Wiadomość nie-JSON — pomiń

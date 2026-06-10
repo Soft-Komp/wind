@@ -631,6 +631,14 @@ class WaproFakturaNaglowek(FakturaBase):
     email_kontrahenta:  Optional[str] = None
     telefon_kontrahenta: Optional[str] = None
 
+    @field_validator("numer", "nazwa_kontrahenta", mode="before")
+    @classmethod
+    def coerce_optional_str(cls, v) -> Optional[str]:
+        """Jawna konwersja → str lub None. Odporna na typy zwracane przez pyodbc."""
+        if v is None:
+            return None
+        return str(v)
+
 
 class WaproFakturaPozycja(FakturaBase):
     """Dane z dbo.skw_faktury_akceptacja_pozycje."""

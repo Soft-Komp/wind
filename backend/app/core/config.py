@@ -568,15 +568,37 @@ class Settings(BaseSettings):
         ),
     )
  
-    APPROVAL_EMAIL_DEBOUNCE_MINUTES: int = Field(
-        default=15,
-        ge=1,
-        le=120,
+    # -----------------------------------------------------------------------
+    # Sekcja: DATA MASKING — maskowanie danych wrażliwych w odpowiedziach API
+    #
+    # Przeznaczenie: środowiska testowe, prezentacje, szkolenia, demo.
+    # Aktywacja: DATA_MASKING_ENABLED=true + DATA_MASKING_SALT=<losowy_string>
+    # Efekt: nazwa_kontrahenta i numer faktury zastąpione deterministycznymi
+    #        tokenami pseudonimizacyjnymi. Nie wymaga restartu jeśli zmiana
+    #        przez PUT /system/config (ale to pole jest tylko z .env).
+    #        Zmiana w .env wymaga: docker compose up -d --build windykacja_api
+    # -----------------------------------------------------------------------
+
+    DATA_MASKING_ENABLED: bool = Field(
+        default=False,
         description=(
-            "Czas agregowania emaili (minuty). "
-            "Zdarzenia w tym oknie sa laczone w jeden zbiorczy email. "
-            "Wyzszy = mniej emaili, dluzsze opoznienie powiadomienia."
+            "Wlacznik maskowania danych wrazliwych w odpowiedziach API. "
+            "True = nazwa_kontrahenta i numer faktury zastepowane tokenami. "
+            "False (domyslnie) = dane oryginalne — tryb produkcyjny. "
+            "Przeznaczenie: demo, szkolenia, prezentacje, srodowiska testowe. "
+            "Zmiana wymaga restartu kontenera windykacja_api."
         ),
+    )
+
+    DATA_MASKING_SALT: str = Field(
+        default="windykacja-dev-salt-CHANGE-IN-PRODUCTION-32chars",
+        description=(
+            "Sol do pseudonimizacji HMAC-SHA256 (NIE sekret kryptograficzny). "
+            "Determinuje tokeny — zmiana soli zmienia wszystkie zamaskowane wartosci. "
+            "Min. 32 znaki losowe. Unikaj domyslnej wartosci na produkcji. "
+            "Przyklad generowania: python -c \"import secrets; print(secrets.token_hex(32))\""
+        ),
+        min_length=16,
     )
  
     APPROVAL_ESCALATION_REMINDER_DAYS: int = Field(

@@ -19,6 +19,7 @@ Endpointy glownego obiegu dokumentow.
 
 UWAGA: from __future__ import annotations NIGDY w tym pliku.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -323,14 +324,22 @@ async def dispatch_document(
         "message":      "Dokument przekazany do obiegu.",
     }
 
-    # SSE ping po commit — non-blocking, błąd nie wpływa na odpowiedź HTTP
-    bg.add_task(
-        sse.on_dispatch,
+    # SSE po commit — await gwarantuje że publish wychodzi po zapisie w DB
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("dispatch_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), instance.id_instance)
+    except Exception as exc:
+        logger.warning("dispatch_instance | cache invalidation error | id_instance=%d | exc=%s", instance.id_instance, exc)
+    await sse.on_dispatch(
         redis=redis,
         id_instance=instance.id_instance,
         id_dispatched_by=current_user.id_user,
     )
-
     return result
 
 
@@ -417,10 +426,26 @@ async def accept_instance(
         notify_fn=None,
     )
 
-    # SSE po commit — on_accept pobiera aktualny stan z DB (po commit)
-    # next_group_id=None: on_accept odczyta current_group_id z meta po commit
-    bg.add_task(
-        sse.on_accept,
+    # SSE po commit — await gwarantuje że publish wychodzi po zapisie w DB
+    await asyncio.sleep(0.3)
+    # Invalidacja cache listy faktur przed SSE — tylko przy akceptacji terminalnej
+    if result.get("approved"):
+        try:
+            keys_to_delete = []
+            async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+                keys_to_delete.append(key)
+            if keys_to_delete:
+                await redis.delete(*keys_to_delete)
+            logger.debug(
+                "accept_instance | cache listy faktur wyczyszczony przed SSE | keys=%d | id_instance=%d",
+                len(keys_to_delete), id_instance,
+            )
+        except Exception as exc:
+            logger.warning(
+                "accept_instance | cache invalidation error | id_instance=%d | exc=%s",
+                id_instance, exc,
+            )
+    await sse.on_accept(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
@@ -429,7 +454,6 @@ async def accept_instance(
         next_step=result.get("next_step"),
         next_group_id=None,
     )
-
     return result
 
 
@@ -477,16 +501,23 @@ async def rollback_instance(
         ip_address=ip,
     )
 
-    # to_step i new_status z result — rollback() je zwraca
-    bg.add_task(
-        sse.on_rollback,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("rollback_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("rollback_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_rollback(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
-        to_step=result.get("to_step", 0),
+        to_step=result.get("new_step_order", 0),
         new_status=result.get("new_status", "pending_dispatch"),
     )
-
     return result
 
 
@@ -527,13 +558,21 @@ async def reject_instance(
         ip_address=ip,
     )
 
-    bg.add_task(
-        sse.on_reject,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("reject_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("reject_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_reject(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
     )
-
     return result
 
 
@@ -574,13 +613,21 @@ async def cancel_instance(
         ip_address=ip,
     )
 
-    bg.add_task(
-        sse.on_cancel,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("cancel_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("cancel_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_cancel(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
     )
-
     return result
 
 
@@ -627,14 +674,22 @@ async def forward_instance(
         ip_address=ip,
     )
 
-    bg.add_task(
-        sse.on_forward,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("forward_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("forward_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_forward(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
         id_target_group=body.id_target_group,
     )
-
     return result
 
 
@@ -681,14 +736,22 @@ async def send_to_group_instance(
         ip_address=ip,
     )
 
-    bg.add_task(
-        sse.on_send_to_group,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("send_to_group_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("send_to_group_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_send_to_group(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
         id_target_group=body.id_target_group,
     )
-
     return result
 
 
@@ -728,14 +791,22 @@ async def mark_urgent_instance(
         ip_address=ip,
     )
 
-    bg.add_task(
-        sse.on_mark_urgent,
+    await asyncio.sleep(0.3)
+    try:
+        keys_to_delete = []
+        async for key in redis.scan_iter("faktura:list:referent:*", count=100):
+            keys_to_delete.append(key)
+        if keys_to_delete:
+            await redis.delete(*keys_to_delete)
+        logger.debug("mark_urgent_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+    except Exception as exc:
+        logger.warning("mark_urgent_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+    await sse.on_mark_urgent(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
         is_urgent=body.is_urgent,
     )
-
     return result
 
 
@@ -805,6 +876,60 @@ async def get_instance_history(
             "logged_at":         dt_utc(r[12]),
         })
     return {"id_instance": id_instance, "total": len(entries), "entries": entries}
+
+
+@router.get(
+    "/instances/{id_instance}/history/pdf",
+    summary="PDF historii obiegu dokumentu",
+    description=(
+        "Generuje plik PDF z pełną historią akcji instancji obiegu. "
+        "Zawiera: metadane instancji (dokument, status, dyspozytor, daty, ścieżka), "
+        "tabelę wszystkich wpisów z approval_log (łącznie z is_voided=1 — oznaczone "
+        "szarym tłem i etykietą [UNIEWAŻNIONY]). "
+        "Format A4, czcionka DejaVu Sans (pełna obsługa polskich znaków). "
+        "Cache Redis TTL z SystemConfig 'faktury.pdf_cache_ttl_seconds'. "
+        "**Wymaga:** `approval.view_queue`."
+    ),
+    response_class=Response,
+    responses={
+        200: {"content": {"application/pdf": {}},
+              "description": "PDF historii obiegu"},
+        404: {"description": "Instancja nie istnieje"},
+        500: {"description": "Błąd generowania PDF"},
+        503: {"description": "Moduł wyłączony"},
+    },
+    dependencies=[require_permission("approval.view_queue")],
+)
+async def get_instance_history_pdf(
+    id_instance:  int,
+    current_user: CurrentUser,
+    db:           DB,
+    redis:        RedisClient,
+):
+    await _check_module_enabled(db, redis)
+
+    from fastapi.responses import Response as FastAPIResponse
+    from app.services.approval_history_pdf_service import generate_approval_history_pdf
+
+    pdf_bytes = await generate_approval_history_pdf(
+        db           = db,
+        redis        = redis,
+        id_instance  = id_instance,
+        requested_by = current_user.username,
+    )
+
+    from datetime import date
+    filename = f"historia_obiegu_{id_instance}_{date.today().strftime('%Y%m%d')}.pdf"
+
+    return FastAPIResponse(
+        content     = pdf_bytes,
+        media_type  = "application/pdf",
+        headers     = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Instance-Id":       str(id_instance),
+            "X-Generated-By":      current_user.username,
+        },
+    )
 
 
 # =============================================================================

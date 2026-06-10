@@ -271,6 +271,14 @@ class DebtorListItem(BaseModel):
         description="Pełna nazwa firmy/osoby.",
         max_length=200,
     )
+
+    @field_validator("nazwa_kontrahenta", mode="before")
+    @classmethod
+    def coerce_nazwa_kontrahenta_to_str(cls, v) -> str:
+        """Jawna konwersja → str. Zabezpieczenie na wypadek zwrotu innych typów z pyodbc."""
+        if v is None:
+            return ""
+        return str(v)
     nip: str | None = Field(
         default=None,
         alias="NIP",
@@ -398,6 +406,14 @@ class InvoiceItem(BaseModel):
         description="Numer faktury z WAPRO (NR_DOK). Przykład: 'FV/2024/01/0001'.",
         max_length=100,
     )
+
+    @field_validator("numer_faktury", mode="before")
+    @classmethod
+    def coerce_numer_faktury_to_str(cls, v) -> str:
+        """Jawna konwersja → str. Zabezpieczenie na wypadek zwrotu innych typów z pyodbc."""
+        if v is None:
+            return ""
+        return str(v)
     data_wystawienia: date = Field(
         alias="DataWystawienia",
         description=(

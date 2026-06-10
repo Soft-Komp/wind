@@ -530,7 +530,6 @@ async def on_accept(
 
 async def on_rollback(
     redis: Redis,
-    db: AsyncSession,
     id_instance: int,
     id_user: int,
     to_step: int,
