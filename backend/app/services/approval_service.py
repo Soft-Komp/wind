@@ -741,23 +741,27 @@ async def accept(
             if next_snap:
                 # ── Krok 9a: Przejdz do nastepnego kroku ─────────────────────
                 next_step = current_step + 1
-                next_snap_id, next_group, _, _ = next_snap
+                next_snap_id, next_group, _, next_snap_deadline_at = next_snap
 
-                # Pobierz deadline_hours nastepnego kroku ze sciezki
-                next_deadline_row = await db.execute(
-                    text(
-                        f"SELECT [deadline_hours] FROM [{_SCHEMA}].[skw_approval_path_steps] "
-                        f"WHERE [id_path] = :p AND [step_order] = :s"
-                    ),
-                    {"p": inst[3], "s": next_step},
-                )
-                next_deadline_hours_row = next_deadline_row.fetchone()
-                next_deadline_hours = next_deadline_hours_row[0] if next_deadline_hours_row else None
-
-                next_step_deadline = (
-                    now + timedelta(hours=next_deadline_hours)
-                    if next_deadline_hours else None
-                )
+                # Deadline dla nastepnego kroku bierzemy ze snapshotu instancji —
+                # NIE z globalnej approval_path_steps.
+                #
+                # Powod: globalna sciezka moze byc modyfikowana przez admina
+                # (np. renumeracja po usunieciu kroku) w trakcie aktywnego obiegu.
+                # Snapshot jest tworzony przy dispatch i jest niezalezny od
+                # pozniejszych zmian w globalnej definicji sciezki.
+                #
+                # Snapshot przechowuje deadline_at (= now + deadline_hours)
+                # obliczony przy dispatch. Jesli nie byl ustawiony przy dispatch
+                # (deadline_hours=NULL) to deadline_at=NULL i tak zostaje.
+                #
+                # Wyjątek: jesli snapshot ma deadline_at z przeszlosci
+                # (np. krok byl juz wczesniej in_progress i deadline minął),
+                # przeliczamy od nowa na podstawie snapshot_steps.deadline_hours.
+                # Poniewaz snapshot nie przechowuje deadline_hours (tylko deadline_at),
+                # uzywamy deadline_at ze snapshotu jako-jest — to najlepsza
+                # przyblizenie bez dodatkowej kolumny w tabeli.
+                next_step_deadline = next_snap_deadline_at
 
                 await db.execute(
                     text(
@@ -962,9 +966,19 @@ async def rollback(
                 )
 
         now = _utcnow_naive()
-
         # ── Krok 4: Void votes ────────────────────────────────────────────────
+        # Void-uj glosy biezacego kroku (z ktorego cofamy)
         voided_count = await _void_votes_for_step(db, id_instance, current_step)
+        # Void-uj rowniez glosy kroku na ktory wracamy (current_step - 1).
+        # Bez tego approval_log zachowuje is_voided=0 dla poprzedniej akceptacji
+        # i blokuje ponowna akceptacje przez sprawdzenie already_voted.
+        # Dotyczy tylko cofniecia do kroku > 0 (nie do pending_dispatch).
+        if current_step > 1:
+            voided_prev = await _void_votes_for_step(db, id_instance, current_step - 1)
+            logger.debug(
+                "rollback | void prev step | id_instance=%d step=%d voided=%d",
+                id_instance, current_step - 1, voided_prev,
+            )
 
         # ── Krok 5: Wyczysc deadline_at biezacego kroku ───────────────────────
         await db.execute(

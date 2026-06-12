@@ -22,6 +22,10 @@ Kolory:
   czerwony "odrzucony/anulowany" (#C0392B), szary "unieważniony" (#AAAAAA),
   pomarańczowy "w toku" (#E67E22), jasno-szare tło wierszy voided (#F5F5F5).
 
+WAŻNE — skw_approval_log NIE MA kolumny 'comment'.
+Komentarze zapisywane są wewnątrz pola [details] jako JSON z kluczem "comment".
+Funkcja _extract_comment_from_details() wyciąga je stamtąd.
+
 Uwaga: from __future__ import annotations NIGDY w tym pliku (importy w funkcjach
 przez granicę executora wymagają działającego type resolver w runtime).
 """
@@ -64,7 +68,7 @@ _C_IN_PROGRESS  = "#E67E22"   # pomarańczowy — dispatched / in_progress
 _C_NEUTRAL      = "#2C3E50"   # ciemny — akcje neutralne
 _C_VOIDED_BG    = "#F5F5F5"   # bardzo jasny szary — tło wierszy unieważnionych
 _C_VOIDED_TEXT  = "#AAAAAA"   # szary — tekst wierszy unieważnionych
-_C_ROW_EVEN     = "#F0F4FA"   # bardzo jasny niebieski — parzyste wiersze (nieV.)
+_C_ROW_EVEN     = "#F0F4FA"   # bardzo jasny niebieski — parzyste wiersze (nie-voided)
 _C_SECTION      = "#1A365D"   # kolor nagłówków sekcji
 
 # Mapa akcja → polska nazwa (lustro z instances.py — utrzymujemy spójność)
@@ -136,8 +140,7 @@ def _ensure_fonts_registered() -> None:
     """
     Rejestruje fonty DejaVu Sans w ReportLab pdfmetrics.
     Idempotentna — bezpieczna przy wielokrotnym wywołaniu z wielu wątków.
-    Graceful degradation: brak pliku fontu → log WARN, PDF nadal generowany
-    (polskie znaki mogą nie być wyświetlane poprawnie).
+    Graceful degradation: brak pliku fontu → log WARN, PDF nadal generowany.
     """
     global _fonts_registered
     if _fonts_registered:
@@ -191,46 +194,47 @@ class _PDFKontekst:
     Serializowalny kontener danych dla _build_pdf_sync().
 
     Zasada: po zbudowaniu _PDFKontekst żaden async I/O nie jest potrzebny.
-    Cały dostęp do DB i Redis wykonywany PRZED budowaniem kontekstu,
-    wyłącznie w funkcji generate_approval_history_pdf().
+    Cały dostęp do DB i Redis wykonywany PRZED budowaniem kontekstu.
     """
-    # Identyfikator instancji obiegu
     id_instance:     int
-
-    # Dane nagłówka dokumentu
     document_title:  str
-    document_amount: Optional[float]    # None jeśli nie znany
+    document_amount: Optional[float]
     id_source:       int
-    source_name:     str                # np. "Faktury KSeF"
+    source_name:     str
 
-    # Status i metadane instancji
     status:          str
     is_urgent:       bool
     id_path:         Optional[int]
-    path_name:       Optional[str]      # nazwa ścieżki z approval_paths
+    path_name:       Optional[str]
     current_step:    int
 
-    # Dyspozytor
     dispatched_by_username: Optional[str]
     dispatched_by_fullname: Optional[str]
-    dispatched_at:           Optional[str]  # ISO string lub None
-    completed_at:            Optional[str]  # ISO string lub None
-    deadline_at:             Optional[str]  # ISO string lub None
+    dispatched_at:           Optional[str]  # ISO string
+    completed_at:            Optional[str]  # ISO string
 
-    # Wpisy logu — lista plain dict, każdy dict to jeden wiersz approval_log
-    # Klucze: id_log, username_snapshot, full_name, action, action_display,
-    #         step_order_snapshot, id_group_snapshot, group_name,
-    #         votes_before, votes_after, is_voided, comment, details, logged_at_str
-    log_entries: list[dict[str, Any]] = field(default_factory=list)
+    # Dane z Fakir/WAPRO (NULL jeśli źródło inne niż fakir lub JOIN nie trafił)
+    fakir_numer:      Optional[str]   = None   # numer faktury np. FV/2026/001
+    fakir_kontrahent: Optional[str]   = None   # nazwa kontrahenta
+    fakir_brutto:     Optional[float] = None   # wartość brutto
+    fakir_ksef_id:    Optional[str]   = None   # KSEF_ID = id_document
 
-    # Metadane generowania
+    # Każdy dict: id_log, username_snapshot, full_name, action,
+    # step_order_snapshot, id_group_snapshot, group_name,
+    # votes_before, votes_after, is_voided, details (dict|None), logged_at_str
+    log_entries:    list[dict[str, Any]] = field(default_factory=list)
+    # Lista sekcji głosowania per (etap, grupa, iteracja).
+    # Każdy dict: step_order, group_name, consensus_type,
+    #             votes_cast, votes_required, step_status,
+    #             members: [{full_name, username, vote, voted_at_str}]
+    voting_summary: list[dict[str, Any]] = field(default_factory=list)
+
     logo_path:      Optional[str]   = None
     firma_nazwa:    str             = "System Windykacja"
     firma_nip:      str             = ""
     generated_at:   str             = ""
-    requested_by:   str             = "system"   # username osoby żądającej PDF
+    requested_by:   str             = "system"
 
-    # Flagi diagnostyczne — logowane przy generowaniu
     total_log_entries: int          = 0
     voided_entries:    int          = 0
 
@@ -240,16 +244,11 @@ class _PDFKontekst:
 # =============================================================================
 
 def _fmt_dt(value: Any, include_time: bool = True) -> str:
-    """
-    Formatuje datę/datetime/ISO-str do czytelnego formatu polskiego.
-    DD.MM.RRRR HH:MM lub DD.MM.RRRR (include_time=False).
-    Zwraca '—' dla None lub wartości nieparsowalne.
-    """
+    """Formatuje datetime/ISO-str do DD.MM.RRRR HH:MM. Zwraca '—' dla None."""
     if value is None:
         return "—"
     try:
         if isinstance(value, str):
-            # Obsługa obu formatów: z 'T' i ze spacją, z/bez microseconds, z/bez Z
             value = value.replace("Z", "+00:00")
             dt = datetime.fromisoformat(value)
         elif isinstance(value, datetime):
@@ -265,9 +264,9 @@ def _fmt_dt(value: Any, include_time: bool = True) -> str:
 
 def _sanitize(text_val: Any, max_len: int = 500) -> str:
     """
-    Sanityzuje wartość do bezpiecznego tekstu w PDF.
-    Usuwa znaki NULL, obcina do max_len, zwraca '[BRAK]' dla None/pustych.
-    Zastępuje '<', '>' encjami HTML (ReportLab parsuje XML w Paragraph).
+    Sanityzuje wartość do bezpiecznego tekstu w PDF (ReportLab Paragraph).
+    Escapuje &, <, > — ReportLab parsuje XML w Paragraph.
+    Zwraca '[BRAK]' dla None/pustych.
     """
     if text_val is None:
         return "[BRAK]"
@@ -286,25 +285,23 @@ def _votes_label(before: Any, after: Any) -> str:
         return ""
     b = int(before) if before is not None else "?"
     a = int(after)  if after  is not None else "?"
-    return f"głosy: {b}→{a}"
+    return f"{b}→{a}"
 
 
-def _extract_comment_from_details(
-    comment_direct: Optional[str],
-    details: Optional[dict],
-) -> Optional[str]:
+def _extract_comment_from_details(details: Optional[dict]) -> Optional[str]:
     """
-    Zwraca komentarz: najpierw z pola comment (approval_log.comment),
-    fallback z details JSON (klucze: comment, reason, note).
-    None jeśli brak.
+    Wyciąga komentarz wyłącznie z pola details (JSON).
+    skw_approval_log NIE MA kolumny 'comment' — komentarze zapisywane są
+    w polu [details] przez _insert_approval_log() w approval_service.py.
+    Sprawdza klucze: comment, reason, note, uwaga.
+    Zwraca None jeśli brak.
     """
-    if comment_direct and comment_direct.strip():
-        return comment_direct.strip()
-    if details and isinstance(details, dict):
-        for key in ("comment", "reason", "note", "uwaga"):
-            val = details.get(key)
-            if val and str(val).strip():
-                return str(val).strip()
+    if not details or not isinstance(details, dict):
+        return None
+    for key in ("comment", "reason", "note", "uwaga"):
+        val = details.get(key)
+        if val and str(val).strip():
+            return str(val).strip()
     return None
 
 
@@ -324,12 +321,9 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         2. Metadane    — ID instancji, dokument, status, pilność, ścieżka,
                          dyspozytor, daty przekazania/zakończenia/deadline
         3. Historia    — tabela z approval_log: lp. | data | użytkownik |
-                         etap | akcja | komentarz | głosy
+                         etap | akcja + komentarz z details | głosy
                          Wiersze is_voided=1: szare tło + prefix [UNIEWAŻNIONY]
-        4. Stopka      — timestamp UTC generowania + wersja + ID instancji + użytkownik
-
-    Returns:
-        Bajty PDF gotowe do StreamingResponse.
+        4. Stopka      — timestamp UTC generowania + wersja + ID + użytkownik
     """
     _ensure_fonts_registered()
 
@@ -368,8 +362,7 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     S_SEKCJA   = _s("ah_sec",  fontSize=9,  leading=11, fontName="DejaVu-Bold",
                     textColor=colors.HexColor(_C_SECTION),
                     spaceBefore=8, spaceAfter=3)
-    S_MALY     = _s("ah_sm",   fontSize=7,  leading=10,
-                    textColor=colors.grey)
+    S_MALY     = _s("ah_sm",   fontSize=7,  leading=10, textColor=colors.grey)
     S_FIRMA    = _s("ah_firma", fontSize=11, leading=14, fontName="DejaVu-Bold",
                     textColor=colors.HexColor(_C_HEADER_BG))
     S_CELL     = _s("ah_cell",  fontSize=8,  leading=11)
@@ -388,7 +381,7 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     buffer = BytesIO()
 
     def _on_page(canvas_obj: Any, doc_obj: Any) -> None:
-        """Callback numeracji stron — wywoływany przez ReportLab na każdej stronie."""
+        """Callback numeracji stron."""
         canvas_obj.saveState()
         canvas_obj.setFont("DejaVu", 7)
         canvas_obj.setFillColor(colors.HexColor("#888888"))
@@ -418,11 +411,8 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     story: list[Any] = []
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # 1. NAGŁÓWEK — logo + firma + tytuł
+    # 1. NAGŁÓWEK
     # ═══════════════════════════════════════════════════════════════════════════
-    header_data: list[list[Any]] = [[]]
-
-    # Logo (opcjonalne — graceful fallback)
     logo_cell: Any = Spacer(1, 1 * mm)
     if ctx.logo_path:
         try:
@@ -431,10 +421,10 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         except Exception as logo_exc:
             logger.warning(
                 orjson.dumps({
-                    "event":      "pdf_logo_load_failed",
+                    "event":       "pdf_logo_load_failed",
                     "id_instance": ctx.id_instance,
-                    "path":       ctx.logo_path,
-                    "error":      str(logo_exc),
+                    "path":        ctx.logo_path,
+                    "error":       str(logo_exc),
                 }).decode()
             )
 
@@ -444,19 +434,20 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     if ctx.firma_nip:
         firma_info.append(Paragraph(f"NIP: {_sanitize(ctx.firma_nip, 30)}", S_NORMAL))
 
-    header_data = [[
-        logo_cell,
-        firma_info,
-        Paragraph(
-            f'<font color="{_C_HEADER_BG}"><b>HISTORIA OBIEGU DOKUMENTU</b></font>',
-            _s("ah_doc_title", fontSize=11, leading=14, fontName="DejaVu-Bold",
-               alignment=2),   # 2 = TA_RIGHT
-        ),
-    ]]
-
-    header_table = Table(header_data, colWidths=[4 * cm, 8 * cm, 5.5 * cm])
+    header_table = Table(
+        [[
+            logo_cell,
+            firma_info,
+            Paragraph(
+                f'<font color="{_C_HEADER_BG}"><b>HISTORIA OBIEGU DOKUMENTU</b></font>',
+                _s("ah_doc_title", fontSize=11, leading=14,
+                   fontName="DejaVu-Bold", alignment=2),
+            ),
+        ]],
+        colWidths=[4 * cm, 8 * cm, 5.5 * cm],
+    )
     header_table.setStyle(TableStyle([
-        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING",  (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
@@ -479,13 +470,29 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         '<font color="#C0392B"><b>TAK — PILNE</b></font>'
         if ctx.is_urgent else "Nie"
     )
-    path_label   = (
+    path_label = (
         _sanitize(ctx.path_name, 100)
         if ctx.path_name else f"ID {ctx.id_path}" if ctx.id_path else "—"
     )
     amount_label = (
-        f"{ctx.document_amount:,.2f} PLN".replace(",", " ")
+        f"{ctx.document_amount:,.2f} PLN".replace(",", "\u00a0")
         if ctx.document_amount is not None else "—"
+    )
+
+    # Numer faktury — preferujemy fakir_numer, fallback document_title
+    doc_numer_label = _sanitize(ctx.fakir_numer or ctx.document_title, 100)
+
+    # Kontrahent
+    kontrahent_label = _sanitize(ctx.fakir_kontrahent, 150) if ctx.fakir_kontrahent else "—"
+
+    # KSeF ID
+    ksef_label = _sanitize(ctx.fakir_ksef_id, 200) if ctx.fakir_ksef_id else "—"
+
+    # Wartość — preferujemy fakir_brutto, fallback document_amount
+    amount_val = ctx.fakir_brutto if ctx.fakir_brutto is not None else ctx.document_amount
+    amount_label = (
+        f"{amount_val:,.2f} PLN".replace(",", "\u00a0")
+        if amount_val is not None else "—"
     )
 
     meta_rows = [
@@ -496,14 +503,19 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
              f'<font color="{status_color}"><b>{_sanitize(status_disp)}</b></font>',
              S_BOLD,
          )],
-        ["Dokument:",
-         Paragraph(_sanitize(ctx.document_title, 200), S_NORMAL),
-         "Pilny:",
-         Paragraph(urgent_label, S_NORMAL)],
-        ["Wartość dokumentu:",
-         Paragraph(amount_label, S_NORMAL),
+        ["Numer faktury:",
+         Paragraph(doc_numer_label, S_BOLD),
+         "Wartość brutto:",
+         Paragraph(amount_label, S_NORMAL)],
+        ["Kontrahent:",
+         Paragraph(kontrahent_label, S_NORMAL),
          "Ścieżka akceptacji:",
          Paragraph(path_label, S_NORMAL)],
+        ["KSeF ID:",
+         Paragraph(ksef_label, _s("ah_ksef", fontSize=7, leading=10,
+                                  textColor=colors.HexColor("#555555"))),
+         "Etap bieżący:",
+         Paragraph(str(ctx.current_step) if ctx.current_step else "—", S_NORMAL)],
         ["Dyspozytor:",
          Paragraph(
              _sanitize(
@@ -511,16 +523,16 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
              ),
              S_NORMAL,
          ),
-         "Etap bieżący:",
-         Paragraph(str(ctx.current_step) if ctx.current_step else "—", S_NORMAL)],
+         "Liczba wpisów:",
+         Paragraph(str(ctx.total_log_entries), S_NORMAL)],
         ["Przekazano:",
          Paragraph(_fmt_dt(ctx.dispatched_at), S_NORMAL),
          "Zakończono:",
          Paragraph(_fmt_dt(ctx.completed_at), S_NORMAL)],
         ["Źródło dokumentu:",
          Paragraph(_sanitize(ctx.source_name, 80), S_NORMAL),
-         "Deadline:",
-         Paragraph(_fmt_dt(ctx.deadline_at), S_NORMAL)],
+         "",
+         Paragraph("", S_NORMAL)],
     ]
 
     meta_table = Table(
@@ -528,19 +540,16 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         colWidths=[3.8 * cm, 5.7 * cm, 3.3 * cm, 4.7 * cm],
     )
     meta_table.setStyle(TableStyle([
-        ("FONTNAME",    (0, 0), (0, -1), "DejaVu-Bold"),
-        ("FONTNAME",    (2, 0), (2, -1), "DejaVu-Bold"),
-        ("FONTSIZE",    (0, 0), (-1, -1), 8),
-        ("LEADING",     (0, 0), (-1, -1), 11),
-        ("VALIGN",      (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING",(0, 0), (-1, -1), 4),
-        ("TOPPADDING",  (0, 0), (-1, -1), 2),
+        ("FONTNAME",     (0, 0), (0, -1), "DejaVu-Bold"),
+        ("FONTNAME",     (2, 0), (2, -1), "DejaVu-Bold"),
+        ("FONTSIZE",     (0, 0), (-1, -1), 8),
+        ("LEADING",      (0, 0), (-1, -1), 11),
+        ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",   (0, 0), (-1, -1), 2),
         ("BOTTOMPADDING",(0, 0), (-1, -1), 2),
-        # Linia oddzielająca kolumny
-        ("LINEAFTER",   (1, 0), (1, -1), 0.3,
-         colors.HexColor("#DDDDDD")),
-        # Szachownica wierszy
+        ("LINEAFTER",    (1, 0), (1, -1), 0.3, colors.HexColor("#DDDDDD")),
         ("ROWBACKGROUNDS", (0, 0), (-1, -1),
          [colors.white, colors.HexColor("#F8F9FA")]),
     ]))
@@ -554,10 +563,12 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     # ═══════════════════════════════════════════════════════════════════════════
     # 3. HISTORIA AKCJI
     # ═══════════════════════════════════════════════════════════════════════════
+    voided_note = (
+        f", w tym {ctx.voided_entries} unieważnionych"
+        if ctx.voided_entries else ""
+    )
     story.append(Paragraph(
-        f"HISTORIA AKCJI  ({ctx.total_log_entries} wpisów"
-        + (f", w tym {ctx.voided_entries} unieważnionych" if ctx.voided_entries else "")
-        + ")",
+        f"HISTORIA AKCJI  ({ctx.total_log_entries} wpisów{voided_note})",
         S_SEKCJA,
     ))
 
@@ -567,11 +578,10 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
             _s("ah_empty", fontSize=9, textColor=colors.grey),
         ))
     else:
-        # ── Nagłówek tabeli ────────────────────────────────────────────────────
         def _th(tekst: str) -> Paragraph:
             return Paragraph(
                 f'<font color="{_C_HEADER_FG}"><b>{tekst}</b></font>',
-                _s(f"ah_th_{tekst[:6]}", fontSize=8, leading=10,
+                _s(f"ah_th_{tekst[:6].replace(' ', '_')}", fontSize=8, leading=10,
                    fontName="DejaVu-Bold"),
             )
 
@@ -584,50 +594,40 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
             _th("Głosy"),
         ]]
 
-        # ── Wiersze danych ─────────────────────────────────────────────────────
         for idx, entry in enumerate(ctx.log_entries, start=1):
-            is_voided   = bool(entry.get("is_voided", False))
+            is_voided = bool(entry.get("is_voided", False))
 
-            # Style zależne od voided
             S_c  = S_CELL_V  if is_voided else S_CELL
             S_cb = S_CELL_VB if is_voided else S_CELL_B
             S_cm = S_COMMENT_V if is_voided else S_COMMENT
 
-            # Dane wiersza
-            lp_str       = str(idx)
-            data_str     = _fmt_dt(entry.get("logged_at_str"))
-            actor_str    = _sanitize(
+            lp_str      = str(idx)
+            data_str    = _fmt_dt(entry.get("logged_at_str"))
+            actor_str   = _sanitize(
                 entry.get("full_name") or entry.get("username_snapshot") or "system",
                 60,
             )
-            step_str     = str(entry.get("step_order_snapshot") or "—")
-            action_raw   = entry.get("action", "")
-            action_disp  = _sanitize(
-                _ACTION_DISPLAY.get(action_raw, action_raw), 60
-            )
-            action_color = (
-                _C_VOIDED_TEXT
-                if is_voided
-                else _ACTION_COLOR.get(action_raw, _C_NEUTRAL)
-            )
-            votes_str    = _votes_label(
+            step_str    = str(entry.get("step_order_snapshot") or "—")
+            action_raw  = entry.get("action", "")
+            action_disp = _sanitize(_ACTION_DISPLAY.get(action_raw, action_raw), 60)
+            action_color = _C_VOIDED_TEXT if is_voided else _ACTION_COLOR.get(action_raw, _C_NEUTRAL)
+            votes_str   = _votes_label(
                 entry.get("votes_before"), entry.get("votes_after")
             )
-            group_name   = entry.get("group_name")
+            group_name  = entry.get("group_name")
+
+            # Komentarz ZAWSZE z details (skw_approval_log nie ma kolumny comment)
             comment_text = _extract_comment_from_details(
-                entry.get("comment"),
-                entry.get("details") if isinstance(entry.get("details"), dict) else None,
+                entry.get("details") if isinstance(entry.get("details"), dict) else None
             )
 
             # Kolumna "Akcja / Komentarz" — wielowierszowa
             akcja_content: list[Any] = []
 
-            voided_prefix = ""
-            if is_voided:
-                voided_prefix = (
-                    '<font color="#C0392B"><b>[UNIEWAŻNIONY]</b></font> '
-                )
-
+            voided_prefix = (
+                '<font color="#C0392B"><b>[UNIEWAŻNIONY]</b></font> '
+                if is_voided else ""
+            )
             akcja_content.append(Paragraph(
                 f'{voided_prefix}'
                 f'<font color="{action_color}"><b>{action_disp}</b></font>',
@@ -639,7 +639,6 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
                     S_cm,
                 ))
             if comment_text:
-                # Komentarz w kursywie, obcięty do 300 znaków w PDF
                 short_comment = _sanitize(comment_text, 300)
                 akcja_content.append(Paragraph(
                     f'<i>"{short_comment}"</i>',
@@ -655,35 +654,29 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
                 Paragraph(votes_str, S_c),
             ])
 
-        # ── Buduj tabelę ───────────────────────────────────────────────────────
         log_table = Table(
             log_rows,
             colWidths=[0.7 * cm, 2.8 * cm, 3.5 * cm, 0.6 * cm, 7.2 * cm, 2.7 * cm],
-            repeatRows=1,   # nagłówek powtarza się na każdej stronie
+            repeatRows=1,
         )
 
-        # Zbuduj style — szachownica + osobne tło dla voided
         ts_cmds = [
-            # Nagłówek tabeli
-            ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor(_C_HEADER_BG)),
-            ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",    (0, 0), (-1, 0), "DejaVu-Bold"),
-            ("FONTSIZE",    (0, 0), (-1, 0), 8),
-            ("TOPPADDING",  (0, 0), (-1, 0), 4),
+            ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor(_C_HEADER_BG)),
+            ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",     (0, 0), (-1, 0), "DejaVu-Bold"),
+            ("FONTSIZE",     (0, 0), (-1, 0), 8),
+            ("TOPPADDING",   (0, 0), (-1, 0), 4),
             ("BOTTOMPADDING",(0, 0), (-1, 0), 4),
-            # Wszystkie wiersze danych
-            ("FONTSIZE",    (0, 1), (-1, -1), 8),
-            ("VALIGN",      (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING",(0, 0), (-1, -1), 3),
-            ("TOPPADDING",  (0, 1), (-1, -1), 3),
-            ("BOTTOMPADDING",(0, 1),(-1, -1), 3),
-            # Siatka
-            ("GRID",        (0, 0), (-1, -1), 0.3, colors.HexColor("#DDDDDD")),
-            ("LINEBELOW",   (0, 0), (-1, 0),  0.8, colors.HexColor(_C_HEADER_BG)),
+            ("FONTSIZE",     (0, 1), (-1, -1), 8),
+            ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING",  (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING",   (0, 1), (-1, -1), 3),
+            ("BOTTOMPADDING",(0, 1), (-1, -1), 3),
+            ("GRID",         (0, 0), (-1, -1), 0.3, colors.HexColor("#DDDDDD")),
+            ("LINEBELOW",    (0, 0), (-1, 0),  0.8, colors.HexColor(_C_HEADER_BG)),
         ]
 
-        # Szachownica wierszy i szare tło dla voided
         for row_idx, entry in enumerate(ctx.log_entries, start=1):
             if entry.get("is_voided"):
                 ts_cmds.append(
@@ -699,6 +692,129 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
         log_table.setStyle(TableStyle(ts_cmds))
         story.append(log_table)
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 4. WYNIKI GŁOSOWANIA PER ETAP
+    # ═══════════════════════════════════════════════════════════════════════════
+    if ctx.voting_summary:
+        story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph("WYNIKI GŁOSOWANIA PER ETAP", S_SEKCJA))
+
+        for section in ctx.voting_summary:
+            step_order     = section.get("step_order", "?")
+            group_name     = _sanitize(section.get("group_name", "—"), 80)
+            consensus_type = section.get("consensus_type", "OR")
+            votes_required = section.get("votes_required")
+            votes_cast     = section.get("votes_cast")
+            step_status    = section.get("step_status", "")
+            members        = section.get("members", [])
+
+            # Wynik konsensusu
+            consensus_label = "wszyscy muszą zaakceptować (AND)" if consensus_type == "AND" \
+                              else "wystarczy jeden głos (OR)"
+
+            # Status etapu
+            status_color_map = {
+                "approved":   _C_APPROVED,
+                "in_progress": _C_IN_PROGRESS,
+                "pending":    _C_NEUTRAL,
+            }
+            step_status_color = status_color_map.get(step_status, _C_NEUTRAL)
+            step_status_disp = {
+                "approved":    "zaliczony",
+                "in_progress": "w toku",
+                "pending":     "oczekuje",
+                "cancelled":   "anulowany",
+            }.get(step_status, step_status)
+
+            # Wynik głosowania
+            if votes_required is not None and votes_cast is not None:
+                wynik_str = f"{votes_cast}/{votes_required}"
+            else:
+                wynik_str = "—"
+
+            # Nagłówek sekcji etapu
+            story.append(Paragraph(
+                f'Etap {step_order} — <b>{group_name}</b> · '
+                f'<font color="{step_status_color}">{step_status_disp}</font> · '
+                f'Konsensus: {consensus_label} · Wynik: <b>{wynik_str}</b>',
+                _s("ah_step_hdr", fontSize=8, leading=12,
+                   textColor=colors.HexColor(_C_NEUTRAL),
+                   spaceBefore=4, spaceAfter=2),
+            ))
+
+            if not members:
+                story.append(Paragraph(
+                    "Brak danych o członkach grupy.",
+                    _s("ah_no_m", fontSize=8, textColor=colors.grey),
+                ))
+                continue
+
+            # Tabela członków
+            def _vh(t: str) -> Paragraph:
+                return Paragraph(
+                    f'<font color="{_C_HEADER_FG}"><b>{t}</b></font>',
+                    _s(f"ah_vh_{t[:4]}", fontSize=8, leading=10,
+                       fontName="DejaVu-Bold"),
+                )
+
+            vote_rows: list[list[Any]] = [[
+                _vh("Imię i nazwisko"),
+                _vh("Decyzja"),
+                _vh("Data decyzji"),
+            ]]
+
+            for m in members:
+                vote      = m.get("vote")       # "accepted" | "rejected" | None
+                voted_at  = m.get("voted_at_str")
+                full_name = _sanitize(m.get("full_name", "?"), 60)
+
+                if vote == "accepted":
+                    decyzja_str   = "Zaakceptował"
+                    decyzja_color = _C_APPROVED
+                    symbol        = "✓"
+                elif vote == "rejected":
+                    decyzja_str   = "Odrzucił"
+                    decyzja_color = _C_REJECTED
+                    symbol        = "✗"
+                else:
+                    decyzja_str   = "Oczekuje / nie głosował"
+                    decyzja_color = _C_NEUTRAL
+                    symbol        = "–"
+
+                vote_rows.append([
+                    Paragraph(full_name, S_CELL),
+                    Paragraph(
+                        f'<font color="{decyzja_color}"><b>{symbol} {decyzja_str}</b></font>',
+                        S_CELL_B,
+                    ),
+                    Paragraph(_fmt_dt(voted_at) if voted_at else "—", S_CELL),
+                ])
+
+            vote_table = Table(
+                vote_rows,
+                colWidths=[7 * cm, 4.5 * cm, 6 * cm],
+                repeatRows=1,
+            )
+            vote_table.setStyle(TableStyle([
+                ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor(_C_HEADER_BG)),
+                ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",     (0, 0), (-1, 0), "DejaVu-Bold"),
+                ("FONTSIZE",     (0, 0), (-1, -1), 8),
+                ("TOPPADDING",   (0, 0), (-1, 0), 3),
+                ("BOTTOMPADDING",(0, 0), (-1, 0), 3),
+                ("TOPPADDING",   (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING",(0, 1), (-1, -1), 3),
+                ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID",         (0, 0), (-1, -1), 0.3,
+                 colors.HexColor("#DDDDDD")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor(_C_ROW_EVEN)]),
+            ]))
+            story.append(vote_table)
+            story.append(Spacer(1, 3 * mm))
+
     story.append(Spacer(1, 6 * mm))
     story.append(HRFlowable(
         width="100%", thickness=0.5,
@@ -710,14 +826,13 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
     # 4. STOPKA
     # ═══════════════════════════════════════════════════════════════════════════
     story.append(Paragraph(
-        f"Dokument wygenerowany: {_fmt_dt(ctx.generated_at)}  UTC  |  "
+        f"Dokument wygenerowany: {_fmt_dt(ctx.generated_at)} UTC  |  "
         f"System Windykacja {_APP_VERSION}  |  "
         f"ID obiegu: {ctx.id_instance}  |  "
         f"Wygenerował: {_sanitize(ctx.requested_by, 50)}",
         S_MALY,
     ))
 
-    # ── Buduj PDF ─────────────────────────────────────────────────────────────
     doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
     return buffer.getvalue()
 
@@ -731,7 +846,7 @@ async def _fetch_logo_path(redis: Redis, db: AsyncSession) -> Optional[str]:
     Pobiera ścieżkę logo. Kolejność:
     1. SystemConfig 'faktury.pdf_logo_path' (przez Redis cache)
     2. Fallback settings.LOGO_PATH z .env
-    3. None — PDF bez logo (nie błąd, graceful degradation)
+    3. None — PDF bez logo (graceful degradation)
     """
     try:
         logo_path_cfg = await get_config_value(
@@ -743,22 +858,18 @@ async def _fetch_logo_path(redis: Redis, db: AsyncSession) -> Optional[str]:
                 return str(p)
             logger.warning(
                 orjson.dumps({
-                    "event":  "logo_path_missing_on_disk",
-                    "path":   str(p),
-                    "key":    "faktury.pdf_logo_path",
+                    "event": "logo_path_missing_on_disk",
+                    "path":  str(p),
+                    "key":   "faktury.pdf_logo_path",
                 }).decode()
             )
     except Exception as exc:
         logger.warning(
-            orjson.dumps({
-                "event": "logo_config_read_error",
-                "error": str(exc),
-            }).decode()
+            orjson.dumps({"event": "logo_config_read_error", "error": str(exc)}).decode()
         )
 
     try:
-        settings  = get_settings()
-        env_logo  = getattr(settings, "LOGO_PATH", None)
+        env_logo = getattr(get_settings(), "LOGO_PATH", None)
         if env_logo:
             p = Path(env_logo)
             if p.exists() and p.is_file():
@@ -774,15 +885,25 @@ async def _fetch_instance_meta(
     id_instance: int,
 ) -> Optional[dict[str, Any]]:
     """
-    Pobiera metadane instancji obiegu.
-
-    Zwraca dict z kluczami:
-        id_instance, document_title, document_amount, id_source, source_name,
-        status, is_urgent, id_path, path_name, current_step,
-        dispatched_by_username, dispatched_by_fullname,
-        dispatched_at, completed_at, deadline_at
-
+    Pobiera metadane instancji (JOIN na paths, sources, users).
     Zwraca None jeśli instancja nie istnieje.
+
+    Kolejność kolumn w SELECT (12 kolumn, indeksy 0-14):
+      0  id_instance
+      1  document_title
+      2  document_amount
+      3  id_source
+      4  source_name        (ds.source_name)
+      5  status
+      6  is_urgent
+      7  id_path
+      8  path_name          (p.path_name)
+      9  current_step
+      10 Username           (u.Username — dyspozytor)
+      11 FullName           (u.FullName — dyspozytor)
+      12 dispatched_at
+      13 completed_at
+      14 deadline_at
     """
     try:
         row = (await db.execute(
@@ -802,7 +923,10 @@ async def _fetch_instance_meta(
                 f"  u.[FullName], "
                 f"  i.[dispatched_at], "
                 f"  i.[completed_at], "
-                f"  i.[deadline_at] "
+                f"  fah.[NUMER]            AS fakir_numer, "
+                f"  fah.[NazwaKontrahenta] AS fakir_kontrahent, "
+                f"  fah.[WARTOSC_BRUTTO]   AS fakir_brutto, "
+                f"  i.[id_document]        AS ksef_id "
                 f"FROM [{_SCHEMA}].[skw_document_approval_instances] i "
                 f"LEFT JOIN [{_SCHEMA}].[skw_document_sources] ds "
                 f"  ON ds.[id_source] = i.[id_source] "
@@ -810,6 +934,9 @@ async def _fetch_instance_meta(
                 f"  ON p.[id_path] = i.[id_path] "
                 f"LEFT JOIN [{_SCHEMA}].[skw_Users] u "
                 f"  ON u.[ID_USER] = i.[dispatched_by] "
+                f"LEFT JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah "
+                f"  ON ds.[source_name] = N'fakir' "
+                f"  AND fah.[KSEF_ID] = i.[id_document] "
                 f"WHERE i.[id_instance] = :iid"
             ),
             {"iid": id_instance},
@@ -844,7 +971,10 @@ async def _fetch_instance_meta(
         "dispatched_by_fullname":  str(row[11]) if row[11] else None,
         "dispatched_at":           row[12].isoformat() if row[12] else None,
         "completed_at":            row[13].isoformat() if row[13] else None,
-        "deadline_at":             row[14].isoformat() if row[14] else None,
+        "fakir_numer":             str(row[14]) if row[14] else None,
+        "fakir_kontrahent":        str(row[15]) if row[15] else None,
+        "fakir_brutto":            float(row[16]) if row[16] is not None else None,
+        "fakir_ksef_id":           str(row[17]) if row[17] else None,
     }
 
 
@@ -855,11 +985,25 @@ async def _fetch_log_entries(
     """
     Pobiera WSZYSTKIE wpisy approval_log dla instancji (łącznie z is_voided=1).
 
-    LEFT JOIN na skw_approval_groups w celu pobrania nazwy grupy.
-    LEFT JOIN na skw_Users w celu pobrania FullName aktora.
+    WAŻNE: skw_approval_log NIE MA kolumny [comment].
+    Komentarze są w polu [details] jako JSON (klucz "comment").
+    SELECT pobiera dokładnie 12 kolumn — mapowanie r[0]..r[11] poniżej.
 
-    Zwraca listę dict (plain), posortowaną chronologicznie (logged_at ASC).
-    Przy błędzie DB: loguje error i zwraca [] (nie crashuje generowania PDF).
+    Kolejność kolumn (12 kolumn, indeksy 0-11):
+      0  id_log
+      1  username_snapshot
+      2  FullName           (LEFT JOIN skw_Users)
+      3  action
+      4  step_order_snapshot
+      5  id_group_snapshot
+      6  group_name         (LEFT JOIN skw_approval_groups)
+      7  votes_before
+      8  votes_after
+      9  is_voided
+      10 details            (NVARCHAR MAX — JSON string lub NULL)
+      11 logged_at
+
+    Zwraca [] przy błędzie DB — nie crashuje generowania PDF.
     """
     try:
         rows = (await db.execute(
@@ -875,7 +1019,6 @@ async def _fetch_log_entries(
                 f"  l.[votes_before], "
                 f"  l.[votes_after], "
                 f"  l.[is_voided], "
-                f"  l.[comment], "
                 f"  l.[details], "
                 f"  l.[logged_at] "
                 f"FROM [{_SCHEMA}].[skw_approval_log] l "
@@ -884,7 +1027,7 @@ async def _fetch_log_entries(
                 f"LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g "
                 f"  ON g.[id_group] = l.[id_group_snapshot] "
                 f"WHERE l.[id_instance] = :iid "
-                f"ORDER BY l.[logged_at] ASC"
+                f"ORDER BY l.[logged_at] ASC, l.[id_log] ASC"
             ),
             {"iid": id_instance},
         )).fetchall()
@@ -902,13 +1045,14 @@ async def _fetch_log_entries(
 
     entries: list[dict[str, Any]] = []
     for r in rows:
-        # Parsuj details JSON (może być None, poprawny JSON lub śmieci)
+        # r[10] = details — parsuj JSON
         details_parsed: Optional[dict] = None
-        if r[11]:
+        if r[10]:
             try:
-                details_parsed = json.loads(r[11])
+                details_parsed = json.loads(r[10])
             except Exception:
-                details_parsed = {"raw": str(r[11])[:200]}
+                # Nie JSON — opakuj jako raw string dla diagnostyki
+                details_parsed = {"raw": str(r[10])[:200]}
 
         entries.append({
             "id_log":              r[0],
@@ -921,13 +1065,136 @@ async def _fetch_log_entries(
             "votes_before":        r[7],
             "votes_after":         r[8],
             "is_voided":           bool(r[9]),
-            "comment":             str(r[10]) if r[10] else None,
-            "details":             details_parsed,
-            "logged_at_str":       r[12].isoformat() if r[12] else None,
+            "details":             details_parsed,   # dict lub None — nigdy raw string
+            "logged_at_str":       r[11].isoformat() if r[11] else None,
         })
 
     return entries
 
+async def _fetch_voting_summary(
+    db: AsyncSession,
+    id_instance: int,
+) -> list[dict[str, Any]]:
+    """
+    Pobiera podsumowanie głosowania per (step_order, id_group).
+
+    Strategia: najpierw pobiera unikalne kombinacje (step_order, id_group,
+    consensus_snapshot, votes_before→max, votes_after→max) z approval_log,
+    następnie dla każdej grupy pobiera jej wszystkich członków i sprawdza
+    czy zagłosowali (LEFT JOIN approval_log is_voided=0).
+
+    Uwzględnia wszystkie iteracje (rollbacki tworzą nowe wpisy z is_voided=0
+    po resecie, poprzednie mają is_voided=1).
+
+    Zwraca [] przy błędzie — nie crashuje generowania PDF.
+    """
+    try:
+        # Krok 1: unikalne etapy które miały akcje accepted/rejected
+        steps_rows = (await db.execute(
+            text(
+                f"SELECT DISTINCT "
+                f"  l.[step_order_snapshot], "
+                f"  l.[id_group_snapshot], "
+                f"  l.[consensus_snapshot], "
+                f"  g.[group_name], "
+                f"  s.[votes_required], "
+                f"  s.[votes_cast], "
+                f"  s.[status] AS step_status "
+                f"FROM [{_SCHEMA}].[skw_approval_log] l "
+                f"LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g "
+                f"  ON g.[id_group] = l.[id_group_snapshot] "
+                f"LEFT JOIN [{_SCHEMA}].[skw_document_approval_snapshot_steps] s "
+                f"  ON s.[id_instance] = l.[id_instance] "
+                f"  AND s.[step_order] = l.[step_order_snapshot] "
+                f"WHERE l.[id_instance] = :iid "
+                f"  AND l.[action] IN (N'accepted', N'rejected', N'dispatched', "
+                f"                     N'approved', N'rollback', N'cancelled') "
+                f"  AND l.[id_group_snapshot] IS NOT NULL "
+                f"ORDER BY l.[step_order_snapshot] ASC"
+            ),
+            {"iid": id_instance},
+        )).fetchall()
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event":       "fetch_voting_summary_steps_error",
+                "id_instance": id_instance,
+                "error":       str(exc),
+            }).decode(),
+            exc_info=True,
+        )
+        return []
+
+    result: list[dict[str, Any]] = []
+
+    for step_row in steps_rows:
+        step_order     = step_row[0]
+        id_group       = step_row[1]
+        consensus_snap = step_row[2] or "OR"
+        group_name     = step_row[3] or f"Grupa #{id_group}"
+        votes_required = step_row[4]
+        votes_cast     = step_row[5]
+        step_status    = step_row[6] or "unknown"
+
+        if not id_group:
+            continue
+
+        # Krok 2: członkowie grupy + ich głos na tym etapie (is_voided=0)
+        try:
+            members_rows = (await db.execute(
+                text(
+                    f"SELECT "
+                    f"  u.[FullName], "
+                    f"  u.[Username], "
+                    f"  l.[action]    AS vote, "
+                    f"  l.[logged_at] AS voted_at, "
+                    f"  l.[is_voided] "
+                    f"FROM [{_SCHEMA}].[skw_approval_group_members] gm "
+                    f"JOIN [{_SCHEMA}].[skw_Users] u "
+                    f"  ON u.[ID_USER] = gm.[id_user] "
+                    f"LEFT JOIN [{_SCHEMA}].[skw_approval_log] l "
+                    f"  ON l.[id_instance]         = :iid "
+                    f"  AND l.[id_user]             = gm.[id_user] "
+                    f"  AND l.[step_order_snapshot] = :step "
+                    f"  AND l.[action]              IN (N'accepted', N'rejected') "
+                    f"  AND l.[is_voided]           = 0 "
+                    f"WHERE gm.[id_group] = :grp "
+                    f"ORDER BY u.[FullName] ASC"
+                ),
+                {"iid": id_instance, "step": step_order, "grp": id_group},
+            )).fetchall()
+        except Exception as exc:
+            logger.warning(
+                orjson.dumps({
+                    "event":      "fetch_voting_summary_members_error",
+                    "id_instance": id_instance,
+                    "step_order":  step_order,
+                    "id_group":    id_group,
+                    "error":       str(exc),
+                }).decode()
+            )
+            members_rows = []
+
+        members: list[dict[str, Any]] = []
+        for m in members_rows:
+            members.append({
+                "full_name": str(m[0]) if m[0] else str(m[1]) if m[1] else "?",
+                "username":  str(m[1]) if m[1] else "?",
+                "vote":      str(m[2]) if m[2] else None,   # "accepted"|"rejected"|None
+                "voted_at_str": m[3].isoformat() if m[3] else None,
+            })
+
+        result.append({
+            "step_order":     step_order,
+            "group_name":     group_name,
+            "consensus_type": consensus_snap,
+            "votes_required": votes_required,
+            "votes_cast":     votes_cast,
+            "step_status":    step_status,
+            "members":        members,
+        })
+
+    return result
 
 # =============================================================================
 # Publiczny punkt wejścia — wywoływany z routera
@@ -935,27 +1202,27 @@ async def _fetch_log_entries(
 
 async def generate_approval_history_pdf(
     *,
-    db:          AsyncSession,
-    redis:       Redis,
-    id_instance: int,
+    db:           AsyncSession,
+    redis:        Redis,
+    id_instance:  int,
     requested_by: str = "system",
 ) -> bytes:
     """
     Generuje PDF historii obiegu dokumentu dla instancji `id_instance`.
 
     Przepływ:
-        1. Sprawdź cache Redis (klucz zawiera hash updated_at instancji)
-        2. Pobierz metadane instancji (+ JOIN na paths, sources, users)
-        3. Pobierz wpisy approval_log (+ JOIN na groups, users)
+        1. Pobierz metadane instancji (sprawdza 404)
+        2. Sprawdź cache Redis
+        3. Pobierz wpisy approval_log (ALL — łącznie z is_voided=1)
         4. Pobierz ścieżkę logo
-        5. Zbuduj _PDFKontekst (plain data)
-        6. Uruchom _build_pdf_sync() w thread executor
-        7. Zapisz wynik do cache Redis
-        8. Zaloguj metryki (rozmiar KB, czas ms, liczba wpisów)
+        5. Zbuduj _PDFKontekst (plain data, thread-safe)
+        6. Uruchom _build_pdf_sync() w run_in_executor (nie blokuje event loop)
+        7. Zapisz do cache Redis
+        8. Zaloguj metryki
 
     Args:
         db:           AsyncSession SQLAlchemy
-        redis:        Klient Redis (cache PDF + SystemConfig)
+        redis:        Klient Redis
         id_instance:  ID instancji obiegu
         requested_by: Username osoby żądającej (do stopki PDF + logów)
 
@@ -964,7 +1231,7 @@ async def generate_approval_history_pdf(
 
     Raises:
         HTTPException 404: instancja nie istnieje
-        HTTPException 500: błąd generowania PDF (po zalogowaniu)
+        HTTPException 500: błąd generowania PDF
     """
     from fastapi import HTTPException
 
@@ -994,8 +1261,9 @@ async def generate_approval_history_pdf(
         )
 
     # ── Krok 2: Cache Redis ────────────────────────────────────────────────────
-    # Klucz cache zawiera hash status+completed_at — inwalidacja po zmianie stanu.
-    # Nie używamy samego id_instance, bo historia może rosnąć (nowe wpisy).
+    # Fingerprint: status + completed_at + dispatched_at.
+    # Zakończone obiegi (approved/cancelled) cache'owane na pełne TTL.
+    # In_progress: inwalidacja przy zmianie stanu (completed_at=None → klucz stały).
     cache_fingerprint = hashlib.md5(
         f"{id_instance}:{meta['status']}:{meta['completed_at']}:{meta['dispatched_at']}".encode()
     ).hexdigest()[:12]
@@ -1014,7 +1282,6 @@ async def generate_approval_history_pdf(
             )
             return cached
     except Exception as exc:
-        # Cache niedostępny — kontynuujemy bez cache (non-blocking)
         logger.warning(
             orjson.dumps({
                 "event":       "approval_history_pdf_cache_read_error",
@@ -1032,8 +1299,9 @@ async def generate_approval_history_pdf(
     )
 
     # ── Krok 3: Wpisy logu ────────────────────────────────────────────────────
-    log_entries = await _fetch_log_entries(db, id_instance)
-    voided_count = sum(1 for e in log_entries if e.get("is_voided"))
+    log_entries    = await _fetch_log_entries(db, id_instance)
+    voided_count   = sum(1 for e in log_entries if e.get("is_voided"))
+    voting_summary = await _fetch_voting_summary(db, id_instance)
 
     logger.info(
         orjson.dumps({
@@ -1066,8 +1334,12 @@ async def generate_approval_history_pdf(
         dispatched_by_fullname   = meta["dispatched_by_fullname"],
         dispatched_at            = meta["dispatched_at"],
         completed_at             = meta["completed_at"],
-        deadline_at              = meta["deadline_at"],
+        fakir_numer              = meta.get("fakir_numer"),
+        fakir_kontrahent         = meta.get("fakir_kontrahent"),
+        fakir_brutto             = meta.get("fakir_brutto"),
+        fakir_ksef_id            = meta.get("fakir_ksef_id"),
         log_entries              = log_entries,
+        voting_summary           = voting_summary,
         logo_path                = logo_path,
         firma_nazwa              = getattr(settings, "COMPANY_NAME", "System Windykacja"),
         firma_nip                = getattr(settings, "COMPANY_NIP", ""),
@@ -1078,8 +1350,6 @@ async def generate_approval_history_pdf(
     )
 
     # ── Krok 6: Generowanie PDF w thread executor ─────────────────────────────
-    # ReportLab jest synchroniczny i CPU-bound.
-    # run_in_executor() przenosi go do thread pool, nie blokuje event loop.
     loop = asyncio.get_running_loop()
     try:
         pdf_bytes: bytes = await loop.run_in_executor(None, _build_pdf_sync, ctx)
@@ -1102,7 +1372,7 @@ async def generate_approval_history_pdf(
     elapsed_ms = round((_time.monotonic() - t_start) * 1000, 1)
     size_kb    = round(len(pdf_bytes) / 1024, 1)
 
-    # ── Krok 7: Zapis do cache Redis ──────────────────────────────────────────
+    # ── Krok 7: Cache Redis ───────────────────────────────────────────────────
     try:
         ttl = int(await get_config_value(
             redis=redis,
@@ -1114,13 +1384,11 @@ async def generate_approval_history_pdf(
             orjson.dumps({
                 "event":       "approval_history_pdf_cached",
                 "id_instance": id_instance,
-                "cache_key":   cache_key,
                 "ttl_s":       ttl,
                 "size_kb":     size_kb,
             }).decode()
         )
     except Exception as exc:
-        # Cache niedostępny — PDF zwracamy mimo to (non-blocking)
         logger.warning(
             orjson.dumps({
                 "event":       "approval_history_pdf_cache_write_error",
@@ -1142,7 +1410,7 @@ async def generate_approval_history_pdf(
             "status":         meta["status"],
             "is_urgent":      meta["is_urgent"],
             "path_name":      meta["path_name"],
-            "cached_key":     cache_key,
+            "cache_key":      cache_key,
         }).decode()
     )
 

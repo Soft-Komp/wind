@@ -367,19 +367,111 @@ async def update_step(id_path: int, id_step: int, body: StepPatchBody,
     await db.commit()
     return {"id_step": id_step, "updated": True}
 
-
 @router.delete("/{id_path}/steps/{id_step}", summary="Usun krok ze sciezki",
                dependencies=[require_permission("approval.manage_paths")])
 async def delete_step(id_path: int, id_step: int,
                       current_user: CurrentUser, db: DB, redis: RedisClient):
     await _check_module_enabled(db, redis)
-    result = await db.execute(
+
+    # ── Krok 1: Sprawdź czy krok istnieje i pobierz jego step_order ───────────
+    existing = (await db.execute(
+        text(f"SELECT [step_order] FROM [{_SCHEMA}].[skw_approval_path_steps] "
+             f"WHERE [id_step]=:s AND [id_path]=:p"),
+        {"s": id_step, "p": id_path},
+    )).fetchone()
+
+    if not existing:
+        raise HTTPException(status_code=404, detail="Krok nie istnieje.")
+
+    deleted_order = existing[0]
+
+    # ── Krok 2: Sprawdź czy ścieżka nie ma aktywnych obiegów ─────────────────
+    # Globalna definicja ścieżki (approval_path_steps) NIE jest modyfikowana
+    # podczas aktywnych obiegów — snapshot już istnieje i jest niezależny.
+    # Jednak zmiana definicji ścieżki przy aktywnych obiegach byłaby myląca
+    # dla adminów. Logujemy ostrzeżenie, ale nie blokujemy — decyzja biznesowa.
+    active_count = (await db.execute(
+        text(
+            f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_document_approval_instances] "
+            f"WHERE [id_path]=:p "
+            f"  AND [status] NOT IN (N'approved', N'cancelled', N'rejected')"
+        ),
+        {"p": id_path},
+    )).scalar() or 0
+
+    if active_count > 0:
+        logger.warning(
+            "delete_step | id_path=%d id_step=%d | "
+            "UWAGA: %d aktywnych obiegow uzywa tej sciezki — "
+            "snapshot jest niezalezny wiec istniejace obiegi nie sa dotkniate, "
+            "ale definicja sciezki zmienia sie dla NOWYCH dispatchow",
+            id_path, id_step, active_count,
+        )
+
+    # ── Krok 3: Usuń krok ─────────────────────────────────────────────────────
+    await db.execute(
         text(f"DELETE FROM [{_SCHEMA}].[skw_approval_path_steps] "
              f"WHERE [id_step]=:s AND [id_path]=:p"),
         {"s": id_step, "p": id_path},
     )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Krok nie istnieje.")
-    await db.commit()
-    return {"id_step": id_step, "deleted": True}
 
+    # ── Krok 4: Pobierz pozostałe kroki posortowane po step_order ─────────────
+    remaining = (await db.execute(
+        text(
+            f"SELECT [id_step], [step_order] "
+            f"FROM [{_SCHEMA}].[skw_approval_path_steps] "
+            f"WHERE [id_path]=:p "
+            f"ORDER BY [step_order] ASC"
+        ),
+        {"p": id_path},
+    )).fetchall()
+
+    # ── Krok 5: Renumeracja — faza 1: wartości tymczasowe ujemne ─────────────
+    # Identyczna technika jak w reorder — unika kolizji UNIQUE(id_path, step_order)
+    # podczas przejścia np. [1,3] → [1,2]
+    renumbered = []
+    if remaining:
+        for row in remaining:
+            await db.execute(
+                text(
+                    f"UPDATE [{_SCHEMA}].[skw_approval_path_steps] "
+                    f"SET [step_order] = -[step_order] "
+                    f"WHERE [id_step]=:s AND [id_path]=:p"
+                ),
+                {"s": row[0], "p": id_path},
+            )
+
+        # ── Krok 6: Renumeracja — faza 2: docelowe wartości 1,2,3... ─────────
+        for new_order, row in enumerate(remaining, start=1):
+            await db.execute(
+                text(
+                    f"UPDATE [{_SCHEMA}].[skw_approval_path_steps] "
+                    f"SET [step_order]=:o "
+                    f"WHERE [id_step]=:s AND [id_path]=:p"
+                ),
+                {"o": new_order, "s": row[0], "p": id_path},
+            )
+            renumbered.append({
+                "id_step":         row[0],
+                "old_step_order":  row[1],
+                "new_step_order":  new_order,
+            })
+
+    # ── Krok 7: Commit ────────────────────────────────────────────────────────
+    await db.commit()
+
+    logger.info(
+        "delete_step | OK | id_path=%d id_step=%d deleted_order=%d "
+        "remaining=%d renumbered=%d active_instances=%d",
+        id_path, id_step, deleted_order,
+        len(remaining), len(renumbered), active_count,
+    )
+
+    return {
+        "id_step":          id_step,
+        "deleted":          True,
+        "deleted_order":    deleted_order,
+        "steps_remaining":  len(remaining),
+        "renumbered":       renumbered,
+        "active_instances_warning": active_count > 0,
+    }

@@ -23,7 +23,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from app.schemas.common import BaseResponse, dt_utc
@@ -245,6 +245,422 @@ async def get_my_queue(
         "delegated_queue": delegated,
         "total_own":       len(own),
         "total_delegated": len(delegated),
+    }
+
+
+    # Whitelist sortowania — ochrona przed SQL injection
+_MY_HISTORY_SORT_FIELDS = {
+    "last_action_at":       "cla.[last_action_at]",
+    "instance_created_at":  "i.[created_at]",
+    "completed_at":         "i.[completed_at]",
+    "fakir_brutto":         "fah.[WARTOSC_BRUTTO]",
+    "status":               "i.[status]",
+    "is_urgent":            "i.[is_urgent]",
+}
+
+_MY_HISTORY_ALLOWED_STATUSES = frozenset({
+    "pending_dispatch", "in_progress", "approved", "rejected", "cancelled",
+})
+
+_MY_HISTORY_ALLOWED_ACTIONS = frozenset({
+    "accepted", "rollback", "rejected", "forwarded",
+    "send_to_group", "cancelled", "dispatched",
+})
+
+
+@router.get(
+    "/my-history",
+    summary="Historia moich dokumentow w obiegu",
+    description=(
+        "Wszystkie instancje obiegu w ktorych zalogowany uzytkownik wykonal "
+        "jakakolwiek akcje merytoryczna. Dokumenty znikaja z `my-queue` po "
+        "zaakceptowaniu — ten endpoint pozwala do nich wrocic i sprawdzic "
+        "aktualny status calego obiegu. "
+        "\n\n**Filtry:** "
+        "`status` — status instancji (pending_dispatch|in_progress|approved|rejected|cancelled). "
+        "`my_action` — tylko konkretna akcja usera (accepted|rollback|rejected|forwarded|send_to_group|cancelled|dispatched). "
+        "`id_source` — zrodlo dokumentu. "
+        "`id_path` — sciezka akceptacyjna. "
+        "`id_category` — kategoria dokumentu. "
+        "`is_urgent` — tylko pilne (true/false). "
+        "`search` — wyszukiwanie po numerze faktury lub nazwie kontrahenta (LIKE). "
+        "`amount_min` / `amount_max` — zakres kwoty brutto faktury. "
+        "`action_date_from` / `action_date_to` — zakres dat MOJEJ ostatniej akcji. "
+        "`instance_date_from` / `instance_date_to` — zakres dat utworzenia instancji. "
+        "`only_completed` — tylko zakonczone (approved|rejected|cancelled). "
+        "`only_active` — tylko aktywne (in_progress|pending_dispatch). "
+        "\n\n**Sortowanie:** `sort_by` (last_action_at|instance_created_at|completed_at|fakir_brutto|status|is_urgent), "
+        "`sort_dir` (asc|desc, domyslnie desc). "
+        "\n\n**Paginacja:** `page`, `per_page` (max 100). "
+        "\n\nWymaga: `approval.accept`."
+    ),
+    dependencies=[require_permission("approval.accept")],
+)
+async def get_my_history(
+    current_user: CurrentUser,
+    db:           DB,
+    redis:        RedisClient,
+    # ── Filtry podstawowe (zgodne z list_all_instances) ──────────────────────
+    status_filter: Optional[str] = Query(
+        None,
+        alias="status",
+        description="Status instancji: pending_dispatch|in_progress|approved|rejected|cancelled",
+    ),
+    id_source: Optional[int] = Query(
+        None, gt=0, description="ID zrodla dokumentu",
+    ),
+    id_path: Optional[int] = Query(
+        None, gt=0, description="ID sciezki akceptacyjnej",
+    ),
+    id_category: Optional[int] = Query(
+        None, gt=0, description="ID kategorii dokumentu",
+    ),
+    is_urgent: Optional[bool] = Query(
+        None, description="Filtr: tylko pilne (true) lub niepilne (false)",
+    ),
+    # ── Filtry zaawansowane — specyficzne dla historii ────────────────────────
+    my_action: Optional[str] = Query(
+        None,
+        description=(
+            "Filtr po MOJEJ akcji: accepted|rollback|rejected|forwarded"
+            "|send_to_group|cancelled|dispatched"
+        ),
+    ),
+    search: Optional[str] = Query(
+        None,
+        min_length=2,
+        max_length=100,
+        description="Wyszukiwanie po numerze faktury lub nazwie kontrahenta (LIKE %...%)",
+    ),
+    id_document: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=100,
+        description="Filtr po dokladnym ID dokumentu (np. numer KSeF lub klucz WAPRO)",
+    ),
+    document_title: Optional[str] = Query(
+        None,
+        min_length=2,
+        max_length=200,
+        description="Wyszukiwanie po tytule dokumentu z instancji (LIKE %...%)",
+    ),
+    amount_min: Optional[float] = Query(
+        None, ge=0, description="Minimalna kwota brutto faktury",
+    ),
+    amount_max: Optional[float] = Query(
+        None, ge=0, description="Maksymalna kwota brutto faktury",
+    ),
+    action_date_from: Optional[str] = Query(
+        None, description="Moja akcja od (YYYY-MM-DD)",
+    ),
+    action_date_to: Optional[str] = Query(
+        None, description="Moja akcja do (YYYY-MM-DD)",
+    ),
+    instance_date_from: Optional[str] = Query(
+        None, description="Instancja utworzona od (YYYY-MM-DD)",
+    ),
+    instance_date_to: Optional[str] = Query(
+        None, description="Instancja utworzona do (YYYY-MM-DD)",
+    ),
+    only_completed: bool = Query(
+        False,
+        description="Tylko zakonczone obiegi (approved|rejected|cancelled). "
+                    "Nadpisuje filtr `status`.",
+    ),
+    only_active: bool = Query(
+        False,
+        description="Tylko aktywne obiegi (in_progress|pending_dispatch). "
+                    "Nadpisuje filtr `status`. Wyklucza sie z only_completed.",
+    ),
+    # ── Sortowanie ────────────────────────────────────────────────────────────
+    sort_by: str = Query(
+        "last_action_at",
+        description="Pole sortowania: last_action_at|instance_created_at|completed_at"
+                    "|fakir_brutto|status|is_urgent",
+    ),
+    sort_dir: str = Query(
+        "desc",
+        pattern="^(asc|desc)$",
+        description="Kierunek sortowania: asc|desc",
+    ),
+    # ── Paginacja ─────────────────────────────────────────────────────────────
+    page:     int = Query(1,  ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+) -> dict:
+    await _check_module_enabled(db, redis)
+
+    user_id = current_user.id_user
+
+    # ── Walidacja parametrów wejściowych ─────────────────────────────────────
+    if only_completed and only_active:
+        raise HTTPException(
+            status_code=422,
+            detail="Parametry only_completed i only_active wykluczaja sie nawzajem.",
+        )
+
+    if status_filter and status_filter not in _MY_HISTORY_ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Nieprawidlowy status '{status_filter}'. "
+                f"Dozwolone: {sorted(_MY_HISTORY_ALLOWED_STATUSES)}"
+            ),
+        )
+
+    if my_action and my_action not in _MY_HISTORY_ALLOWED_ACTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Nieprawidlowa akcja '{my_action}'. "
+                f"Dozwolone: {sorted(_MY_HISTORY_ALLOWED_ACTIONS)}"
+            ),
+        )
+
+    if sort_by not in _MY_HISTORY_SORT_FIELDS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Nieprawidlowe pole sortowania '{sort_by}'. "
+                f"Dozwolone: {sorted(_MY_HISTORY_SORT_FIELDS)}"
+            ),
+        )
+
+    # ── Budowanie warunków WHERE dla CTE (akcje usera) ────────────────────────
+    log_where = [
+        "l.[id_user] = :user_id",
+        "l.[is_voided] = 0",
+    ]
+    params: dict = {
+        "user_id": user_id,
+        "offset":  (page - 1) * per_page,
+        "limit":   per_page,
+    }
+
+    # Filtr po konkretnej akcji usera
+    if my_action:
+        log_where.append("l.[action] = :my_action")
+        params["my_action"] = my_action
+    else:
+        # Domyślnie pomijamy systemowe — tylko merytoryczne
+        log_where.append(
+            "l.[action] IN (N'accepted', N'rollback', N'rejected', N'forwarded', "
+            "               N'send_to_group', N'cancelled', N'dispatched')"
+        )
+
+    # Zakres dat MOJEJ akcji
+    if action_date_from:
+        log_where.append("l.[logged_at] >= :action_date_from")
+        params["action_date_from"] = action_date_from
+
+    if action_date_to:
+        log_where.append("l.[logged_at] <= :action_date_to")
+        params["action_date_to"] = f"{action_date_to} 23:59:59"
+
+    log_where_sql = " AND ".join(log_where)
+
+    # ── Warunki WHERE dla instancji ───────────────────────────────────────────
+    inst_where = []
+
+    # only_completed / only_active nadpisują status
+    if only_completed:
+        inst_where.append("i.[status] IN (N'approved', N'rejected', N'cancelled')")
+    elif only_active:
+        inst_where.append("i.[status] IN (N'in_progress', N'pending_dispatch')")
+    elif status_filter:
+        inst_where.append("i.[status] = :status_filter")
+        params["status_filter"] = status_filter
+
+    if id_source is not None:
+        inst_where.append("i.[id_source] = :id_source")
+        params["id_source"] = id_source
+
+    if id_path is not None:
+        inst_where.append("i.[id_path] = :id_path")
+        params["id_path"] = id_path
+
+    if id_category is not None:
+        inst_where.append("i.[id_category] = :id_category")
+        params["id_category"] = id_category
+
+    if is_urgent is not None:
+        inst_where.append("i.[is_urgent] = :is_urgent")
+        params["is_urgent"] = 1 if is_urgent else 0
+
+    if instance_date_from:
+        inst_where.append("i.[created_at] >= :inst_date_from")
+        params["inst_date_from"] = instance_date_from
+
+    if instance_date_to:
+        inst_where.append("i.[created_at] <= :inst_date_to")
+        params["inst_date_to"] = f"{instance_date_to} 23:59:59"
+
+    # Wyszukiwanie po numerze faktury lub nazwie kontrahenta
+    if search:
+        inst_where.append(
+            "(fah.[NUMER] LIKE :search OR fah.[NazwaKontrahenta] LIKE :search)"
+        )
+        params["search"] = f"%{search}%"
+
+    # Filtr po dokładnym ID dokumentu
+    if id_document is not None:
+        inst_where.append("i.[id_document] = :id_document")
+        params["id_document"] = id_document.strip()
+
+    # Wyszukiwanie po tytule dokumentu (pole z instancji, nie z WAPRO)
+    if document_title is not None:
+        inst_where.append("i.[document_title] LIKE :document_title")
+        params["document_title"] = f"%{document_title}%"
+
+    # Zakres kwoty
+    if amount_min is not None:
+        inst_where.append("fah.[WARTOSC_BRUTTO] >= :amount_min")
+        params["amount_min"] = amount_min
+
+    if amount_max is not None:
+        inst_where.append("fah.[WARTOSC_BRUTTO] <= :amount_max")
+        params["amount_max"] = amount_max
+
+    # Złożony WHERE — łączymy warunki instancji
+    inst_where_sql = (
+        "AND " + " AND ".join(inst_where) if inst_where else ""
+    )
+
+    # Kolumna i kierunek sortowania — whitelist, zero ryzyka SQL injection
+    sort_col = _MY_HISTORY_SORT_FIELDS[sort_by]
+    sort_dir_sql = "ASC" if sort_dir == "asc" else "DESC"
+
+    # ── COUNT ─────────────────────────────────────────────────────────────────
+    count_sql = f"""
+        SELECT COUNT(DISTINCT i.[id_instance])
+        FROM [{_SCHEMA}].[skw_document_approval_instances] i
+        JOIN [{_SCHEMA}].[skw_approval_log] l
+          ON l.[id_instance] = i.[id_instance]
+        LEFT JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah
+          ON fah.[KSEF_ID] = i.[id_document]
+        WHERE {log_where_sql}
+        {inst_where_sql}
+    """
+    total = (await db.execute(text(count_sql), params)).scalar() or 0
+
+    # ── Główne zapytanie ──────────────────────────────────────────────────────
+    data_sql = f"""
+        WITH cte_last_action AS (
+            SELECT
+                l.[id_instance],
+                MAX(l.[logged_at]) AS last_action_at,
+                (
+                    SELECT TOP 1 l2.[action]
+                    FROM [{_SCHEMA}].[skw_approval_log] l2
+                    WHERE l2.[id_instance]  = l.[id_instance]
+                      AND l2.[id_user]      = :user_id
+                      AND l2.[is_voided]    = 0
+                    ORDER BY l2.[logged_at] DESC
+                ) AS last_action,
+                COUNT(*) AS my_action_count
+            FROM [{_SCHEMA}].[skw_approval_log] l
+            WHERE {log_where_sql}
+            GROUP BY l.[id_instance]
+        )
+        SELECT
+            i.[id_instance],
+            i.[id_document],
+            i.[id_source],
+            src.[source_name],
+            i.[id_path],
+            p.[path_name],
+            i.[id_category],
+            cat.[category_name],
+            i.[status],
+            i.[current_step],
+            i.[is_urgent],
+            i.[created_at]          AS instance_created_at,
+            i.[completed_at],
+            i.[dispatched_by],
+            u_disp.[FullName]        AS dispatched_by_name,
+            cla.[last_action_at]     AS my_last_action_at,
+            cla.[last_action]        AS my_last_action,
+            cla.[my_action_count],
+            fah.[NUMER]              AS fakir_numer,
+            fah.[WARTOSC_BRUTTO]     AS fakir_brutto,
+            fah.[NazwaKontrahenta]   AS fakir_kontrahent,
+            fah.[DataWystawienia]    AS fakir_data_wyst,
+            fah.[TerminPlatnosci]    AS fakir_termin
+        FROM [{_SCHEMA}].[skw_document_approval_instances] i
+        JOIN cte_last_action cla
+          ON cla.[id_instance] = i.[id_instance]
+        LEFT JOIN [{_SCHEMA}].[skw_document_sources] src
+          ON src.[id_source] = i.[id_source]
+        LEFT JOIN [{_SCHEMA}].[skw_approval_paths] p
+          ON p.[id_path] = i.[id_path]
+        LEFT JOIN [{_SCHEMA}].[skw_document_categories] cat
+          ON cat.[id_category] = i.[id_category]
+        LEFT JOIN [{_SCHEMA}].[skw_Users] u_disp
+          ON u_disp.[ID_USER] = i.[dispatched_by]
+        LEFT JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah
+          ON fah.[KSEF_ID] = i.[id_document]
+        WHERE 1=1
+        {inst_where_sql}
+        ORDER BY {sort_col} {sort_dir_sql}, i.[id_instance] DESC
+        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+    """
+
+    rows = (await db.execute(text(data_sql), params)).fetchall()
+
+    items = []
+    for r in rows:
+        items.append({
+            "id_instance":          r[0],
+            "id_document":          r[1],
+            "id_source":            r[2],
+            "source_name":          r[3],
+            "id_path":              r[4],
+            "path_name":            r[5],
+            "id_category":          r[6],
+            "category_name":        r[7],
+            "status":               r[8],
+            "current_step":         r[9],
+            "is_urgent":            bool(r[10]) if r[10] is not None else False,
+            "instance_created_at":  dt_utc(r[11]),
+            "completed_at":         dt_utc(r[12]),
+            "dispatched_by":        r[13],
+            "dispatched_by_name":   r[14],
+            "my_last_action_at":    dt_utc(r[15]),
+            "my_last_action":       r[16],
+            "my_action_count":      r[17],
+            "fakir_numer":          r[18],
+            "fakir_brutto":         float(r[19]) if r[19] is not None else None,
+            "fakir_kontrahent":     r[20],
+            "fakir_data_wyst":      str(r[21]) if r[21] else None,
+            "fakir_termin":         str(r[22]) if r[22] else None,
+        })
+
+    return {
+        "total":    total,
+        "page":     page,
+        "per_page": per_page,
+        "pages":    max(1, -(-total // per_page)),
+        "data":     items,
+        "filters":  {
+            "status":               status_filter,
+            "my_action":            my_action,
+            "id_document":          id_document,
+            "document_title":       document_title,
+            "id_source":            id_source,
+            "id_path":              id_path,
+            "id_category":          id_category,
+            "is_urgent":            is_urgent,
+            "search":               search,
+            "amount_min":           amount_min,
+            "amount_max":           amount_max,
+            "action_date_from":     action_date_from,
+            "action_date_to":       action_date_to,
+            "instance_date_from":   instance_date_from,
+            "instance_date_to":     instance_date_to,
+            "only_completed":       only_completed,
+            "only_active":          only_active,
+            "sort_by":              sort_by,
+            "sort_dir":             sort_dir,
+        },
     }
 
 
