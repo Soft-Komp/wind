@@ -35,6 +35,8 @@ Zasady operacyjne (wg specyfikacji i aneksu Redis):
 import json
 import logging
 import os
+import orjson
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,8 @@ from fastapi import BackgroundTasks, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.fakir_write import update_kod_statusu
+
 
 from app.core.redis_lock import approval_lock
 from app.db.models.approval.document_approval_instance import (
@@ -808,6 +812,15 @@ async def accept(
                     {"now": now, "i": id_instance},
                 )
 
+
+                await db.execute(
+                    text(
+                        f"UPDATE [{_SCHEMA}].[BUF_DOKUMENT] "
+                        f"SET [KOD_STATUSU] = 'K' "
+                        f"WHERE [KSEF_ID] = :i"
+                    ),
+                    {"i": id_document},
+                )
                 await _insert_approval_log(
                     db,
                     id_instance=id_instance,
@@ -819,10 +832,17 @@ async def accept(
                     ip_address=ip_address,
                 )
 
-        # ── Krok 10: Commit ──────────────────────────────────────────────────────────────────────────
-        if approved_terminal:
-            await _sync_faktura_akceptacja_status(db, id_document, "approved")
+        # ── Krok 10: Commit ──────────────────────────────────────────────────
         await db.commit()
+
+    # ── NOWE: sync KOD_STATUSU w WAPRO — w tle, PO commicie, poza lockiem ─────
+    # Nie blokuje odpowiedzi do frontu. Bledy tylko logowane (best-effort).
+    if approved_terminal and background_tasks:
+        background_tasks.add_task(
+            _fakir_kod_statusu_sync_bg,
+            id_instance=id_instance,
+            id_document=id_document,
+        )
 
     # ── Krok 11: Powiadomienia (background, poza lockiem) ─────────────────────
     _jsonl_log("accepted", {
@@ -1970,4 +1990,35 @@ async def _sync_faktura_akceptacja_status(
         logger.warning(
             "_sync_faktura_akceptacja_status | BLAD UPDATE id_document=%r exc=%s",
             id_document, exc,
+        )
+
+async def _fakir_kod_statusu_sync_bg(*, id_instance: int, id_document: str) -> None:
+    """
+    Background task: sync KOD_STATUSU='K' w WAPRO po zatwierdzeniu obiegu.
+    Wywolywane PO db.commit() — blad nie wplywa na status instancji,
+    tylko jest logowany do dalszej analizy/recznej korekty.
+    """
+    try:
+        fakir_result = await update_kod_statusu(numer_ksef=id_document)
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event":       "approval_fakir_sync_exception",
+                "id_instance": id_instance,
+                "id_document": id_document,
+                "error":       str(exc),
+            }).decode(),
+            exc_info=True,
+        )
+        return
+
+    if not fakir_result.success:
+        logger.error(
+            orjson.dumps({
+                "event":        "approval_fakir_sync_failed",
+                "id_instance":  id_instance,
+                "id_document":  id_document,
+                "error":        fakir_result.error,
+                "operation_id": fakir_result.operation_id,
+            }).decode()
         )

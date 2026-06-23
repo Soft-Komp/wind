@@ -17,7 +17,14 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, BaseLoader
-from weasyprint import HTML, CSS
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import io
 
 from worker.settings import get_settings
 
@@ -392,6 +399,15 @@ async def generate_pdf(
         Bajty PDF.
     """
     settings = get_settings()
+    logger.info(
+        "generate_pdf wywołane",
+        extra={
+            "monit_id": monit_id,
+            "total_debt": total_debt,
+            "invoices": invoices,
+            "debtor_name": debtor_name,
+        }
+    )
     now = datetime.now(_WARSAW)
 
     if issue_date is None:
@@ -400,48 +416,133 @@ async def generate_pdf(
     doc_number = generate_monit_reference(monit_id, now.date())
     logo_b64 = _load_logo_base64()
 
-    # Renderuj szablon HTML
-    env = Environment(loader=BaseLoader())
-    template = env.from_string(_MONIT_HTML_TEMPLATE)
+    
 
-    html_str = template.render(
-        # Firma
-        company_name=settings.COMPANY_NAME,
-        company_nip=settings.COMPANY_NIP,
-        company_regon=settings.COMPANY_REGON,
-        company_address=settings.COMPANY_ADDRESS,
-        company_phone=settings.COMPANY_PHONE,
-        company_email=settings.COMPANY_EMAIL,
-        logo_base64=logo_b64,
-        # Dokument
-        doc_number=doc_number,
-        issue_date=issue_date,
-        generated_at=now.strftime("%d.%m.%Y %H:%M:%S"),
-        # Dłużnik
-        debtor_name=debtor_name,
-        debtor_nip=debtor_nip or "",
-        debtor_address=debtor_address or "",
-        # Faktury
-        invoices=invoices,
-        total_debt=total_debt,
-        # Płatność
-        payment_deadline=payment_deadline,
-        payment_account=payment_account or "",
-    )
-
-    # WeasyPrint → PDF
+ # ReportLab → PDF
     try:
-        html_obj = HTML(string=html_str, base_url=None)
-        pdf_bytes = html_obj.write_pdf()
+        # Rejestracja fontu z polskimi znakami
+        try:
+            pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+            _font_name = "DejaVu"
+        except Exception:
+            _font_name = "Helvetica"
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=2.5 * cm,
+            leftMargin=2.5 * cm,
+            topMargin=2 * cm,
+            bottomMargin=2 * cm,
+        )
+
+        styles = getSampleStyleSheet()
+        style_normal = ParagraphStyle(
+            "NormalPL",
+            fontName=_font_name,
+            fontSize=10,
+            leading=15,
+        )
+        style_heading = ParagraphStyle(
+            "HeadingPL",
+            fontName=_font_name,
+            fontSize=14,
+            leading=18,
+            spaceAfter=6,
+        )
+        style_heading2 = ParagraphStyle(
+            "Heading2PL",
+            fontName=_font_name,
+            fontSize=11,
+            leading=14,
+            spaceAfter=4,
+        )
+
+        story = []
+
+        # Nagłówek firmy
+        story.append(Paragraph(settings.COMPANY_NAME, style_heading))
+        if settings.COMPANY_NIP:
+            story.append(Paragraph(f"NIP: {settings.COMPANY_NIP}", style_normal))
+        if settings.COMPANY_ADDRESS:
+            story.append(Paragraph(settings.COMPANY_ADDRESS, style_normal))
+        story.append(Spacer(1, 0.5 * cm))
+
+        # Numer dokumentu i data
+        story.append(Paragraph(f"Nr dokumentu: {doc_number}", style_normal))
+        story.append(Paragraph(f"Data wystawienia: {issue_date}", style_normal))
+        story.append(Spacer(1, 0.5 * cm))
+
+        # Dane dłużnika
+        story.append(Paragraph("Dłużnik:", style_heading2))
+        story.append(Paragraph(debtor_name, style_normal))
+        if debtor_nip:
+            story.append(Paragraph(f"NIP: {debtor_nip}", style_normal))
+        if debtor_address:
+            story.append(Paragraph(debtor_address, style_normal))
+        story.append(Spacer(1, 0.5 * cm))
+
+        # Treść wezwania
+        story.append(Paragraph("WEZWANIE DO ZAPŁATY", style_heading))
+        story.append(Paragraph(
+            "Wzywamy do niezwłocznego uregulowania zaległych należności:",
+            style_normal,
+        ))
+        story.append(Spacer(1, 0.3 * cm))
+
+        # Tabela faktur
+        if invoices:
+            table_data = [["Numer faktury"]]
+            for inv in invoices:
+                table_data.append([
+                    str(inv.get("number") or inv.get("numer") or "—"),
+                ])
+            tbl = Table(table_data, colWidths=[17 * cm])
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+                ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",     (0, 0), (-1, 0), _font_name),
+                ("FONTSIZE",     (0, 0), (-1, -1), 9),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+                ("GRID",         (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+                ("PADDING",      (0, 0), (-1, -1), 6),
+            ]))
+            story.append(tbl)
+            story.append(Spacer(1, 0.3 * cm))
+
+        # Łączna kwota
+        story.append(Paragraph(
+            f"<b>Łączna kwota do zapłaty: {total_debt:.2f} PLN</b>",
+            style_normal,
+        ))
+        story.append(Spacer(1, 0.3 * cm))
+
+        # Termin i konto
+        if payment_deadline:
+            story.append(Paragraph(f"Termin zapłaty: <b>{payment_deadline}</b>", style_normal))
+        if payment_account:
+            story.append(Paragraph(f"Numer konta: {payment_account}", style_normal))
+        story.append(Spacer(1, 1 * cm))
+
+        # Stopka
+        story.append(Paragraph(
+            f"Z poważaniem,<br/><b>{settings.COMPANY_NAME}</b><br/>Dział Windykacji",
+            style_normal,
+        ))
+
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
 
         logger.info(
-            "PDF wygenerowany",
+            "PDF wygenerowany (ReportLab)",
             extra={
-                "monit_id": monit_id,
-                "doc_number": doc_number,
-                "pdf_size_kb": round(len(pdf_bytes) / 1024, 1),
-                "invoices_count": len(invoices),
-                "total_debt": total_debt,
+                "monit_id":       monit_id,
+                "doc_number":     doc_number,
+                "pdf_size_kb":    round(len(pdf_bytes) / 1024, 1),
+                "invoices_count": len(invoices) if invoices else 0,
+                "total_debt":     total_debt,
             },
         )
         return pdf_bytes
@@ -450,8 +551,8 @@ async def generate_pdf(
         logger.error(
             "Błąd generowania PDF",
             extra={
-                "monit_id": monit_id,
-                "error": str(exc),
+                "monit_id":   monit_id,
+                "error":      str(exc),
                 "error_type": type(exc).__name__,
             },
             exc_info=True,

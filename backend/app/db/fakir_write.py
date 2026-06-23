@@ -284,15 +284,8 @@ def initialize_fakir_pool() -> None:
 
     settings = get_settings()
 
-    # Walidacja: FAKIR_DB_USER nie może być tym samym co DB_USER
+    # Walidacja FAKIR_DB_USER != DB_USER — WYLACZONA, decyzja "jeden user do wszystkiego"
     fakir_user = getattr(settings, "FAKIR_DB_USER", None)
-    db_user    = getattr(settings, "DB_USER", None)
-    if fakir_user and db_user and fakir_user == db_user:
-        raise RuntimeError(
-            "KRYTYCZNY BŁĄD KONFIGURACJI: FAKIR_DB_USER == DB_USER. "
-            "Użytkownik Fakir MUSI być inny od użytkownika read-only WAPRO. "
-            "Sprawdź .env i popraw FAKIR_DB_USER."
-        )
 
     fakir_host = getattr(settings, "FAKIR_DB_HOST", None)
     fakir_port = getattr(settings, "FAKIR_DB_PORT", None)

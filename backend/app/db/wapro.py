@@ -2103,6 +2103,55 @@ async def resolve_invoice_numbers(
     return resolved_ids, not_found, rows
 
 
+async def get_invoice_numbers_by_ids(invoice_ids: list[int]) -> dict[int, str]:
+    """
+    Zwraca mapę ID_ROZRACHUNKU → NumerFaktury dla podanej listy IDs.
+    Używane przez send_bulk() do zapisania numerów faktur w MonitHistory.
+
+    Args:
+        invoice_ids: Lista ID_ROZRACHUNKU (int)
+
+    Returns:
+        dict[ID_ROZRACHUNKU → NumerFaktury] — tylko te które znaleziono
+    """
+    if not invoice_ids:
+        return {}
+
+    unique_ids = list({int(i) for i in invoice_ids if i})
+    if not unique_ids:
+        return {}
+
+    query_id = str(uuid.uuid4())
+    placeholders = ", ".join("?" * len(unique_ids))
+    sql = (
+        f"SELECT ID_ROZRACHUNKU, NumerFaktury "
+        f"FROM {SKW_ROZRACHUNKI_FAKTUR} "
+        f"WHERE ID_ROZRACHUNKU IN ({placeholders})"
+    )
+    params = tuple(unique_ids)
+
+    try:
+        rows = await _run_in_executor(
+            _execute_query_sync, sql, params, query_id, "invoice_numbers_by_ids"
+        )
+        result = {}
+        for row in rows:
+            id_roz = row.get("ID_ROZRACHUNKU")
+            numer  = str(row.get("NumerFaktury") or "").strip()
+            if id_roz is not None and numer:
+                result[int(id_roz)] = numer
+        logger.debug(
+            "get_invoice_numbers_by_ids: requested=%d, found=%d [%s]",
+            len(unique_ids), len(result), query_id,
+        )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "get_invoice_numbers_by_ids błąd — zwracam pusty dict: %s", exc,
+            extra={"invoice_ids": unique_ids, "error": str(exc)},
+        )
+        return {}
+
 # ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------

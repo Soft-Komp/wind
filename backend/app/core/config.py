@@ -478,18 +478,11 @@ class Settings(BaseSettings):
     )
     
 # ---------------------------------------------------------------------------
-# Walidator: FAKIR_DB_USER musi być INNY niż DB_USER
-# Ochrona przed pomyłką — read-only user nie może być używany do zapisu
+# Walidator FAKIR_DB_USER != DB_USER — WYLACZONY decyzja: "jeden user do wszystkiego"
+# Pozostawiono jako no-op zamiast usuniecia, zeby zachowac historie/latwy revert.
 # ---------------------------------------------------------------------------
     @model_validator(mode="after")
     def validate_fakir_user_different_from_db_user(self) -> "Settings":
-        if self.FAKIR_DB_USER == self.db_user:
-            raise ValueError(
-                "FAKIR_DB_USER nie może być identyczny z DB_USER! "
-                "Używaj osobnego konta bazy dla połączenia Fakir write. "
-                "Stwórz użytkownika przez database/ddl/021_fakir_write_user.sql "
-                "i ustaw FAKIR_DB_USER=windykacja_fakir_write w .env"
-            )
         return self
 
     # -----------------------------------------------------------------------

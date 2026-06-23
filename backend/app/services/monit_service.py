@@ -1053,6 +1053,23 @@ async def send_bulk(
                     "zapisuję 0.00",
                     debtor_id, exc,
                 )
+        debtor_info = debtor_contacts_raw.get(debtor_id, {})
+
+        # Pobierz numery faktur z WAPRO dla tego dłużnika
+        _invoice_numbers_str = ""
+        if debtor_invoice_ids:
+            try:
+                from app.db.wapro import get_invoice_numbers_by_ids as _get_nums
+                _nums_map = await _get_nums(debtor_invoice_ids)
+                _invoice_numbers_str = ", ".join(
+                    _nums_map[i] for i in debtor_invoice_ids if i in _nums_map
+                )
+            except Exception as _exc_nums:
+                logger.warning(
+                    "Nie udało się pobrać numerów faktur dla debtor=%d: %s",
+                    debtor_id, _exc_nums,
+                )
+
         odsetki_total = _D(str(sum(odsetki_map.values()))) if odsetki_map else _D("0.00")
         total_debt    = _D(str(debtor_info.get("SumaDlugu") or "0"))
 
@@ -1063,6 +1080,7 @@ async def send_bulk(
 
         monit = MonitHistory(
             id_kontrahenta=debtor_id,
+            invoice_numbers=_invoice_numbers_str or None,
             id_user=triggered_by_user_id,
             monit_type=request.monit_type,
             template_id=request.template_id,
@@ -1078,9 +1096,9 @@ async def send_bulk(
             is_active=True,
             created_at=now,
         )
-        db.add(new_monit)
-        await db.flush()  # Pobieramy ID przez flush
-        monit_ids.append(new_monit.id_monit)
+        db.add(monit)
+        await db.flush()
+        monit_ids.append(monit.id_monit)
 
     await db.commit()
 
