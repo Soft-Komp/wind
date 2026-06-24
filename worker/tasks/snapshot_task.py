@@ -27,7 +27,7 @@ from worker.core.logging_setup import get_event_logger
 logger = logging.getLogger("worker.tasks.snapshot")
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
-# Tabele dbo_ext (skw_*) do snapshotowania
+
 _SKW_TABLES = [
     "skw_Users",
     "skw_Roles",
@@ -42,10 +42,11 @@ _SKW_TABLES = [
     "skw_Comments",
     "skw_Templates",
     "skw_SchemaVersions",
-    # Moduł Akceptacji Faktur (Sprint 2)
+    # Modul Akceptacji Faktur (Sprint 2) — READONLY po Kroku 0 Etapu 2
     "skw_faktura_akceptacja",
-    "skw_faktura_przypisanie",   # ← szczególnie ważne: historyczne is_active=0
-    "skw_faktura_log",           # ← audit trail modułu
+    "skw_faktura_przypisanie",   # szczegolnie wazne: historyczne is_active=0
+    "skw_faktura_log",           # audit trail modulu
+    # Modul obiegu dokumentow (Sprint 3)
     "skw_approval_groups",
     "skw_approval_group_members",
     "skw_approval_paths",
@@ -63,8 +64,15 @@ _SKW_TABLES = [
     "skw_approval_filter_conditions",
     "skw_document_source_field_mappings",
     "skw_user_notifications",
-
+    # ── Etap 2 — nowe tabele (migracja 0039) ─────────────────────────────────
+    "skw_source_hooks",
+    "skw_source_actions",
+    "skw_source_action_log",
+    "skw_document_folders",
+    "skw_document_folder_items",
+    "skw_approval_filter_visibility",
 ]
+
 
 
 async def daily_snapshot(ctx: dict[str, Any]) -> dict[str, Any]:
