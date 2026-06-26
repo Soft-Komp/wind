@@ -45,6 +45,8 @@ from app.services.approval_service import rollback as do_rollback
 from app.services.approval_service_ext import forward, send_to_group
 from app.schemas.unified_document import get_adapter_by_source_id
 from app.services.filter_engine import resolve_path
+from app.services.hook_service import HookError  # F5: obsługa hooków krytycznych
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -820,6 +822,7 @@ async def get_instance(
     },
     dependencies=[require_permission("approval.accept")],
 )
+
 async def accept_instance(
     id_instance:  int,
     body:         AcceptBody,
@@ -830,21 +833,35 @@ async def accept_instance(
     bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
-
-    # notify_fn=None — stary mechanizm zastąpiony przez approval_sse_service
-    result = await accept(
-        db, redis, bg,
-        id_instance=id_instance,
-        id_user=current_user.id_user,
-        username=current_user.username,
-        comment=body.comment,
-        ip_address=ip,
-        notify_fn=None,
-    )
-
+ 
+    # F5: HookError rzucany przez HookService gdy hook krytyczny zwroci blad.
+    # Brak commit() = transakcja cofnieta = dokument pozostaje w poprzednim statusie.
+    try:
+        result = await accept(
+            db, redis, bg,
+            id_instance=id_instance,
+            id_user=current_user.id_user,
+            username=current_user.username,
+            comment=body.comment,
+            ip_address=ip,
+            notify_fn=None,
+        )
+    except HookError as hook_err:
+        logger.warning(
+            "accept_instance: hook krytyczny zablokował akceptację | "
+            "id_instance=%d hook_id=%s msg=%s",
+            id_instance, hook_err.hook_id, hook_err.user_message,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code":    "hook.critical_error",
+                "message": hook_err.user_message,
+            },
+        )
+ 
     # SSE po commit — await gwarantuje że publish wychodzi po zapisie w DB
     await asyncio.sleep(0.3)
-    # Invalidacja cache listy faktur przed SSE — tylko przy akceptacji terminalnej
     if result.get("approved"):
         try:
             keys_to_delete = []
@@ -853,7 +870,8 @@ async def accept_instance(
             if keys_to_delete:
                 await redis.delete(*keys_to_delete)
             logger.debug(
-                "accept_instance | cache listy faktur wyczyszczony przed SSE | keys=%d | id_instance=%d",
+                "accept_instance | cache listy faktur wyczyszczony przed SSE | "
+                "keys=%d | id_instance=%d",
                 len(keys_to_delete), id_instance,
             )
         except Exception as exc:
@@ -871,6 +889,7 @@ async def accept_instance(
         next_group_id=None,
     )
     return result
+
 
 
 # =============================================================================
@@ -951,6 +970,7 @@ async def rollback_instance(
     responses={403: {"description": "Brak uprawnienia"}, 409: {"description": "Zly status"}},
     dependencies=[require_permission("approval.reject")],
 )
+
 async def reject_instance(
     id_instance:  int,
     body:         RejectBody,
@@ -963,17 +983,33 @@ async def reject_instance(
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
     from app.core.dependencies import _get_role_permissions
     perms = await _get_role_permissions(current_user.role_id, db, redis)
-
-    result = await reject(
-        db, redis,
-        id_instance=id_instance,
-        id_user=current_user.id_user,
-        username=current_user.username,
-        comment=body.comment,
-        has_supervise="approval.supervise" in perms,
-        ip_address=ip,
-    )
-
+ 
+    # F5: HookError rzucany przez HookService gdy hook krytyczny zwroci blad.
+    # Brak commit() = transakcja cofnieta = dokument pozostaje w poprzednim statusie.
+    try:
+        result = await reject(
+            db, redis,
+            id_instance=id_instance,
+            id_user=current_user.id_user,
+            username=current_user.username,
+            comment=body.comment,
+            has_supervise="approval.supervise" in perms,
+            ip_address=ip,
+        )
+    except HookError as hook_err:
+        logger.warning(
+            "reject_instance: hook krytyczny zablokował odrzucenie | "
+            "id_instance=%d hook_id=%s msg=%s",
+            id_instance, hook_err.hook_id, hook_err.user_message,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code":    "hook.critical_error",
+                "message": hook_err.user_message,
+            },
+        )
+ 
     await asyncio.sleep(0.3)
     try:
         keys_to_delete = []
@@ -981,15 +1017,22 @@ async def reject_instance(
             keys_to_delete.append(key)
         if keys_to_delete:
             await redis.delete(*keys_to_delete)
-        logger.debug("reject_instance | cache invalidated | keys=%d | id_instance=%d", len(keys_to_delete), id_instance)
+        logger.debug(
+            "reject_instance | cache invalidated | keys=%d | id_instance=%d",
+            len(keys_to_delete), id_instance,
+        )
     except Exception as exc:
-        logger.warning("reject_instance | cache invalidation error | id_instance=%d | exc=%s", id_instance, exc)
+        logger.warning(
+            "reject_instance | cache invalidation error | id_instance=%d | exc=%s",
+            id_instance, exc,
+        )
     await sse.on_reject(
         redis=redis,
         id_instance=id_instance,
         id_user=current_user.id_user,
     )
     return result
+
 
 
 # =============================================================================

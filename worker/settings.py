@@ -15,10 +15,6 @@ from typing import Any, Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-from arq.cron import cron
-from worker.tasks.source_sync_task import source_sync_task
-
-cron(source_sync_task, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55})
 
 class SMTPConfig(BaseSettings):
     """Konfiguracja jednej skrzynki SMTP."""

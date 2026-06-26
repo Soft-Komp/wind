@@ -340,6 +340,10 @@ async def zapisz_decyzje(
     6. SSE: faktura_wymaga_interwencji → referent (warunkowo)
     7. Trigger saga Fakira (warunkowo — jeśli wszyscy zaakceptowali)
     """
+    # F4: HTTP 410 gdy ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=true
+    from app.services.faktura_akceptacja_service import check_decyzja_allowed
+    await check_decyzja_allowed(db)
+
     # 1. Walidacja przypisania
     p_result = await db.execute(
         select(FakturaPrzypisanie).where(

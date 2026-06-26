@@ -24,6 +24,9 @@ from worker.tasks.snapshot_task import daily_snapshot
 from worker.tasks.deadline_task import deadline_check_task
 from worker.tasks.notification_task import send_approval_notification
 from worker.tasks.email_task_approval import queue_approval_email, flush_approval_emails
+# Etap 2 — nowe taski
+from worker.tasks.source_sync_task import source_sync_task
+from worker.tasks.auto_dispatch_task import auto_dispatch_task
 
 
 
@@ -159,10 +162,12 @@ class WorkerSettings:
         generate_pdf_task,
         send_otp,
         daily_snapshot,
-        # Approval — Obieg Dokumentow (Sprint 3)
         send_approval_notification,
         queue_approval_email,
         flush_approval_emails,
+        # Etap 2
+        source_sync_task,
+        auto_dispatch_task,
     ]
 
 
@@ -190,6 +195,11 @@ class WorkerSettings:
             unique=True,
             run_at_startup=False,
         ),
+        # Etap 2 — synchronizacja źródeł co 5 minut
+        cron(source_sync_task, minute={0,5,10,15,20,25,30,35,40,45,50,55}, timeout=300, unique=True, run_at_startup=False),
+        # Etap 2 — auto-dispatch co 1 minutę
+        cron(auto_dispatch_task, minute={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59}, timeout=120, unique=True, run_at_startup=False),
+    
     ]
 
     # ── Lifecycle hooks ───────────────────────────────────────────────────────

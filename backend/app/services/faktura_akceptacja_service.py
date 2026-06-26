@@ -370,7 +370,7 @@ _ALLOWED_ORDER_BY: frozenset[str] = frozenset({
     "numer",              # NUMER dokumentu z WAPRO
 })
 
-async def get_faktury_list(
+async def _get_faktury_list_legacy(
     *,
     db: AsyncSession,
     redis: Redis,
@@ -2219,3 +2219,434 @@ async def _get_approval_batch(
         len(ksef_ids),
     )
     return result
+
+    
+import json as _json
+from datetime import timezone as _timezone
+ 
+# Mapowanie statusów nowych → stary format UI
+_NEW_STATUS_TO_OLD: dict[str, str] = {
+    "pending_dispatch":  "nowe",
+    "in_progress":       "w_toku",
+    "approved":          "zaakceptowana",
+    "cancelled":         "anulowana",
+    "rejected":          "anulowana",
+    "unassigned":        "nowe",
+    "duplicate_pending": "nowe",
+    "source_orphaned":   "anulowana",
+}
+ 
+# Mapowanie akcji approval_log → stary format historii
+_NEW_ACTION_TO_OLD: dict[str, str] = {
+    "accepted":            "zaakceptowano",
+    "rejected":            "odrzucono",
+    "cancelled":           "anulowano",
+    "dispatched":          "przypisano",
+    "rollback":            "zresetowano",
+    "forwarded":           "nie_moje",
+    "send_to_group":       "przypisano",
+    "hook_executed":       "fakir_update",
+    "hook_failed":         "fakir_update_failed",
+    "system_note":         "status_zmieniony",
+    # migrowane wpisy (stare akcje przepisane w migrate_krok0.py)
+    "przypisano":          "przypisano",
+    "zaakceptowano":       "zaakceptowano",
+    "odrzucono":           "odrzucono",
+    "zresetowano":         "zresetowano",
+    "status_zmieniony":    "status_zmieniony",
+    "priorytet_zmieniony": "priorytet_zmieniony",
+    "fakir_update":        "fakir_update",
+    "fakir_update_failed": "fakir_update_failed",
+    "nie_moje":            "nie_moje",
+    "force_akceptacja":    "force_akceptacja",
+    "anulowano":           "anulowano",
+}
+ 
+_SCHEMA_F4 = "dbo"
+ 
+ 
+async def _is_new_impl_enabled(db: AsyncSession) -> bool:
+    """Sprawdza ETAP2_FAKTURA_ENDPOINT_NEW_IMPL w skw_SystemConfig. Fallback: False."""
+    try:
+        from sqlalchemy import text as _text
+        result = await db.execute(
+            _text(
+                "SELECT [ConfigValue] FROM [dbo].[skw_SystemConfig] "
+                "WHERE [ConfigKey] = N\'ETAP2_FAKTURA_ENDPOINT_NEW_IMPL\' "
+                "  AND [IsActive] = 1"
+            )
+        )
+        row = result.fetchone()
+        if row and str(row[0]).lower() == "true":
+            return True
+    except Exception as exc:
+        logger.warning("_is_new_impl_enabled: blad odczytu flagi: %s", exc)
+    return False
+ 
+ 
+async def _get_fakir_source_ids(db: AsyncSession) -> list[int]:
+    """Zwraca id_source dla zrodel fakir i ksef."""
+    from sqlalchemy import text as _text
+    result = await db.execute(
+        _text(
+            "SELECT [id_source] FROM [dbo].[skw_document_sources] "
+            "WHERE [source_name] IN (N\'fakir\', N\'ksef\') AND [is_active] = 1"
+        )
+    )
+    return [r[0] for r in result.fetchall()]
+ 
+ 
+def _priorytet_to_int(p: str | None) -> int | None:
+    return {"normalny": 1, "pilny": 2, "bardzo_pilny": 3}.get(p or "")
+ 
+ 
+def _int_to_priorytet(v: int | None) -> str | None:
+    return {1: "normalny", 2: "pilny", 3: "bardzo_pilny"}.get(v)  # type: ignore[arg-type]
+ 
+ 
+def _fmt_dt_f4(v) -> str | None:
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        if hasattr(v, "tzinfo") and v.tzinfo is None:
+            v = v.replace(tzinfo=_timezone.utc)
+        return v.isoformat()
+    return str(v)
+ 
+ 
+async def get_faktury_list_new(
+    *,
+    db: AsyncSession,
+    redis,
+    page: int = 1,
+    limit: int = 50,
+    priorytet: Optional[str] = None,
+    status: Optional[str] = None,
+    approval_status: Optional[str] = None,
+    routing_status: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    order_by: str = "data_wystawienia",
+    order_dir: str = "desc",
+) -> dict:
+    """
+    Nowa implementacja GET /faktury-akceptacja — czyta z skw_document_approval_instances.
+    Kontrakt odpowiedzi IDENTYCZNY ze starą implementacją.
+    Aktywna gdy ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=true.
+    """
+    from sqlalchemy import text as _text
+ 
+    source_ids = await _get_fakir_source_ids(db)
+    if not source_ids:
+        logger.warning("get_faktury_list_new: brak aktywnych zrodel fakir/ksef")
+        return {"items": [], "total": 0, "page": page, "limit": limit, "pages": 1}
+ 
+    src_ph = ",".join(f":src_{i}" for i in range(len(source_ids)))
+    params: dict = {f"src_{i}": sid for i, sid in enumerate(source_ids)}
+    params["offset"] = (page - 1) * limit
+    params["limit"]  = limit
+ 
+    where: list[str] = [f"i.[id_source] IN ({src_ph})"]
+ 
+    # Status — mapowanie stary → nowe
+    if status:
+        _status_map = {
+            "nowe":          ["pending_dispatch", "unassigned", "duplicate_pending"],
+            "w_toku":        ["in_progress"],
+            "zaakceptowana": ["approved"],
+            "anulowana":     ["cancelled", "rejected", "source_orphaned"],
+            "orphaned":      ["source_orphaned"],
+        }
+        ns = _status_map.get(status, [status])
+        if ns:
+            ns_ph = ",".join(f":ns_{j}" for j in range(len(ns)))
+            where.append(f"i.[status] IN ({ns_ph})")
+            for j, s in enumerate(ns):
+                params[f"ns_{j}"] = s
+ 
+    # Priorytet — normalny obejmuje NULL
+    if priorytet:
+        if priorytet == "normalny":
+            where.append("(i.[priority] = 1 OR i.[priority] IS NULL)")
+        else:
+            pv = _priorytet_to_int(priorytet)
+            if pv:
+                where.append("i.[priority] = :priority")
+                params["priority"] = pv
+ 
+    # Filtr dat — po created_at instancji
+    if date_from:
+        where.append("i.[created_at] >= :date_from")
+        params["date_from"] = date_from
+    if date_to:
+        where.append("i.[created_at] <= :date_to_end")
+        params["date_to_end"] = f"{date_to} 23:59:59"
+ 
+    # Search — po document_title, id_document i polach z widoku WAPRO
+    if search:
+        safe_search = search.replace("\'", "\'\'")[:100]
+        where.append(
+            "(i.[document_title] LIKE :search "
+            " OR i.[id_document] LIKE :search "
+            " OR fah.[NUMER] LIKE :search "
+            " OR fah.[NazwaKontrahenta] LIKE :search)"
+        )
+        params["search"] = f"%{safe_search}%"
+ 
+    where_sql = " AND ".join(where)
+ 
+    # Sortowanie — whitelist zgodna ze starą implementacją
+    _sort_map = {
+        "data_wystawienia": "fah.[DataWystawienia]",
+        "termin_platnosci": "fah.[TerminPlatnosci]",
+        "wartosc_brutto":   "i.[document_amount]",
+        "status_wewnetrzny":"i.[status]",
+        "priorytet":        "i.[priority]",
+        "created_at":       "i.[created_at]",
+        "updated_at":       "i.[updated_at]",
+        "nazwa_kontrahenta":"fah.[NazwaKontrahenta]",
+        "numer":            "fah.[NUMER]",
+    }
+    sort_col = _sort_map.get(order_by, "i.[created_at]")
+    sort_dir_sql = "ASC" if order_dir.lower() == "asc" else "DESC"
+ 
+    # COUNT
+    count_result = await db.execute(
+        _text(f"""
+            SELECT COUNT(*)
+            FROM [dbo].[skw_document_approval_instances] i
+            LEFT JOIN [dbo].[skw_faktury_akceptacja_naglowek] fah
+                   ON fah.[KSEF_ID] = i.[id_document]
+            WHERE {where_sql}
+        """),
+        params,
+    )
+    total = count_result.scalar() or 0
+ 
+    # DATA
+    data_result = await db.execute(
+        _text(f"""
+            SELECT
+                i.[id_instance]       AS id,
+                i.[id_document]       AS numer_ksef,
+                i.[status]            AS status_raw,
+                i.[priority]          AS priority_int,
+                i.[extra_data],
+                i.[is_urgent],
+                i.[created_at],
+                i.[updated_at],
+                i.[document_amount]   AS wartosc_brutto_inst,
+                fah.[NUMER]           AS numer,
+                fah.[DataWystawienia] AS data_wystawienia,
+                fah.[TerminPlatnosci] AS termin_platnosci,
+                fah.[WARTOSC_BRUTTO]  AS wartosc_brutto_wapro,
+                fah.[NazwaKontrahenta] AS nazwa_kontrahenta
+            FROM [dbo].[skw_document_approval_instances] i
+            LEFT JOIN [dbo].[skw_faktury_akceptacja_naglowek] fah
+                   ON fah.[KSEF_ID] = i.[id_document]
+            WHERE {where_sql}
+            ORDER BY {sort_col} {sort_dir_sql}, i.[id_instance] DESC
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+        """),
+        params,
+    )
+    cols = list(data_result.keys())
+    rows = data_result.fetchall()
+ 
+    items = []
+    for row in rows:
+        r = dict(zip(cols, row))
+        extra: dict = {}
+        if r.get("extra_data"):
+            try:
+                extra = _json.loads(r["extra_data"])
+            except Exception:
+                pass
+ 
+        status_stary = _NEW_STATUS_TO_OLD.get(r["status_raw"] or "pending_dispatch", "nowe")
+        priorytet_val = _int_to_priorytet(r.get("priority_int"))
+        if priorytet_val is None:
+            priorytet_val = extra.get("priorytet_stary", "normalny")
+ 
+        wartosc = r.get("wartosc_brutto_wapro") or r.get("wartosc_brutto_inst")
+ 
+        items.append({
+            "id":                r["id"],
+            "numer_ksef":        r["numer_ksef"],
+            "status_wewnetrzny": status_stary,
+            "priorytet":         priorytet_val,
+            "opis_skrocony":     (extra.get("opis_dokumentu") or "")[:120] or None,
+            "is_active":         True,
+            "created_at":        _fmt_dt_f4(r["created_at"]),
+            "updated_at":        _fmt_dt_f4(r["updated_at"]),
+            "numer":             r.get("numer"),
+            "data_wystawienia":  _fmt_dt_f4(r.get("data_wystawienia")),
+            "termin_platnosci":  _fmt_dt_f4(r.get("termin_platnosci")),
+            "wartosc_brutto":    float(wartosc) if wartosc is not None else None,
+            "nazwa_kontrahenta": r.get("nazwa_kontrahenta"),
+            # Approval — TODO F6: zliczanie z snapshot_steps
+            "przypisani":        [],
+            "approval":          None,
+        })
+ 
+    return {
+        "items": items,
+        "total": total,
+        "page":  page,
+        "limit": limit,
+        "pages": max(1, -(-total // limit)),
+    }
+ 
+ 
+async def get_historia_faktury_new(
+    *,
+    db: AsyncSession,
+    ksef_id: str,
+) -> list[dict]:
+    """
+    Nowa implementacja historii faktury — czyta z skw_approval_log.
+    Aktywna gdy ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=true.
+    """
+    from sqlalchemy import text as _text
+ 
+    inst_result = await db.execute(
+        _text(
+            "SELECT [id_instance] FROM [dbo].[skw_document_approval_instances] "
+            "WHERE [id_document] = :ksef ORDER BY [id_instance] ASC"
+        ),
+        {"ksef": ksef_id},
+    )
+    inst_rows = inst_result.fetchall()
+    if not inst_rows:
+        return []
+ 
+    inst_ids = [r[0] for r in inst_rows]
+    ph = ",".join(f":i{j}" for j in range(len(inst_ids)))
+    params = {f"i{j}": iid for j, iid in enumerate(inst_ids)}
+ 
+    log_result = await db.execute(
+        _text(f"""
+            SELECT
+                al.[id_log], al.[id_instance], al.[id_user],
+                al.[action], al.[details], al.[is_voided], al.[created_at],
+                u.[Username] AS username, u.[FullName] AS full_name
+            FROM [dbo].[skw_approval_log] al
+            LEFT JOIN [dbo].[skw_Users] u ON u.[ID_USER] = al.[id_user]
+            WHERE al.[id_instance] IN ({ph})
+              AND al.[is_voided] = 0
+            ORDER BY al.[created_at] ASC, al.[id_log] ASC
+        """),
+        params,
+    )
+    cols = list(log_result.keys())   # keys() PRZED fetchall() — SQLAlchemy 2.x async
+    log_rows = [dict(zip(cols, r)) for r in log_result.fetchall()]
+ 
+    historia = []
+    for log in log_rows:
+        details: dict = {}
+        if log.get("details"):
+            try:
+                details = _json.loads(log["details"])
+            except Exception:
+                pass
+ 
+        old_action  = details.get("original_action") or log["action"]
+        akcja_stara = _NEW_ACTION_TO_OLD.get(old_action, old_action)
+        komentarz   = details.get("comment") or details.get("komentarz")
+ 
+        historia.append({
+            "id":               log["id_log"],
+            "faktura_id":       log["id_instance"],
+            "user_id":          log["id_user"],
+            "akcja":            akcja_stara,
+            "komentarz":        komentarz,
+            "szczegoly":        _json.dumps(details.get("original_data"), ensure_ascii=False) if details.get("original_data") else None,
+            "created_at":       _fmt_dt_f4(log["created_at"]),
+            "actor_username":   log.get("username"),
+            "actor_full_name":  log.get("full_name"),
+        })
+ 
+    return historia
+ 
+ 
+# =============================================================================
+# DISPATCHER — nadpisz istniejące publiczne funkcje
+# =============================================================================
+# UWAGA: istniejące get_faktury_list przemianowano na _get_faktury_list_legacy
+# i get_historia_faktury na _get_historia_faktury_legacy (krok 1 powyżej).
+ 
+ 
+async def get_faktury_list(
+    *,
+    db: AsyncSession,
+    redis,
+    page: int = 1,
+    limit: int = 50,
+    priorytet: Optional[str] = None,
+    status: Optional[str] = None,
+    approval_status: Optional[str] = None,
+    routing_status: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    order_by: str = "data_wystawienia",
+    order_dir: str = "desc",
+) -> dict:
+    """
+    Dispatcher: stara lub nowa implementacja listowania faktur.
+    ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=true → get_faktury_list_new()
+    ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=false → _get_faktury_list_legacy()
+    """
+    if await _is_new_impl_enabled(db):
+        logger.info("get_faktury_list: nowa implementacja (ETAP2=true)")
+        return await get_faktury_list_new(
+            db=db, redis=redis, page=page, limit=limit,
+            priorytet=priorytet, status=status,
+            approval_status=approval_status, routing_status=routing_status,
+            search=search, date_from=date_from, date_to=date_to,
+            order_by=order_by, order_dir=order_dir,
+        )
+    return await _get_faktury_list_legacy(
+        db=db, redis=redis, page=page, limit=limit,
+        priorytet=priorytet, status=status,
+        approval_status=approval_status, routing_status=routing_status,
+        search=search, date_from=date_from, date_to=date_to,
+        order_by=order_by, order_dir=order_dir,
+    )
+ 
+ 
+async def _get_historia_faktury_legacy(
+    *,
+    db: AsyncSession,
+    ksef_id: str,
+) -> list[dict]:
+    """
+    Dispatcher: stara lub nowa implementacja historii faktury.
+    """
+    if await _is_new_impl_enabled(db):
+        logger.info("get_historia_faktury: nowa implementacja (ETAP2=true)")
+        return await get_historia_faktury_new(db=db, ksef_id=ksef_id)
+    return await _get_historia_faktury_legacy(db=db, ksef_id=ksef_id)
+ 
+ 
+async def check_decyzja_allowed(db: AsyncSession) -> None:
+    """
+    Sprawdza czy POST /moje-faktury/{id}/decyzja jest dozwolone.
+    Rzuca HTTPException 410 gdy ETAP2_FAKTURA_ENDPOINT_NEW_IMPL=true.
+    Wywołaj na początku funkcji zapisz_decyzje() w moje_faktury_service.py.
+    """
+    if await _is_new_impl_enabled(db):
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(
+            status_code=410,
+            detail={
+                "code":     "endpoint.deprecated",
+                "message":  (
+                    "Ten endpoint jest nieaktywny po migracji systemu. "
+                    "Skorzystaj z nowego widoku dokumentów (/my-queue)."
+                ),
+                "redirect": "/my-queue",
+            },
+        )
+ 
