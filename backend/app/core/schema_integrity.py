@@ -410,7 +410,7 @@ async def _get_reaction_level(db: AsyncSession) -> ReactionLevel:
             text(
                 """
                 SELECT TOP 1 ConfigValue
-                FROM dbo_ext.skw_SystemConfig
+                FROM dbo.skw_SystemConfig
                 WHERE ConfigKey = 'schema_integrity.reaction'
                   AND IsActive = 1
                 """

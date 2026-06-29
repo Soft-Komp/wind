@@ -149,3 +149,5 @@ docker logs windykacja_api 2>&1 | grep "xyz"
 docker exec -e SELFTEST_PASSWORD="xyz" windykacja_api python -m tests.runner --filter test_health_ok --verbose
 
 SELECT * FROM dbo.alembic_version;
+
+docker exec -it windykacja_api python /app/tools/migrate_krok0.py

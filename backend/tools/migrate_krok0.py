@@ -154,18 +154,33 @@ PRIORYTET_MAP: dict[str, int | None] = {
 # ---------------------------------------------------------------------------
 
 def _get_connection_string() -> str:
-    """Buduje connection string z ENV lub konfiguracji."""
-    server   = os.environ.get("MSSQL_HOST",     "192.168.0.50")
-    port     = os.environ.get("MSSQL_PORT",     "59425")   # STOMIL domyslnie
-    database = os.environ.get("MSSQL_DATABASE", "STOMIL")
-    user     = os.environ.get("MSSQL_USER",     "windykacja_app")
-    password = os.environ.get("MSSQL_PASSWORD", "")
+    """
+    Buduje connection string z ENV.
+
+    Priorytety (od najwyzszego):
+      1. MSSQL_HOST / MSSQL_PORT / MSSQL_DATABASE / MSSQL_USER / MSSQL_PASSWORD
+      2. DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD  (z .env backendu)
+    """
+    server   = (os.environ.get("MSSQL_HOST")
+                or os.environ.get("DB_HOST")
+                or "192.168.0.50")
+    port     = (os.environ.get("MSSQL_PORT")
+                or os.environ.get("DB_PORT")
+                or "59425")
+    database = (os.environ.get("MSSQL_DATABASE")
+                or os.environ.get("DB_NAME")
+                or "STOMIL")
+    user     = (os.environ.get("MSSQL_USER")
+                or os.environ.get("DB_USER")
+                or "sa")
+    password = (os.environ.get("MSSQL_PASSWORD")
+                or os.environ.get("DB_PASSWORD")
+                or "")
 
     if not password:
         raise RuntimeError(
-            "MSSQL_PASSWORD nie ustawione. "
-            "Ustaw zmienne srodowiskowe: MSSQL_HOST, MSSQL_PORT, "
-            "MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD"
+            "Brak hasla do bazy. Ustaw MSSQL_PASSWORD lub DB_PASSWORD "
+            "(lub uruchom w kontenerze windykacja_api gdzie .env jest juz zaladowany)."
         )
 
     return (
@@ -181,7 +196,8 @@ def _get_connection_string() -> str:
 def _connect() -> pyodbc.Connection:
     conn_str = _get_connection_string()
     # Maskujemy haslo w logach
-    safe = conn_str.replace(os.environ.get("MSSQL_PASSWORD", "***"), "***")
+    _pwd = os.environ.get("MSSQL_PASSWORD") or os.environ.get("DB_PASSWORD") or "***"
+    safe = conn_str.replace(_pwd, "***")
     _log("INFO", "Laczenie z baza", connection_string=safe)
     conn = pyodbc.connect(conn_str, autocommit=False)
     conn.setdecoding(pyodbc.SQL_CHAR,  encoding="utf-8")
@@ -203,15 +219,16 @@ def validate_preconditions(conn: pyodbc.Connection) -> int:
     _log("INFO", "=== WALIDACJA WARUNKOW WSTEPNYCH ===")
     cur = conn.cursor()
 
-    # 1a. Alembic musi byc na 0039
+    # 1a. Alembic musi byc na 0039 lub nowszym (0040+ tez OK — migracja DDL juz wykonana)
     cur.execute(f"SELECT version_num FROM [{SCHEMA}].[alembic_version]")
     row = cur.fetchone()
-    if not row or row[0] != "0039":
+    alembic_ver = row[0] if row else None
+    if not alembic_ver or alembic_ver < "0039":
         raise RuntimeError(
-            f"Alembic version = {row[0] if row else 'BRAK'}. "
-            f"Wymagana: 0039. Uruchom najpierw: alembic upgrade head"
+            f"Alembic version = {alembic_ver or 'BRAK'}. "
+            f"Wymagana: 0039 lub nowsza. Uruchom najpierw: alembic upgrade head"
         )
-    _log("INFO", "Alembic version OK", version=row[0])
+    _log("INFO", "Alembic version OK", version=alembic_ver)
 
     # 1b. Stare tabele musza istniec
     for table in ("skw_faktura_akceptacja", "skw_faktura_przypisanie", "skw_faktura_log"):
@@ -396,7 +413,7 @@ def build_instance_record(
         "id_category":     None,                     # kategoria przypisywana pozniej przez admina
         "id_path":         None,                     # sciezka zostanie przypisana przez auto-dispatch
         "status":          new_status,
-        "current_step":    None,
+        "current_step":    0,                        # historyczne — bez aktywnego kroku
         "document_title":  _build_document_title(faktura["numer_ksef"]),
         "doc_number":      None,                     # uzupelni DatabaseAdapter przy sync
         "contractor_name": None,                     # uzupelni DatabaseAdapter przy sync
@@ -441,13 +458,14 @@ def build_log_records(
         }, ensure_ascii=False)
 
         result.append({
-            "id_instance": new_instance_id,
-            "id_user":     log["user_id"],
-            "action":      new_action,
-            "step_order":  None,
-            "details":     new_details,
-            "is_voided":   0,
-            "created_at":  log["CreatedAt"],
+            "id_instance":      new_instance_id,
+            "id_user":          log["user_id"],
+            "username_snapshot": log.get("actor_name") or log.get("username") or None,
+            "action":           new_action,
+            "step_order":       None,
+            "details":          new_details,
+            "is_voided":        0,
+            "created_at":       log["CreatedAt"],
         })
     return result
 
@@ -504,13 +522,13 @@ def migrate_instances(
                     INSERT INTO [{SCHEMA}].[skw_document_approval_instances] (
                         [id_source], [id_document], [id_category], [id_path],
                         [status], [current_step], [document_title],
-                        [doc_number], [contractor_name], [document_date],
                         [document_amount], [extra_data], [priority],
                         [dispatch_attempts], [dispatched_at], [completed_at],
                         [created_at], [updated_at], [is_urgent]
-                    ) VALUES (
+                    )
+                    OUTPUT INSERTED.[id_instance]
+                    VALUES (
                         ?, ?, ?, ?,
-                        ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
@@ -519,14 +537,13 @@ def migrate_instances(
                 """,
                     rec["id_source"], rec["id_document"], rec["id_category"], rec["id_path"],
                     rec["status"], rec["current_step"], rec["document_title"],
-                    rec["doc_number"], rec["contractor_name"], rec["document_date"],
                     rec["document_amount"], rec["extra_data"], rec["priority"],
                     rec["dispatch_attempts"], rec["dispatched_at"], rec["completed_at"],
                     rec["created_at"], rec["updated_at"], rec["is_urgent"],
                 )
-                # Pobierz nowe ID
-                cur.execute("SELECT SCOPE_IDENTITY()")
-                new_id = int(cur.fetchone()[0])
+                # OUTPUT INSERTED zwraca nowe ID bezposrednio — niezawodne z pyodbc/MSSQL
+                row = cur.fetchone()
+                new_id = int(row[0])
                 old_to_new[old_id] = new_id
             else:
                 # Dry-run: symuluj ID (ujemne, zeby nie kolidowaly)
@@ -583,14 +600,15 @@ def migrate_logs(
                     # Nie uzywamy ORM zeby nie ryzykowac przypadkowego UPDATE
                     cur.execute(f"""
                         INSERT INTO [{SCHEMA}].[skw_approval_log] (
-                            [id_instance], [id_user], [action],
-                            [step_order], [details], [is_voided], [created_at]
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            [id_instance], [id_user], [username_snapshot], [action],
+                            [step_order_snapshot], [details], [is_voided], [logged_at]
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         log_rec["id_instance"],
                         log_rec["id_user"],
+                        log_rec.get("username_snapshot"),
                         log_rec["action"],
-                        log_rec["step_order"],
+                        log_rec.get("step_order"),
                         log_rec["details"],
                         log_rec["is_voided"],
                         log_rec["created_at"],
@@ -610,50 +628,29 @@ def migrate_logs(
 # KROK 6 — Triggery DENY na starych tabelach
 # ---------------------------------------------------------------------------
 
-DENY_TRIGGER_FAKTURA_AKCEPTACJA = f"""
-CREATE TRIGGER [dbo].[TR_skw_faktura_akceptacja_DENY]
-ON [{SCHEMA}].[skw_faktura_akceptacja]
-AFTER INSERT, UPDATE, DELETE
-AS
-BEGIN
-    RAISERROR(
-        N'Tabela skw_faktura_akceptacja jest archiwalna (Krok 0 Etapu 2). '
-        N'Uzyj skw_document_approval_instances.',
-        10,  -- severity <= 10: nie rollbackuje transakcji (zgodnie z decyzja F0.4)
-        1
-    );
-END
-"""
+DENY_TRIGGER_FAKTURA_AKCEPTACJA = (
+    f"CREATE TRIGGER [dbo].[TR_skw_faktura_akceptacja_DENY] "
+    f"ON [{SCHEMA}].[skw_faktura_akceptacja] "
+    f"AFTER INSERT, UPDATE, DELETE AS BEGIN "
+    f"RAISERROR(N'Tabela skw_faktura_akceptacja jest archiwalna (Krok 0 Etapu 2). "
+    f"Uzyj skw_document_approval_instances.', 10, 1); END"
+)
 
-DENY_TRIGGER_FAKTURA_PRZYPISANIE = f"""
-CREATE TRIGGER [dbo].[TR_skw_faktura_przypisanie_DENY]
-ON [{SCHEMA}].[skw_faktura_przypisanie]
-AFTER INSERT, UPDATE, DELETE
-AS
-BEGIN
-    RAISERROR(
-        N'Tabela skw_faktura_przypisanie jest archiwalna (Krok 0 Etapu 2). '
-        N'Przypisania obsluguje silnik obiegu approval.',
-        10,
-        1
-    );
-END
-"""
+DENY_TRIGGER_FAKTURA_PRZYPISANIE = (
+    f"CREATE TRIGGER [dbo].[TR_skw_faktura_przypisanie_DENY] "
+    f"ON [{SCHEMA}].[skw_faktura_przypisanie] "
+    f"AFTER INSERT, UPDATE, DELETE AS BEGIN "
+    f"RAISERROR(N'Tabela skw_faktura_przypisanie jest archiwalna (Krok 0 Etapu 2). "
+    f"Przypisania obsluguje silnik obiegu approval.', 10, 1); END"
+)
 
-DENY_TRIGGER_FAKTURA_LOG = f"""
-CREATE TRIGGER [dbo].[TR_skw_faktura_log_DENY]
-ON [{SCHEMA}].[skw_faktura_log]
-AFTER INSERT, UPDATE, DELETE
-AS
-BEGIN
-    RAISERROR(
-        N'Tabela skw_faktura_log jest archiwalna (Krok 0 Etapu 2). '
-        N'Historia obiegu jest w skw_approval_log.',
-        10,
-        1
-    );
-END
-"""
+DENY_TRIGGER_FAKTURA_LOG = (
+    f"CREATE TRIGGER [dbo].[TR_skw_faktura_log_DENY] "
+    f"ON [{SCHEMA}].[skw_faktura_log] "
+    f"AFTER INSERT, UPDATE, DELETE AS BEGIN "
+    f"RAISERROR(N'Tabela skw_faktura_log jest archiwalna (Krok 0 Etapu 2). "
+    f"Historia obiegu jest w skw_approval_log.', 10, 1); END"
+)
 
 
 def apply_deny_triggers(conn: pyodbc.Connection, dry_run: bool) -> None:

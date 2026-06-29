@@ -20,7 +20,7 @@ Create Date: 2026-06-26
 """
 
 from alembic import op
-from sqlalchemy import text
+from sqlalchemy import text, DDL
 
 revision      = "0040"
 down_revision = "0039"
@@ -104,39 +104,74 @@ def upgrade() -> None:
         "@ksef_id = N'__health_check__', @action = N'accepted'"
     ))
 
-    # ── 3. Seed hooka Fakira ──────────────────────────────────────────────────
+    # ── 3. Rejestracja procedury w skw_SchemaChecksums ───────────────────────
+    # Musi byc PO CREATE OR ALTER PROCEDURE — checksum liczony z finalnej wersji.
+    # SchemaIntegrity watchdog blokuje start API gdy znajdzie niezarejestrowany
+    # obiekt. ObjectType='PROCEDURE' — zgodny z CHECK constraintem.
+    # MERGE idempotentny — bezpieczny przy ponownym uruchomieniu.
+    op.execute(text("""
+        MERGE [dbo].[skw_SchemaChecksums] AS target
+        USING (
+            SELECT
+                N'dbo'                           AS SchemaName,
+                N'skw_AktualizujStatusFaktury'   AS ObjectName,
+                N'PROCEDURE'                     AS ObjectType,
+                CHECKSUM(m.definition)           AS Checksum,
+                N'0040'                          AS AlembicRevision,
+                SYSUTCDATETIME()                 AS Now
+            FROM sys.sql_modules m
+            JOIN sys.objects  o ON o.object_id = m.object_id
+            JOIN sys.schemas  s ON s.schema_id = o.schema_id
+            WHERE o.name = N'skw_AktualizujStatusFaktury'
+              AND s.name = N'dbo'
+        ) AS source
+        ON  target.[SchemaName] = source.[SchemaName]
+        AND target.[ObjectName] = source.[ObjectName]
+        WHEN MATCHED THEN
+            UPDATE SET
+                target.[Checksum]        = source.[Checksum],
+                target.[ObjectType]      = source.[ObjectType],
+                target.[AlembicRevision] = source.[AlembicRevision],
+                target.[LastVerifiedAt]  = source.[Now]
+        WHEN NOT MATCHED THEN
+            INSERT ([SchemaName], [ObjectName], [ObjectType],
+                    [Checksum], [AlembicRevision], [LastVerifiedAt])
+            VALUES (source.[SchemaName], source.[ObjectName], source.[ObjectType],
+                    source.[Checksum], source.[AlembicRevision], source.[Now]);
+    """))
+
+    # ── 4. Seed hooka Fakira ──────────────────────────────────────────────────
     # MERGE idempotentny — jeden aktywny hook per (id_source, trigger_action)
     # Placeholdery w operation_config:
     #   {extra.ksef_id} — KSEF_ID dokumentu z extra_data instancji
     #   {action}        — nazwa akcji ('accepted' lub 'rejected')
-    op.execute(text("""
-        MERGE [dbo].[skw_source_hooks] AS target
-        USING (
-            SELECT
-                (
-                    SELECT [id_source]
-                    FROM   [dbo].[skw_document_sources]
-                    WHERE  [source_name] = N'fakir'
-                ) AS id_source,
-                N'accepted'      AS trigger_action,
-                N'sql_procedure' AS operation_type,
-                N'{"procedure_name":"dbo.skw_AktualizujStatusFaktury","params":{"ksef_id":"{extra.ksef_id}","action":"{action}"},"timeout_seconds":30}' AS operation_config,
-                N'critical'      AS severity,
-                1                AS is_active
-        ) AS source
-        ON  target.[id_source]      = source.[id_source]
-        AND target.[trigger_action] = source.[trigger_action]
-        AND target.[is_active]      = 1
-        WHEN NOT MATCHED THEN
-            INSERT (
-                [id_source], [trigger_action], [operation_type],
-                [operation_config], [severity], [is_active]
-            )
-            VALUES (
-                source.[id_source], source.[trigger_action], source.[operation_type],
-                source.[operation_config], source.[severity], source.[is_active]
-            );
-    """))
+    #
+    # UWAGA: DDL() zamiast text() — text() parsuje {} jako bind parameters,
+    # co koliduje z nawiasami klamrowymi w JSON operation_config.
+    # DDL() przekazuje SQL dosłownie do sterownika bez żadnego parsowania.
+    op.execute(DDL(
+        "MERGE [dbo].[skw_source_hooks] AS target "
+        "USING ( "
+        "    SELECT "
+        "        (SELECT [id_source] FROM [dbo].[skw_document_sources] "
+        "         WHERE  [source_name] = N'fakir') AS id_source, "
+        "        N'accepted'      AS trigger_action, "
+        "        N'sql_procedure' AS operation_type, "
+        "        N'{\"procedure_name\":\"dbo.skw_AktualizujStatusFaktury\","
+        "\"params\":{\"ksef_id\":\"{extra.ksef_id}\",\"action\":\"{action}\"},"
+        "\"timeout_seconds\":30}' AS operation_config, "
+        "        N'critical'      AS severity, "
+        "        1                AS is_active "
+        ") AS source "
+        "ON  target.[id_source]      = source.[id_source] "
+        "AND target.[trigger_action] = source.[trigger_action] "
+        "AND target.[is_active]      = 1 "
+        "WHEN NOT MATCHED THEN "
+        "    INSERT ([id_source],[trigger_action],[operation_type],"
+        "            [operation_config],[severity],[is_active]) "
+        "    VALUES (source.[id_source],source.[trigger_action],source.[operation_type],"
+        "            source.[operation_config],source.[severity],source.[is_active]);"
+    ))
 
 
 def downgrade() -> None:
