@@ -56,7 +56,9 @@ class MonitHistory(Base):
     recipient: Mapped[Optional[str]] = mapped_column("Recipient", String(100), nullable=True)
     subject: Mapped[Optional[str]] = mapped_column("Subject", String(200), nullable=True)
     message_body: Mapped[Optional[str]] = mapped_column("MessageBody", Text, nullable=True)
-    total_debt: Mapped[Optional[float]] = mapped_column("TotalDebt", Numeric(18, 2), nullable=True)
+    total_debt:      Mapped[Optional[float]] = mapped_column("TotalDebt",      Numeric(18, 2), nullable=True)
+    odsetki_total:   Mapped[Optional[float]] = mapped_column("OdsetkiTotal",   Numeric(18, 2), nullable=True)
+    kwota_calkowita: Mapped[Optional[float]] = mapped_column("KwotaCalkowita", Numeric(18, 2), nullable=True)
     invoice_numbers: Mapped[Optional[str]] = mapped_column("InvoiceNumbers", String(500), nullable=True)
     pdf_path: Mapped[Optional[str]] = mapped_column("PDFPath", String(500), nullable=True)
     external_id: Mapped[Optional[str]] = mapped_column("ExternalID", String(100), nullable=True)
@@ -85,6 +87,18 @@ class MonitHistoryInvoice(Base):
         "CreatedAt", DateTime, nullable=False,
         default=lambda: datetime.now().replace(tzinfo=None),
     )
+
+class Template(Base):
+    """skw_Templates — odczyt szablonu dla generate_pdf_task."""
+    __tablename__ = "skw_Templates"
+    __table_args__ = {"schema": "dbo"}
+
+    id_template:   Mapped[int]           = mapped_column("ID_TEMPLATE", Integer, primary_key=True)
+    template_name: Mapped[str]           = mapped_column("TemplateName", String(200))
+    template_type: Mapped[str]           = mapped_column("TemplateType", String(20))
+    body:          Mapped[Optional[str]] = mapped_column("Body", Text, nullable=True)
+    subject:       Mapped[Optional[str]] = mapped_column("Subject", String(500), nullable=True)
+    is_active:     Mapped[bool]          = mapped_column("IsActive", Boolean, default=True)    
 
 
 class AuditLog(Base):

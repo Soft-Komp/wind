@@ -987,29 +987,74 @@ async def send_bulk(
         template = await _get_template(db, request.template_id)
         template_subject = template.subject
     # Krok 2b: Pobranie emaili / telefonów dłużników z WAPRO
+    # Polityka: brak adresu u KOGOKOLWIEK = blokada CAŁEJ partii (atomowo)
     from app.db.wapro import get_debtor_by_id as _wapro_get_debtor
     debtor_contacts: dict[int, str] = {}
     debtor_contacts_raw: dict[int, dict] = {}
+    _missing_contact: list[dict] = []  # kontrahenci bez adresu
+
     for debtor_id in valid_ids:
         try:
             wapro_result = await _wapro_get_debtor(debtor_id)
             if wapro_result.rows:
-                    row = wapro_result.rows[0]
-                    debtor_contacts_raw[debtor_id] = row
-                    email = row.get("Email") or ""
-                    phone = row.get("Telefon") or ""
-                    if request.monit_type == "email":
-                        debtor_contacts[debtor_id] = email.strip()
-                    elif request.monit_type == "sms":
-                        debtor_contacts[debtor_id] = phone.strip()
+                row = wapro_result.rows[0]
+                debtor_contacts_raw[debtor_id] = row
+                email = (row.get("Email") or "").strip()
+                phone = (row.get("Telefon") or "").strip()
+                if request.monit_type == "email":
+                    if not email:
+                        _missing_contact.append({
+                            "debtor_id": debtor_id,
+                            "reason": "Brak adresu email w WAPRO",
+                        })
                     else:
-                        debtor_contacts[debtor_id] = ""
+                        debtor_contacts[debtor_id] = email
+                elif request.monit_type == "sms":
+                    if not phone:
+                        _missing_contact.append({
+                            "debtor_id": debtor_id,
+                            "reason": "Brak numeru telefonu w WAPRO",
+                        })
+                    else:
+                        debtor_contacts[debtor_id] = phone
+                else:
+                    debtor_contacts[debtor_id] = ""
+            else:
+                # Kontrahent nie istnieje w WAPRO (edge case — validate_ids powinien to złapać wcześniej)
+                _missing_contact.append({
+                    "debtor_id": debtor_id,
+                    "reason": "Kontrahent nie znaleziony w WAPRO",
+                })
         except Exception as exc:
             logger.warning(
                 "Nie udało się pobrać danych kontaktowych dłużnika",
                 extra={"debtor_id": debtor_id, "error": str(exc)}
             )
-            debtor_contacts[debtor_id] = ""
+            _missing_contact.append({
+                "debtor_id": debtor_id,
+                "reason": f"Błąd pobierania danych z WAPRO: {exc}",
+            })
+
+    # BLOKADA: jeśli ktokolwiek nie ma adresu — przerywamy całą partię
+    if _missing_contact:
+        logger.warning(
+            "send_bulk ZABLOKOWANY — brak danych kontaktowych u części dłużników",
+            extra={
+                "monit_type":      request.monit_type,
+                "total_requested": len(valid_ids),
+                "missing_count":   len(_missing_contact),
+                "missing_sample":  _missing_contact[:20],
+                "triggered_by":    triggered_by_user_id,
+                "ip_address":      ip_address,
+            },
+        )
+        raise MonitValidationError(
+            f"Wysyłka zablokowana — {len(_missing_contact)} z {len(valid_ids)} "
+            f"dłużników nie ma adresu "
+            f"{'email' if request.monit_type == 'email' else 'telefonu'} w WAPRO. "
+            f"Uzupełnij dane kontaktowe i spróbuj ponownie. "
+            f"Brakujące ID: {[m['debtor_id'] for m in _missing_contact]}"
+        )
     # Krok 3: Pobierz koszty dodatkowe dla kanału (raz dla całego bulk)
     from app.services import koszt_service as _koszt_service
     from app.db.wapro import get_odsetki_for_rozrachunki as _get_odsetki
@@ -1071,7 +1116,19 @@ async def send_bulk(
                 )
 
         odsetki_total = _D(str(sum(odsetki_map.values()))) if odsetki_map else _D("0.00")
-        total_debt    = _D(str(debtor_info.get("SumaDlugu") or "0"))
+        if debtor_invoice_ids:
+            try:
+                from app.db.wapro import get_invoice_amounts_by_ids as _get_amounts
+                _amounts_map = await _get_amounts(debtor_invoice_ids)
+                total_debt = _D(str(sum(_amounts_map.get(i, 0) for i in debtor_invoice_ids)))
+            except Exception as _exc_amounts:
+                logger.warning(
+                    "Nie udało się pobrać kwot faktur dla debtor=%d: %s — fallback na SumaDlugu",
+                    debtor_id, _exc_amounts,
+                )
+                total_debt = _D(str(debtor_info.get("SumaDlugu") or "0"))
+        else:
+            total_debt = _D(str(debtor_info.get("SumaDlugu") or "0"))
 
         # Koszty dodatkowe — tylko gdy flaga włączona
         _koszty_do_doliczenia = suma_kosztow_dodatkowych if request.include_koszty else _D("0.00")
@@ -1125,12 +1182,20 @@ async def send_bulk(
             # generate_pdf_task przyjmuje pojedynczy monit_id — enqueue per dłużnik
             for idx, debtor_id in enumerate(valid_ids):
                 debtor_info = debtor_contacts_raw.get(debtor_id, {})
+                # Faktury dla tego dłużnika
+                _inv_ids_for_debtor = []
+                if request.invoice_ids_per_debtor:
+                    _inv_map = {int(k): v for k, v in request.invoice_ids_per_debtor.items()}
+                    _inv_ids_for_debtor = _inv_map.get(debtor_id, [])
+
                 arq_payload = {
                     "monit_id":             monit_ids[idx],
                     "debtor_name":          debtor_info.get("NazwaKontrahenta") or f"Dłużnik {debtor_id}",
-                    "debtor_nip":           None,
-                    "debtor_address":       None,
-                    "invoices":             None,
+                    "debtor_nip":           debtor_info.get("NIP"),
+                    "debtor_address":       debtor_info.get("Adres"),
+                    "invoices":             [
+                        {"number": str(inv_id)} for inv_id in _inv_ids_for_debtor
+                    ] if _inv_ids_for_debtor else None,
                     "total_debt":           float(debtor_info.get("SumaDlugu") or 0.0),
                     "payment_deadline":     None,
                     "payment_account":      None,

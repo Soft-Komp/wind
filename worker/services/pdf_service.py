@@ -373,13 +373,14 @@ def generate_monit_reference(monit_id: int, dt: Optional[date] = None) -> str:
 async def generate_pdf(
     monit_id: int,
     debtor_name: str,
-    debtor_nip: Optional[str],
-    debtor_address: Optional[str],
-    invoices: list[dict],
-    total_debt: float,
-    payment_deadline: str,
+    debtor_nip: Optional[str] = None,
+    debtor_address: Optional[str] = None,
+    invoices: Optional[list[dict]] = None,
+    total_debt: float = 0.0,
+    payment_deadline: Optional[str] = None,
     payment_account: Optional[str] = None,
     issue_date: Optional[str] = None,
+    template_body: Optional[str] = None,
 ) -> bytes:
     """
     Generuje PDF monitu windykacyjnego.
@@ -485,10 +486,41 @@ async def generate_pdf(
 
         # Treść wezwania
         story.append(Paragraph("WEZWANIE DO ZAPŁATY", style_heading))
-        story.append(Paragraph(
-            "Wzywamy do niezwłocznego uregulowania zaległych należności:",
-            style_normal,
-        ))
+
+        if template_body:
+            # Szablon z bazy — renderuj Jinja2 i wstaw jako tekst
+            try:
+                from jinja2 import Environment, BaseLoader
+                _env = Environment(loader=BaseLoader())
+                _rendered = _env.from_string(template_body).render(
+                    debtor_name=debtor_name,
+                    total_debt=f"{total_debt:.2f}",
+                    invoice_list=", ".join(
+                        str(inv.get("number", "")) for inv in (invoices or [])
+                    ),
+                    due_date=payment_deadline or "",
+                    company_name=settings.COMPANY_NAME,
+                )
+                # Usuń tagi HTML — ReportLab obsługuje tylko <b><i><br/>
+                import re as _re
+                _rendered = _re.sub(r"<(?!b>|/b>|i>|/i>|br/>)[^>]+>", " ", _rendered)
+                _rendered = _re.sub(r"\s+", " ", _rendered).strip()
+                story.append(Paragraph(_rendered, style_normal))
+            except Exception as _tmpl_exc:
+                logger.warning(
+                    "generate_pdf: blad renderowania szablonu — fallback domyslny",
+                    extra={"monit_id": monit_id, "error": str(_tmpl_exc)},
+                )
+                story.append(Paragraph(
+                    "Wzywamy do niezwłocznego uregulowania zaległych należności:",
+                    style_normal,
+                ))
+        else:
+            story.append(Paragraph(
+                "Wzywamy do niezwłocznego uregulowania zaległych należności:",
+                style_normal,
+            ))
+
         story.append(Spacer(1, 0.3 * cm))
 
         # Tabela faktur

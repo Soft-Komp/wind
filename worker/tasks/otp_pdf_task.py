@@ -77,16 +77,78 @@ async def generate_pdf_task(
     )
 
     try:
-        pdf_bytes = await generate_pdf(
-            monit_id=monit_id,
-            debtor_name=debtor_name,
-            debtor_nip=debtor_nip,
-            debtor_address=debtor_address,
-            invoices=invoices or [],
-            total_debt=total_debt,
-            payment_deadline=payment_deadline or _calc_deadline(),
-            payment_account=payment_account,
-        )
+# Odczytaj wszystkie dane z MonitHistory — szablon, faktury, kwota
+        template_body    = None
+        invoice_list_str = "—"
+        effective_total  = total_debt
+
+        async with get_session() as db:
+            mh_result = await db.execute(
+                select(MonitHistory).where(MonitHistory.id_monit == monit_id)
+            )
+            monit_row = mh_result.scalar_one_or_none()
+
+            if monit_row:
+                # Kwota z MonitHistory (najbardziej aktualna)
+                if monit_row.kwota_calkowita is not None:
+                    effective_total = float(monit_row.kwota_calkowita)
+                elif monit_row.total_debt is not None:
+                    effective_total = float(monit_row.total_debt)
+
+                # Numery faktur z MonitHistory
+                if monit_row.invoice_numbers:
+                    invoice_list_str = monit_row.invoice_numbers
+
+                # Szablon z bazy
+                if monit_row.template_id:
+                    from worker.core.db import Template
+                    tmpl_result = await db.execute(
+                        select(Template).where(
+                            Template.id_template == monit_row.template_id,
+                            Template.is_active == True,
+                        )
+                    )
+                    tmpl = tmpl_result.scalar_one_or_none()
+                    if tmpl and tmpl.body:
+                        template_body = tmpl.body
+                        logger.info(
+                            "generate_pdf_task: szablon z bazy",
+                            extra={
+                                "monit_id":    monit_id,
+                                "template_id": monit_row.template_id,
+                                "invoice_list": invoice_list_str,
+                                "total_debt":  effective_total,
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            "generate_pdf_task: brak szablonu — fallback domyslny",
+                            extra={"monit_id": monit_id, "template_id": monit_row.template_id},
+                        )
+
+        # Generuj PDF — jesli jest szablon, renderuj Jinja2 i buduj przez ReportLab
+        # tak samo jak generate_pdf_preview (identyczny wyglad)
+        if template_body:
+            pdf_bytes = await _generate_pdf_from_template(
+                monit_id=monit_id,
+                template_body=template_body,
+                debtor_name=debtor_name,
+                invoice_list=invoice_list_str,
+                total_debt=effective_total,
+                payment_deadline=payment_deadline or _calc_deadline(),
+                payment_account=payment_account,
+            )
+        else:
+            pdf_bytes = await generate_pdf(
+                monit_id=monit_id,
+                debtor_name=debtor_name,
+                debtor_nip=debtor_nip,
+                debtor_address=debtor_address,
+                invoices=invoices or [],
+                total_debt=effective_total,
+                payment_deadline=payment_deadline or _calc_deadline(),
+                payment_account=payment_account,
+            )
 
         pdf_path = save_pdf_to_disk(pdf_bytes, monit_id, "print")
         duration_ms = (time.monotonic() - task_start) * 1000
@@ -156,6 +218,128 @@ async def generate_pdf_task(
         )
         raise
 
+
+async def _generate_pdf_from_template(
+    monit_id: int,
+    template_body: str,
+    debtor_name: str,
+    invoice_list: str,
+    total_debt: float,
+    payment_deadline: str,
+    payment_account: Optional[str] = None,
+) -> bytes:
+    """
+    Generuje PDF z szablonu Jinja2 — identyczny wyglad jak generate_pdf_preview.
+    Uzywane gdy monit ma przypisany szablon z bazy (skw_Templates).
+    """
+    from io import BytesIO
+    from jinja2 import Environment, BaseLoader, Undefined
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import re
+
+    settings = get_settings()
+
+    # Rejestracja fontow DejaVu
+    _DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", f"{_DEJAVU_DIR}/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVu-Bold", f"{_DEJAVU_DIR}/DejaVuSans-Bold.ttf"))
+        pdfmetrics.registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold")
+        _font = "DejaVu"
+    except Exception:
+        _font = "Helvetica"
+
+    # Renderuj Jinja2
+    class _Silent(Undefined):
+        def __str__(self): return ""
+        def __iter__(self): return iter([])
+        def __bool__(self): return False
+
+    _env = Environment(loader=BaseLoader(), undefined=_Silent)
+    rendered = _env.from_string(template_body).render(
+        debtor_name=debtor_name,
+        total_debt=f"{total_debt:.2f}",
+        invoice_list=invoice_list,
+        due_date=payment_deadline,
+        company_name=settings.COMPANY_NAME,
+    )
+
+    # Zamien <br/> i <br> na newline przed podziałem na linie
+    rendered = re.sub(r"<br\s*/?>", "\n", rendered)
+    # Zamien <p> i </p> na newline
+    rendered = re.sub(r"</p>", "\n", rendered, flags=re.IGNORECASE)
+    rendered = re.sub(r"<p[^>]*>", "\n", rendered, flags=re.IGNORECASE)
+    # Usun pozostale tagi HTML (zachowaj <b> <i>)
+    rendered = re.sub(r"<(?!/?b>|/?i>)[^>]+>", "", rendered)
+    # Znormalizuj wielokrotne spacje w linii (ale nie newline)
+    rendered = re.sub(r"[^\S\n]+", " ", rendered)
+
+    # Buduj PDF przez ReportLab — te same style co podglad
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=2*cm, leftMargin=2*cm,
+        topMargin=2*cm, bottomMargin=2*cm,
+    )
+    base = getSampleStyleSheet()
+    style_normal = ParagraphStyle(
+        "N", parent=base["Normal"],
+        fontName=_font, fontSize=10, leading=14,
+    )
+    style_title = ParagraphStyle(
+        "T", parent=base["Title"],
+        fontName=_font, fontSize=14, leading=18,
+    )
+
+    story = []
+    story.append(Paragraph(f"<b>{settings.COMPANY_NAME}</b>", style_title))
+    if getattr(settings, "COMPANY_NIP", None):
+        story.append(Paragraph(f"NIP: {settings.COMPANY_NIP}", style_normal))
+    if getattr(settings, "COMPANY_ADDRESS", None):
+        story.append(Paragraph(settings.COMPANY_ADDRESS, style_normal))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Każda linia jako osobny paragraf — identycznie jak podgląd
+    for line in rendered.splitlines():
+        line = line.strip()
+        if line:
+            story.append(Paragraph(line, style_normal))
+        else:
+            story.append(Spacer(1, 0.3*cm))
+
+    story.append(Spacer(1, 0.5*cm))
+    if payment_deadline:
+        story.append(Paragraph(
+            f"Termin zapłaty: <b>{payment_deadline}</b>", style_normal
+        ))
+    if payment_account:
+        story.append(Paragraph(f"Numer konta: {payment_account}", style_normal))
+    story.append(Spacer(1, 1*cm))
+    story.append(Paragraph(
+        f"Z poważaniem,<br/><b>{settings.COMPANY_NAME}</b><br/>Dział Windykacji",
+        style_normal,
+    ))
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    logger.info(
+        "_generate_pdf_from_template: wygenerowano",
+        extra={
+            "monit_id":    monit_id,
+            "pdf_size_kb": round(len(pdf_bytes) / 1024, 1),
+            "debtor_name": debtor_name,
+            "invoice_list": invoice_list,
+            "total_debt":  total_debt,
+        },
+    )
+    return pdf_bytes
 
 def _calc_deadline(days: int = 7) -> str:
     from datetime import timedelta

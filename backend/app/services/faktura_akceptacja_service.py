@@ -2616,18 +2616,16 @@ async def get_faktury_list(
     )
  
  
-async def _get_historia_faktury_legacy(
+async def get_historia_faktury(
     *,
     db: AsyncSession,
     ksef_id: str,
 ) -> list[dict]:
     """
-    Dispatcher: stara lub nowa implementacja historii faktury.
+    Historia faktury — zawsze z nowej implementacji (skw_approval_log).
+    Stara implementacja (skw_faktura_log) nie istniała jako osobna funkcja.
     """
-    if await _is_new_impl_enabled(db):
-        logger.info("get_historia_faktury: nowa implementacja (ETAP2=true)")
-        return await get_historia_faktury_new(db=db, ksef_id=ksef_id)
-    return await _get_historia_faktury_legacy(db=db, ksef_id=ksef_id)
+    return await get_historia_faktury_new(db=db, ksef_id=ksef_id)
  
  
 async def check_decyzja_allowed(db: AsyncSession) -> None:

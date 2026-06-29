@@ -2152,6 +2152,39 @@ async def get_invoice_numbers_by_ids(invoice_ids: list[int]) -> dict[int, str]:
         )
         return {}
 
+async def get_invoice_amounts_by_ids(invoice_ids: list[int]) -> dict[int, float]:
+    """
+    Zwraca słownik {id_rozrachunku: kwota_pozostala} dla podanych ID faktur.
+    Używane do obliczenia total_debt dla wybranych faktur przy wysyłce monitu.
+    """
+    if not invoice_ids:
+        return {}
+
+    placeholders = ", ".join(["?" for _ in invoice_ids])
+    sql = f"""
+        SELECT ID_ROZRACHUNKU, ISNULL(KwotaPozostala, 0) AS KwotaPozostala
+        FROM dbo.skw_rozrachunki_faktur
+        WHERE ID_ROZRACHUNKU IN ({placeholders})
+    """
+    try:
+        rows = await _run_in_executor(
+            _execute_query_sync,
+            sql,
+            tuple(invoice_ids),
+            "get_invoice_amounts",
+            "get_invoice_amounts_by_ids",
+        )
+        return {
+            int(row["ID_ROZRACHUNKU"]): float(row["KwotaPozostala"] or 0)
+            for row in rows
+            if row.get("ID_ROZRACHUNKU") is not None
+        }
+    except Exception as exc:
+        logger.warning(
+            "get_invoice_amounts_by_ids: błąd pobierania kwot: %s", exc
+        )
+        return {}
+
 # ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------

@@ -573,10 +573,10 @@ async def _update_last_verified(
             await db.execute(
                 text(
                     """
-                    UPDATE dbo_ext.skw_SchemaChecksums
+                    UPDATE dbo.skw_SchemaChecksums
                     SET LastVerifiedAt = :verified_at
                     WHERE LOWER(SchemaName) = :schema_name
-                      AND LOWER(ObjectName) = :object_name
+                    AND LOWER(ObjectName) = :object_name
                     """
                 ),
                 {

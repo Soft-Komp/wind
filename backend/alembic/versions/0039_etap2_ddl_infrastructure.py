@@ -322,14 +322,14 @@ def _krok01_document_sources_alter() -> None:
     """)
 
     _execute(f"""
-        IF NOT EXISTS (
-            SELECT 1 FROM sys.indexes
-            WHERE object_id = OBJECT_ID(N'[{SCHEMA}].[skw_document_sources]')
-              AND name = N'UQ_skw_ds_webhook_token'
-        )
-        ALTER TABLE [{SCHEMA}].[skw_document_sources]
-            ADD CONSTRAINT [UQ_skw_ds_webhook_token]
-                UNIQUE ([webhook_token])
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'[{SCHEMA}].[skw_document_sources]')
+          AND name = N'UQ_skw_ds_webhook_token'
+    )
+    CREATE UNIQUE NONCLUSTERED INDEX [UQ_skw_ds_webhook_token]
+        ON [{SCHEMA}].[skw_document_sources] ([webhook_token])
+        WHERE [webhook_token] IS NOT NULL
     """)
     _log("01m", "webhook_token NULL UNIQUE OK")
 
@@ -1114,7 +1114,7 @@ def _krok11_seed_permissions() -> None:
                     N'sources',     N'documents',    N'ksef',        N'webhooks',
                     N'ksef2',       N'ocr',         N'deadlines',   N'sync',
                     N'dispatch',    N'duplicates',   N'hooks',       N'folders',
-                    N'snapshot',    N'etap2'
+                    N'snapshot',    N'etap2',        N'koszty'
                 )
             )
     """)
@@ -1430,63 +1430,14 @@ def _krok12_seed_system_config() -> None:
 
 def _krok13_schema_checksums() -> None:
     """
-    Rejestruje nowe obiekty schematu w skw_SchemaChecksums.
+    Rejestracja nowych obiektow w skw_SchemaChecksums pominieta.
 
-    Checksum obliczany przez MSSQL CHECKSUM() = INT (nie MD5 hex).
-    Mechanizm schema_tamper_watchdog porownuje to przy starcie serwisu.
-
-    Rejestrujemy:
-      - 6 nowych tabel
-      - Zmodyfikowane tabele (nowe kolumny zmieniaja ich definicje)
+    Tabela skw_SchemaChecksums ma CHECK constraint CK_skw_SchemaChecksums_ObjectType
+    ktory dopuszcza tylko: FUNCTION, INDEX, PROCEDURE, VIEW.
+    Nowe tabele Etapu 2 (type=TABLE) nie pasuja do tego constraintu.
+    Schema watchdog weryfikuje widoki i procedury — tabele nie sa objete tym mechanizmem.
     """
-    _log("13", "MERGE skw_SchemaChecksums — rejestracja nowych obiektow")
-
-    objects_to_register = [
-        "skw_source_hooks",
-        "skw_source_actions",
-        "skw_source_action_log",
-        "skw_document_folders",
-        "skw_document_folder_items",
-        "skw_approval_filter_visibility",
-        "skw_document_sources",
-        "skw_document_approval_instances",
-        "skw_approval_filters",
-    ]
-
-    for obj_name in objects_to_register:
-        _execute(f"""
-            MERGE [{SCHEMA}].[skw_SchemaChecksums] AS target
-            USING (
-                SELECT
-                    N'{SCHEMA}'    AS SchemaName,
-                    N'{obj_name}'  AS ObjectName,
-                    CHECKSUM_AGG(CHECKSUM(
-                        c.column_id,
-                        c.name,
-                        c.system_type_id,
-                        c.max_length,
-                        c.is_nullable
-                    )) AS Checksum,
-                    SYSUTCDATETIME() AS Now
-                FROM sys.columns c
-                JOIN sys.tables  t ON t.object_id = c.object_id
-                JOIN sys.schemas s ON s.schema_id = t.schema_id
-                WHERE t.name   = N'{obj_name}'
-                  AND s.name   = N'{SCHEMA}'
-            ) AS source
-            ON  target.[SchemaName] = source.[SchemaName]
-            AND target.[ObjectName] = source.[ObjectName]
-            WHEN MATCHED THEN
-                UPDATE SET
-                    target.[Checksum]       = source.[Checksum],
-                    target.[LastVerifiedAt] = source.[Now]
-            WHEN NOT MATCHED THEN
-                INSERT ([SchemaName], [ObjectName], [Checksum], [LastVerifiedAt])
-                VALUES (source.[SchemaName], source.[ObjectName], source.[Checksum], source.[Now]);
-        """)
-
-    _log("13", f"ZAKONCZONE — {len(objects_to_register)} obiektow zarejestrowanych w SchemaChecksums")
-
+    _log("13", "POMINIETO — skw_SchemaChecksums nie obsluguje ObjectType=TABLE")
 
 # =============================================================================
 # DOWNGRADE
