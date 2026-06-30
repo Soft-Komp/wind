@@ -219,3 +219,12 @@ _register_router(
     prefix="/approval",
     tags=["Approval — Obieg Dokumentow"],
 )
+
+# 18. ADMIN — PANEL ADMINISTRACYJNY (F6: zarzadzanie zrodlami)
+_register_router(
+    api_router,
+    module_path="app.api.admin",
+    attr="router",
+    prefix="/admin",
+    tags=["Admin — Panel Administracyjny"],
+)
