@@ -516,6 +516,15 @@ async def _notify_users(
                 logger.warning("notify_users | Redis INCR user=%d: %s", id_user, exc)
 
     # SSE publish
+    # SMS (opcjonalny kanal — DEADLINE_SMS_ENABLED z SystemConfig)
+    sms_enabled = await _get_config_bool(db, "DEADLINE_SMS_ENABLED", False)
+    if sms_enabled and action in ("deadline_warning", "deadline_expired"):
+        await _send_sms_reminders(
+            db, recipients,
+            doc_title=doc_title,
+            action=action,
+            hours=hours,
+        )
     if redis:
         try:
             payload = json.dumps({
@@ -567,10 +576,71 @@ async def _get_supervisors(db) -> list[int]:
         text(
             f"SELECT DISTINCT u.[ID_USER] "
             f"FROM [{_SCHEMA}].[skw_Users] u "
-            f"JOIN [{_SCHEMA}].[skw_RolePermissions] rp ON rp.[role_id] = u.[role_id] "
-            f"JOIN [{_SCHEMA}].[skw_Permissions] p ON p.[id] = rp.[permission_id] "
-            f"WHERE p.[name] = N'approval.supervise' "
+            f"JOIN [{_SCHEMA}].[skw_RolePermissions] rp ON rp.[ID_ROLE] = u.[RoleID] "
+            f"JOIN [{_SCHEMA}].[skw_Permissions] p ON p.[ID_PERMISSION] = rp.[ID_PERMISSION] "
+            f"WHERE p.[PermissionName] = N'approval.supervise' "
+            f"  AND p.[IsActive] = 1 "
             f"  AND u.[IsActive] = 1"
         )
     )
     return [r[0] for r in rows.fetchall()]
+
+async def _send_sms_reminders(
+    db,
+    recipients: set[int],
+    *,
+    doc_title: str,
+    action: str,
+    hours: float | None,
+) -> None:
+    """Wysyła SMS do użytkowników z ustawionym phone_number."""
+    from sqlalchemy import text as _text
+
+    if not recipients:
+        return
+
+    placeholders = ",".join(f":u{i}" for i in range(len(recipients)))
+    params = {f"u{i}": uid for i, uid in enumerate(recipients)}
+
+    rows = await db.execute(
+        _text(
+            f"SELECT [ID_USER], [phone_number], [FullName] "
+            f"FROM [{_SCHEMA}].[skw_Users] "
+            f"WHERE [ID_USER] IN ({placeholders}) "
+            f"  AND [phone_number] IS NOT NULL "
+            f"  AND [phone_number] != N''"
+        ),
+        params,
+    )
+    targets = rows.fetchall()
+    if not targets:
+        return
+
+    label = "Uwaga — termin za" if action == "deadline_warning" else "PRZEKROCZONY termin"
+    hours_str = f" ({int(hours)}h)" if hours is not None else ""
+    message = f"{label}{hours_str}: {doc_title[:80]}. Sprawdz system windykacji."
+
+    from worker.services.sms_service import SmsMessage, send_sms
+
+    for id_user, phone, full_name in targets:
+        try:
+            await send_sms(SmsMessage(phone_number=phone, message=message, user_id=id_user))
+        except Exception as exc:
+            logger.error("_send_sms_reminders | user=%d: %s", id_user, exc)
+
+
+async def _get_config_bool(db, key: str, default: bool) -> bool:
+    """Odczytuje wartość bool z skw_SystemConfig."""
+    from sqlalchemy import text as _text
+    try:
+        result = await db.execute(
+            _text(
+                f"SELECT [ConfigValue] FROM [{_SCHEMA}].[skw_SystemConfig] "
+                f"WHERE [ConfigKey] = :k AND [IsActive] = 1"
+            ),
+            {"k": key},
+        )
+        row = result.fetchone()
+        return str(row[0]).lower() == "true" if row else default
+    except Exception:
+        return default

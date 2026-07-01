@@ -34,6 +34,7 @@ UWAGA: from __future__ import annotations — OK w pliku workera (nie FastAPI ro
 from __future__ import annotations
 
 import asyncio
+from email.policy import default
 import json
 import logging
 import time
@@ -259,6 +260,10 @@ async def _sync_one_source(
                     doc.id_document, source_name, exc,
                 )
 
+        # OCR — tylko dla zrodel FTP i email
+        if source_type in ("ftp", "email") and redis:
+            await _enqueue_ocr_for_new_docs(redis, id_source=id_source)
+
         # Zaktualizuj status zrodla
         if errors == 0:
             msg = f"Pobrano {len(docs)}: {docs_new} nowych, {docs_updated} zaktualizowanych"
@@ -455,3 +460,51 @@ async def _get_config_value(key: str, default: str) -> str:
             return row[0] if row and row[0] else default
     except Exception:
         return default
+    except Exception:
+        return default
+
+
+async def _enqueue_ocr_for_new_docs(
+    redis: Any,
+    *,
+    id_source: int,
+) -> None:
+    """Kolejkuje ocr_task dla nowych instancji ze zrodla FTP/email z ostatnich 6 minut."""
+    engine = get_engine()
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("""
+                SELECT [id_instance], [extra_data]
+                FROM [dbo].[skw_document_approval_instances]
+                WHERE [id_source] = :s
+                  AND [created_at] >= DATEADD(MINUTE, -6, SYSUTCDATETIME())
+                  AND [extra_data] IS NOT NULL
+                  AND [extra_data] LIKE '%file_path%'
+            """), {"s": id_source})
+            rows = result.fetchall()
+    except Exception as exc:
+        logger.warning("_enqueue_ocr: blad pobierania instancji: %s", exc)
+        return
+
+    if not rows:
+        return
+
+    queued = 0
+    for id_instance, extra_data_raw in rows:
+        try:
+            extra = json.loads(extra_data_raw or "{}")
+            file_path = extra.get("file_path")
+            if not file_path:
+                continue
+            from arq.connections import ArqRedis
+            arq: ArqRedis = redis
+            await arq.enqueue_job("ocr_task", id_instance=id_instance, file_path=file_path)
+            queued += 1
+        except Exception as exc:
+            logger.warning("_enqueue_ocr: blad dla id_instance=%d: %s", id_instance, exc)
+
+    if queued:
+        logger.info(
+            "_enqueue_ocr_for_new_docs: zakolejkowano %d taskow OCR | id_source=%d",
+            queued, id_source,
+        )

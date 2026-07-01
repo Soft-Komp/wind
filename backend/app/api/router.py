@@ -228,3 +228,30 @@ _register_router(
     prefix="/admin",
     tags=["Admin — Panel Administracyjny"],
 )
+
+# 19. WEBHOOKS — przyjmowanie dokumentow push (PUBLICZNY)
+_register_router(
+    api_router,
+    module_path="app.api.webhooks",
+    attr="router",
+    prefix="/webhooks",
+    tags=["Webhooks — Integracje zewnetrzne"],
+)
+
+# 20. DOCUMENTS — uniwersalny widok (status-summary, timeline, duplicate-pending, akcje)
+_register_router(
+    api_router,
+    module_path="app.api.documents",
+    attr="router",
+    prefix="/documents",
+    tags=["Documents — Uniwersalny widok"],
+)
+
+# 21. DOCUMENTS — teczki
+_register_router(
+    api_router,
+    module_path="app.api.documents_folders",
+    attr="router",
+    prefix="/documents",
+    tags=["Documents — Teczki"],
+)

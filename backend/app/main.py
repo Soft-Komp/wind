@@ -1045,6 +1045,9 @@ def create_app() -> FastAPI:
     # 2. DynamicCORSMiddleware — zewnętrzna, obsługuje CORS przed resztą
     app.add_middleware(DynamicCORSMiddleware)
 
+    from app.core.maintenance_middleware import MaintenanceMiddleware
+    app.add_middleware(MaintenanceMiddleware)
+
     # ── Routery ───────────────────────────────────────────────────────────────
     _register_routers(app)
 

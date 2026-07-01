@@ -461,7 +461,7 @@ async def _audit_log(
         await db.execute(
             text(
                 f"INSERT INTO [{_SCHEMA}].[skw_AuditLog] "
-                f"([UserId], [Action], [EntityType], [EntityId], [NewValue], [Success], [Timestamp]) "
+                f"([ID_USER], [Action], [EntityType], [EntityID], [NewValue], [Success], [Timestamp]) "
                 f"VALUES (:uid, :action, N'SourceHookAction', :eid, :details, 1, SYSUTCDATETIME())"
             ),
             {

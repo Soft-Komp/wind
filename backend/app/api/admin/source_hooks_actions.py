@@ -36,7 +36,7 @@ from app.services.source_hook_action_service import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/admin/sources/{id_source}")
+router = APIRouter(prefix="/sources/{id_source}")
 
 
 def _raise_hook_error(exc: Exception) -> None:

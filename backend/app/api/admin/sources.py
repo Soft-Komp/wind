@@ -47,7 +47,7 @@ from app.services.source_admin_service import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/admin/sources")
+router = APIRouter(prefix="/sources")
 
 
 def _raise_from_service_error(exc: Exception) -> None:

@@ -32,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     fonts-dejavu-core \
     fonts-liberation \
+    tesseract-ocr \
+    tesseract-ocr-pol \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Timezone Europe/Warsaw ────────────────────────────────────────────────────

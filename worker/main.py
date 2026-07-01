@@ -16,17 +16,38 @@ from arq.cron import cron
 
 from worker.settings import get_settings
 from worker.core.logging_setup import setup_logging, get_event_logger, get_logger
-from worker.tasks.email_task import send_bulk_emails
-from worker.tasks.sms_task import send_bulk_sms
-from worker.tasks.otp_pdf_task import generate_pdf_task, send_otp
-from worker.tasks.snapshot_task import daily_snapshot
+from worker.core.job_tracker import track_job
+
+from worker.tasks.email_task import send_bulk_emails as _send_bulk_emails
+from worker.tasks.sms_task import send_bulk_sms as _send_bulk_sms
+from worker.tasks.otp_pdf_task import generate_pdf_task as _generate_pdf_task, send_otp as _send_otp
+from worker.tasks.snapshot_task import daily_snapshot as _daily_snapshot
 # Approval — Obieg Dokumentow (Sprint 3)
-from worker.tasks.deadline_task import deadline_check_task
-from worker.tasks.notification_task import send_approval_notification
-from worker.tasks.email_task_approval import queue_approval_email, flush_approval_emails
+from worker.tasks.deadline_task import deadline_check_task as _deadline_check_task
+from worker.tasks.notification_task import send_approval_notification as _send_approval_notification
+from worker.tasks.email_task_approval import (
+    queue_approval_email as _queue_approval_email,
+    flush_approval_emails as _flush_approval_emails,
+)
 # Etap 2 — nowe taski
-from worker.tasks.source_sync_task import source_sync_task
-from worker.tasks.auto_dispatch_task import auto_dispatch_task
+from worker.tasks.source_sync_task import source_sync_task as _source_sync_task
+from worker.tasks.auto_dispatch_task import auto_dispatch_task as _auto_dispatch_task
+# F7 — OCR
+from worker.tasks.ocr_task import ocr_task as _ocr_task
+
+# Owijamy kazdy task dekoratorem track_job — rejestr w skw_ArqJobRegistry
+send_bulk_emails           = track_job("send_bulk_emails")(_send_bulk_emails)
+send_bulk_sms              = track_job("send_bulk_sms")(_send_bulk_sms)
+generate_pdf_task          = track_job("generate_pdf_task")(_generate_pdf_task)
+send_otp                   = track_job("send_otp")(_send_otp)
+daily_snapshot             = track_job("daily_snapshot")(_daily_snapshot)
+deadline_check_task        = track_job("deadline_check_task")(_deadline_check_task)
+send_approval_notification = track_job("send_approval_notification")(_send_approval_notification)
+queue_approval_email       = track_job("queue_approval_email")(_queue_approval_email)
+flush_approval_emails      = track_job("flush_approval_emails")(_flush_approval_emails)
+source_sync_task           = track_job("source_sync_task")(_source_sync_task)
+auto_dispatch_task         = track_job("auto_dispatch_task")(_auto_dispatch_task)
+ocr_task = track_job("ocr_task")(_ocr_task)
 
 
 
@@ -168,6 +189,7 @@ class WorkerSettings:
         # Etap 2
         source_sync_task,
         auto_dispatch_task,
+        ocr_task,
     ]
 
 
