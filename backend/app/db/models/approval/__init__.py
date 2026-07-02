@@ -13,6 +13,10 @@ from __future__ import annotations
 # ── 1. Slowniki ───────────────────────────────────────────────────────────────
 from app.db.models.approval.document_source import DocumentSource
 from app.db.models.approval.document_category import DocumentCategory
+# ── 1b. Etap 2 — hooki, akcje i logi zrodlowe (FK do DocumentSource) ─────────
+from app.db.models.approval.source_hook import SourceHook
+from app.db.models.approval.source_action import SourceAction
+from app.db.models.approval.source_action_log import SourceActionLog
 
 # ── 2. Grupy i sciezki ────────────────────────────────────────────────────────
 from app.db.models.approval.approval_group import ApprovalGroup
@@ -53,4 +57,7 @@ __all__ = [
     "ApprovalComment",
     "ApprovalAttachment",
     "UserNotification",
+    "SourceHook",
+    "SourceAction",
+    "SourceActionLog",
 ]

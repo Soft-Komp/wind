@@ -799,6 +799,7 @@ def require_permission(permission: str):
         request_id: Annotated[str, Depends(get_request_id)],
         client_ip: Annotated[str, Depends(get_client_ip)],
     ) -> User:
+        request.state.required_permission = permission
         user_id = current_user.id_user
         role_id = current_user.role_id
 

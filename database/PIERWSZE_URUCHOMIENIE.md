@@ -151,3 +151,5 @@ docker exec -e SELFTEST_PASSWORD="xyz" windykacja_api python -m tests.runner --f
 SELECT * FROM dbo.alembic_version;
 
 docker exec -it windykacja_api python /app/tools/migrate_krok0.py
+
+Okresowa walidacja ustawień

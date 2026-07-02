@@ -796,6 +796,17 @@ async def lifespan(app: FastAPI):
         ).decode()
     )
 
+    # ── KROK 6b: Rejestracja endpointow w skw_EndpointRegistry ───────────────
+    try:
+        from app.core.endpoint_toggle import scan_and_register_routes
+        from app.services.endpoint_registry_service import register_all
+        from app.core.dependencies import get_db as _get_db
+        _routes = scan_and_register_routes(app)
+        async for _db in _get_db():
+            await register_all(_db, _routes)
+            break
+    except Exception as _exc:
+        logger.warning(f"endpoint_registry: blad rejestracji przy starcie: {_exc}")
     # ── Aplikacja działa ──────────────────────────────────────────────────────
     # ── KROK 7: WAPRO connection pool (pyodbc, read-only) ────────────────────
     try:

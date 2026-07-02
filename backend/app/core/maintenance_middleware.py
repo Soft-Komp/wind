@@ -67,8 +67,13 @@ class MaintenanceMiddleware(BaseHTTPMiddleware):
         if not maintenance_enabled:
             return response
 
-        # Pobierz dane maintenance (na razie pusty obiekt, rozszerzalne w przyszlosci)
+        # Pobierz dane maintenance
         maintenance_data = await _get_maintenance_data(request)
+
+        # Dodaj wymagane uprawnienie dla tego endpointu
+        required_permission = getattr(request.state, "required_permission", None)
+        if required_permission:
+            maintenance_data["required_permission"] = required_permission
 
         # Wstrzyknij sekcje maintenance do body JSON
         return await _inject_maintenance(response, maintenance_data)
@@ -124,12 +129,20 @@ async def _is_maintenance_enabled(request: Request) -> bool:
 
 async def _get_maintenance_data(request: Request) -> dict:
     """
-    Zwraca dane do sekcji maintenance.
-    Na razie pusty obiekt — w przyszlosci moze zawierac:
-      - planowany czas zakonczenia prac
-      - komunikat dla uzytkownika
-      - lista wylaczonych funkcji
+    Zwraca dane konserwacyjne: stan ARQ, synchronizacja zrodel, OCR.
+    Cachowane w Redis (TTL 15s) — baza odpytywana max raz na 15 sekund.
     """
+    try:
+        from app.services.maintenance_data_service import get_maintenance_data
+        from app.core.dependencies import get_db
+
+        redis = getattr(request.app.state, "redis", None)
+
+        async for db in get_db():
+            return await get_maintenance_data(db, redis)
+    except Exception as exc:
+        logger.warning("_get_maintenance_data: blad zbierania danych: %s", exc)
+
     return {}
 
 
