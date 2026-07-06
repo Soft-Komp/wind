@@ -1146,6 +1146,49 @@ async def preview_monit_pdf(
 
     # data końcowa odsetek — format ISO: "2026-05-01"
     _do_daty_preview: "date | None" = None
+    _od_daty_preview: "date | None" = None
+    _od_daty_raw_prev = body.get("od_daty")
+    if _od_daty_raw_prev:
+        try:
+            from datetime import date as _date_cls
+            _od_daty_preview = _date_cls.fromisoformat(str(_od_daty_raw_prev))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "Nieprawidłowy format od_daty — oczekiwany ISO: YYYY-MM-DD",
+                    "errors":  [{"field": "od_daty", "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+
+    _data_wydruku_preview: "date | None" = None
+    _data_wydruku_raw_prev = body.get("data_wydruku")
+    if _data_wydruku_raw_prev:
+        try:
+            from datetime import date as _date_cls
+            _data_wydruku_preview = _date_cls.fromisoformat(str(_data_wydruku_raw_prev))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "Nieprawidłowy format data_wydruku — oczekiwany ISO: YYYY-MM-DD",
+                    "errors":  [{"field": "data_wydruku", "message": "Format: YYYY-MM-DD"}],
+                },
+            )
+        if channel != "print":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "data_wydruku dozwolone wyłącznie dla channel='print'.",
+                    "errors":  [{"field": "data_wydruku",
+                                 "message": "Pole dostępne tylko przy kanale 'print'"}],
+                },
+            )
+
+    
     _do_daty_raw = body.get("do_daty")
     if _do_daty_raw:
         try:
@@ -1178,6 +1221,7 @@ async def preview_monit_pdf(
         },
     )
 
+
     try:
         pdf_bytes = await monit_service.generate_pdf_preview(
             db=db,
@@ -1190,6 +1234,8 @@ async def preview_monit_pdf(
             include_odsetki=_include_odsetki,
             include_koszty=_include_koszty,
             do_daty=_do_daty_preview,
+            od_daty=_od_daty_preview,               # ← NOWE
+            data_wydruku=_data_wydruku_preview,      # ← NOWE
         )
     except Exception as exc:
         # MonitValidationError z powodu invoice_numbers → 422 ze szczegółami
@@ -1379,6 +1425,9 @@ async def send_monit(
             detail={"code": "validation.error", "message": "Błąd walidacji", "errors": _errors},
         )
 
+    # NOWY — wstawić blok parsujący data_wydruku ZARAZ PO bloku do_daty
+# (po zamykającym `)` obsługi wyjątku do_daty, PRZED linią `result_bulk = await ...`),
+# oraz dopisać jeden nowy argument w konstruktorze MonitBulkRequest:
     try:
         from app.services.monit_service import MonitBulkRequest, MonitIntervalBlockedError
         # Parsuj flagi opcjonalne
@@ -1400,10 +1449,63 @@ async def send_monit(
                     },
                 )
 
+        # ── NOWE (Punkt 3.2) — ręczna data druku, ten sam wzorzec co do_daty ──
+        _data_wydruku_send: "date | None" = None
+        _data_wydruku_raw = body.get("data_wydruku")
+        if _data_wydruku_raw:
+            try:
+                from datetime import date as _date_cls
+                _data_wydruku_send = _date_cls.fromisoformat(str(_data_wydruku_raw))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format data_wydruku — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "data_wydruku", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+            logger.info(
+                "send_monit: data_wydruku sparsowana",
+                extra={
+                    "event": "send_monit.data_wydruku_parsed",
+                    "debtor_id": debtor_id,
+                    "data_wydruku_raw": _data_wydruku_raw,
+                    "data_wydruku_parsed": _data_wydruku_send.isoformat(),
+                    "request_id": request_id,
+                },
+            )
+
+        if _data_wydruku_send is not None and channel != "print":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code":    "validation.error",
+                    "message": "data_wydruku dozwolone wyłącznie dla channel='print'.",
+                    "errors":  [{"field": "data_wydruku",
+                                 "message": "Pole dostępne tylko przy kanale 'print'"}],
+                },
+            )
+
+
+        _od_daty_send: "date | None" = None
+        _od_daty_raw = body.get("od_daty")
+        if _od_daty_raw:
+            try:
+                from datetime import date as _date_cls
+                _od_daty_send = _date_cls.fromisoformat(str(_od_daty_raw))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format od_daty — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "od_daty", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+
         result_bulk = await monit_service.send_bulk(
-            db=db,
-            wapro=wapro,
-            redis=redis,
+            db=db, wapro=wapro, redis=redis,
             request=MonitBulkRequest(
                 debtor_ids=[debtor_id],
                 monit_type=channel,
@@ -1412,6 +1514,8 @@ async def send_monit(
                 include_odsetki=_inc_odsetki,
                 include_koszty=_inc_koszty,
                 do_daty=_do_daty_send,
+                od_daty=_od_daty_send,             # ← NOWE
+                data_wydruku=_data_wydruku_send,
             ),
             triggered_by_user_id=current_user.id_user,
             ip_address=client_ip,

@@ -147,6 +147,8 @@ class MonitBulkRequest:
     include_odsetki:         bool = True    # czy doliczać odsetki do kwoty
     include_koszty:          bool = True    # czy doliczać koszty dodatkowe kanału
     do_daty:                 Optional["date"] = None  # data końcowa odsetek, None = dziś
+    od_daty:                 Optional["date"] = None
+    data_wydruku:            Optional["date"] = None
 
     def __post_init__(self) -> None:
         if not self.debtor_ids:
@@ -167,6 +169,44 @@ class MonitBulkRequest:
         if self.custom_subject is not None:
             subject = unicodedata.normalize("NFC", self.custom_subject.strip())
             object.__setattr__(self, "custom_subject", subject[:200] if subject else None)
+        if self.data_wydruku is not None:
+            from datetime import date as _date_cls
+            if not isinstance(self.data_wydruku, _date_cls):
+                raise MonitValidationError(
+                    f"data_wydruku musi być typu date, otrzymano: {type(self.data_wydruku)}"
+                )
+            _min_d, _max_d = _date_cls(1990, 1, 1), _date_cls(2100, 12, 31)
+            if not (_min_d <= self.data_wydruku <= _max_d):
+                raise MonitValidationError(
+                    f"data_wydruku={self.data_wydruku} poza zakresem technicznym "
+                    f"[{_min_d} … {_max_d}]"
+                )    
+        if self.data_wydruku is not None and self.monit_type != "print":
+            raise MonitValidationError(
+                f"data_wydruku dozwolone wyłącznie dla monit_type='print' "
+                f"(otrzymano: {self.monit_type!r})."
+            )
+        if self.od_daty is not None:
+            from datetime import date as _date_cls
+            if not isinstance(self.od_daty, _date_cls):
+                raise MonitValidationError(
+                    f"od_daty musi być typu date, otrzymano: {type(self.od_daty)}"
+                )
+            _do_effective = self.do_daty or datetime.now(timezone.utc).date()
+            if self.od_daty >= _do_effective:
+                raise MonitValidationError(
+                    f"od_daty ({self.od_daty}) musi być wcześniejsza niż "
+                    f"do_daty ({_do_effective})."
+                )
+            logger.info(
+                "MonitBulkRequest: zakres odsetek od–do ustawiony",
+                extra={
+                    "event": "monit_bulk_request.od_daty_ustawione",
+                    "od_daty": self.od_daty.isoformat(),
+                    "do_daty": _do_effective.isoformat() if _do_effective else None,
+                    "debtor_count": len(self.debtor_ids),
+                },
+            )
 
 
 @dataclass(frozen=True)
@@ -1091,12 +1131,18 @@ async def send_bulk(
                 odsetki_map = await _get_odsetki(
                     debtor_invoice_ids,
                     do_daty=request.do_daty,
+                    od_daty=request.od_daty,       # ← NOWE
                 )
             except Exception as exc:
                 logger.warning(
-                    "Błąd obliczania odsetek dla debtor=%d: %s — "
-                    "zapisuję 0.00",
+                    "Błąd obliczania odsetek dla debtor=%d: %s — zapisuję 0.00",
                     debtor_id, exc,
+                    extra={
+                        "event": "send_bulk.odsetki_blad",
+                        "debtor_id": debtor_id,
+                        "do_daty": str(request.do_daty) if request.do_daty else None,
+                        "od_daty": str(request.od_daty) if request.od_daty else None,
+                    },
                 )
         debtor_info = debtor_contacts_raw.get(debtor_id, {})
 
@@ -1149,6 +1195,7 @@ async def send_bulk(
             recipient=debtor_contacts.get(debtor_id, ""),
             subject=subject,
             scheduled_at=request.scheduled_at,
+            data_wydruku_recznie=request.data_wydruku,
             retry_count=0,
             is_active=True,
             created_at=now,
@@ -1156,6 +1203,43 @@ async def send_bulk(
         db.add(monit)
         await db.flush()
         monit_ids.append(monit.id_monit)
+
+        # ── Audit log — TYLKO gdy operator faktycznie odstąpił od daty dzisiejszej ──
+        if request.data_wydruku is not None:
+            _dzisiaj_local = datetime.now(timezone.utc).date()
+            if request.data_wydruku != _dzisiaj_local:
+                from app.services import audit_service
+                _delta = (request.data_wydruku - _dzisiaj_local).days
+                audit_service.log(
+                    db=db,
+                    action="monit_data_wydruku_recznie_ustawiona",
+                    category="Monits",
+                    entity_type="Monit",
+                    entity_id=monit.id_monit,
+                    old_value={"data_systemowa": _dzisiaj_local.isoformat()},
+                    new_value={"data_wydruku_recznie": request.data_wydruku.isoformat()},
+                    details={
+                        "delta_dni": _delta,
+                        "kierunek": "przyszlosc" if _delta > 0 else "przeszlosc",
+                        "debtor_id": debtor_id,
+                        "monit_type": request.monit_type,
+                    },
+                    user_id=triggered_by_user_id,
+                    ip_address=ip_address,
+                    success=True,
+                )
+                logger.warning(
+                    "send_bulk: data druku ustawiona ręcznie — odbiega od daty systemowej",
+                    extra={
+                        "event": "monit.data_wydruku_recznie",
+                        "monit_id": monit.id_monit,
+                        "debtor_id": debtor_id,
+                        "delta_dni": _delta,
+                        "id_user": triggered_by_user_id,
+                        "data_systemowa": _dzisiaj_local.isoformat(),
+                        "data_wydruku_recznie": request.data_wydruku.isoformat(),
+                    },
+                )
 
     await db.commit()
 
@@ -2090,7 +2174,30 @@ async def generate_pdf_preview(
     include_odsetki: bool = True,
     include_koszty: bool = True,
     do_daty: "date | None" = None,
+    od_daty: "date | None" = None,          # ← NOWE (pkt 3.1)
+    data_wydruku: "date | None" = None,     # ← NOWE (pkt 3.2/3.3 — parytet z realną wysyłką)
 ) -> bytes:
+    # Walidacja spójności — ta sama reguła co w MonitBulkRequest, świadomie
+    # zduplikowana (redundancja obronna: preview nie przechodzi przez
+    # MonitBulkRequest, więc musi mieć własną kopię tej samej reguły)
+    if od_daty is not None:
+        _do_effective = do_daty or datetime.now(timezone.utc).date()
+        if od_daty >= _do_effective:
+            raise MonitValidationError(
+                f"od_daty ({od_daty}) musi być wcześniejsza niż do_daty ({_do_effective})."
+            )
+    logger.info(
+        "generate_pdf_preview: parametry wejściowe",
+        extra={
+            "event": "generate_pdf_preview.wywolanie",
+            "debtor_id": debtor_id,
+            "template_id": template_id,
+            "channel": channel,
+            "do_daty": str(do_daty) if do_daty else None,
+            "od_daty": str(od_daty) if od_daty else None,
+            "data_wydruku": str(data_wydruku) if data_wydruku else None,
+        },
+    )
     """
     Generuje podgląd PDF monitu w pamięci (bez zapisu do MonitHistory).
 
@@ -2371,22 +2478,32 @@ async def generate_pdf_preview(
                 _placeholders = ", ".join(["?" for _ in _ids_for_odsetki])
                 # do_daty=None → SQL przekazuje NULL → funkcja liczy do dziś
                 _do_daty_sql = do_daty  # date | None — pyodbc obsługuje oba
+                _od_daty_sql = od_daty  # date | None — pyodbc obsługuje oba
                 _odsetki_sql = f"""
                     SELECT
                         r.ID_ROZRACHUNKU,
-                        ISNULL(r.KwotaPozostala, 0)                                             AS KwotaPozostala,
-                        ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?), 0)         AS Odsetki,
+                        ISNULL(r.KwotaPozostala, 0) AS KwotaPozostala,
+                        ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?, ?), 0) AS Odsetki,
                         ISNULL(r.KwotaPozostala, 0)
-                            + ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?), 0)   AS KwotaZOdsetkami
+                            + ISNULL(dbo.skw_Func_OdsetkiRozrachunku(r.ID_ROZRACHUNKU, ?, ?), 0) AS KwotaZOdsetkami
                     FROM dbo.skw_rozrachunki_faktur AS r
                     WHERE r.ID_ROZRACHUNKU IN ({_placeholders})
                 """.strip()
                 _odsetki_rows = await _run_in_executor(
                     _execute_query_sync,
                     _odsetki_sql,
-                    (_do_daty_sql, _do_daty_sql) + tuple(_ids_for_odsetki),
+                    (_do_daty_sql, _od_daty_sql, _do_daty_sql, _od_daty_sql) + tuple(_ids_for_odsetki),
                     "odsetki_preview",
                     "generate_pdf_preview",
+                )
+                logger.debug(
+                    "generate_pdf_preview: odsetki policzone z zakresem od–do",
+                    extra={
+                        "event": "generate_pdf_preview.odsetki_od_do",
+                        "do_daty": str(_do_daty_sql) if _do_daty_sql else None,
+                        "od_daty": str(_od_daty_sql) if _od_daty_sql else None,
+                        "invoice_count": len(_ids_for_odsetki),
+                    },
                 )
 
                 # Suma długu — z odsetkami lub bez zależnie od flagi

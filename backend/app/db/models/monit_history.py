@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text, Date
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -140,6 +140,15 @@ class MonitHistory(Base):
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False,
         default=datetime.utcnow, server_default=text("GETDATE()"),
+    )
+    data_wydruku_recznie: Mapped["date | None"] = mapped_column(
+        "DataWydrukuRecznie", Date, nullable=True,
+        comment=(
+            "Ręcznie ustawiona data druku. NULL = użyto daty systemowej "
+            "w momencie generowania PDF. Każde odstępstwo od daty bieżącej "
+            "logowane w dbo.skw_AuditLog "
+            "(action=monit_data_wydruku_recznie_ustawiona)."
+        ),
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         "UpdatedAt", DateTime, nullable=True, onupdate=datetime.utcnow,

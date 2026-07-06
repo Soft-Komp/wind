@@ -87,19 +87,32 @@ async def generate_pdf_task(
                 select(MonitHistory).where(MonitHistory.id_monit == monit_id)
             )
             monit_row = mh_result.scalar_one_or_none()
+            _issue_date_str: Optional[str] = None
 
             if monit_row:
-                # Kwota z MonitHistory (najbardziej aktualna)
                 if monit_row.kwota_calkowita is not None:
                     effective_total = float(monit_row.kwota_calkowita)
                 elif monit_row.total_debt is not None:
                     effective_total = float(monit_row.total_debt)
 
-                # Numery faktur z MonitHistory
                 if monit_row.invoice_numbers:
                     invoice_list_str = monit_row.invoice_numbers
 
-                # Szablon z bazy
+                # ── NOWE (Punkt 3.2) — data wydruku ─────────────────────────
+                if getattr(monit_row, "data_wydruku_recznie", None):
+                    _issue_date_str = monit_row.data_wydruku_recznie.strftime("%d.%m.%Y")
+                    logger.info(
+                        "generate_pdf_task: użyto ręcznej daty druku",
+                        extra={
+                            "event": "pdf_task.data_wydruku_recznie_uzyta",
+                            "monit_id": monit_id,
+                            "data_wydruku_recznie": monit_row.data_wydruku_recznie.isoformat(),
+                            "job_id": effective_job_id,
+                        },
+                    )
+                # _issue_date_str pozostaje None jeśli operator nic nie ustawił —
+                # generate_pdf() użyje wtedy now() jak dotychczas (zachowanie domyślne)
+
                 if monit_row.template_id:
                     from worker.core.db import Template
                     tmpl_result = await db.execute(
@@ -148,6 +161,7 @@ async def generate_pdf_task(
                 total_debt=effective_total,
                 payment_deadline=payment_deadline or _calc_deadline(),
                 payment_account=payment_account,
+                issue_date=_issue_date_str,   # ← NOWE — None = zachowanie dotychczasowe
             )
 
         pdf_path = save_pdf_to_disk(pdf_bytes, monit_id, "print")

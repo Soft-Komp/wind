@@ -28,6 +28,7 @@ import textwrap
 from typing import Final
 
 from alembic import op
+from sqlalchemy import text as sa_text
 
 revision:      str = "0047"
 down_revision: str = "0046"
@@ -167,6 +168,3 @@ def _merge_checksum(bind, rev: str) -> None:
                      WHERE object_id = OBJECT_ID('dbo.{FUNC_NAME}'))), 2),
                 N'{rev}', SYSUTCDATETIME());
     """))
-
-
-from sqlalchemy import text as sa_text  # noqa: E402 (import na dole — zgodnie ze stylem istniejących migracji projektu)

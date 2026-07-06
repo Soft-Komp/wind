@@ -43,9 +43,17 @@ class Base(DeclarativeBase):
 
 
 class MonitHistory(Base):
-    """skw_MonitHistory — aktualizacja statusu po wysyłce."""
+    """
+    skw_MonitHistory — aktualizacja statusu po wysyłce.
+
+    POPRAWKA (Etap 2.1): schemat zmieniony z 'dbo_ext' na 'dbo'.
+    Migracja 0026 przeniosła wszystkie tabele skw_* do schematu dbo —
+    ta definicja ORM w workerze nie została wtedy zaktualizowana.
+    Brak nowej migracji Alembic — tabela fizycznie już jest w dbo,
+    to wyłącznie korekta Pythona po stronie workera.
+    """
     __tablename__ = "skw_MonitHistory"
-    __table_args__ = {"schema": "dbo_ext"}
+    __table_args__ = {"schema": "dbo"}
 
     id_monit: Mapped[int] = mapped_column("ID_MONIT", BigInteger, primary_key=True)
     id_kontrahenta: Mapped[Optional[int]] = mapped_column("ID_KONTRAHENTA", Integer, nullable=True)
@@ -70,9 +78,12 @@ class MonitHistory(Base):
 
 
 class MonitHistoryInvoice(Base):
-    """skw_MonitHistory_Invoices — powiązanie monitu z rozrachunkiem WAPRO."""
+    """
+    skw_MonitHistory_Invoices — powiązanie monitu z rozrachunkiem WAPRO.
+    POPRAWKA (Etap 2.1): schemat 'dbo_ext' → 'dbo' (patrz komentarz wyżej).
+    """
     __tablename__ = "skw_MonitHistory_Invoices"
-    __table_args__ = {"schema": "dbo_ext"}
+    __table_args__ = {"schema": "dbo"}
 
     id_monit_invoice: Mapped[int] = mapped_column(
         "ID_MONIT_INVOICE", BigInteger, primary_key=True, autoincrement=True
