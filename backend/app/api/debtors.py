@@ -129,6 +129,10 @@ async def list_debtors(
     pagination: Pagination,
     request_id: RequestID,
     search: Optional[str] = Query(None, max_length=100, description="Wyszukiwanie po nazwie lub NIP"),
+    miejscowosc: Optional[str] = Query(          # ← NOWE
+        None, max_length=100,
+        description="Wyszukiwanie częściowe (LIKE) po miejscowości kontrahenta.",
+    ),
     min_debt: Optional[float] = Query(None, ge=0, description="Minimalne zadłużenie (PLN)"),
     max_debt: Optional[float] = Query(None, ge=0, description="Maksymalne zadłużenie (PLN)"),
     overdue_only: bool = Query(False, description="Tylko przeterminowani dłużnicy"),
@@ -176,6 +180,7 @@ async def list_debtors(
         db=db,
         params=DebtorListParams(
             search=search,
+            miejscowosc=miejscowosc,
             min_debt=min_debt,
             max_debt=max_debt,
             overdue_min_days=None,
@@ -193,6 +198,22 @@ async def list_debtors(
         ),
         requesting_user_id=current_user.id_user,
         ip_address=None,
+        
+    )
+
+    logger.info(
+        "list_debtors: zapytanie wykonane",
+        extra={
+            "request_id": request_id,
+            "filters": {
+                "search": search,
+                "miejscowosc": miejscowosc,
+                "min_debt": min_debt,
+                "max_debt": max_debt,
+            },
+            "result_count": len(result["items"]),
+            "total": result["total"],
+        },
     )
 
     return BaseResponse.ok(
@@ -651,6 +672,10 @@ async def get_debtor_invoices(
             "Błąd 422 przy jednoczesnym overdue_filter='not_overdue' i min_days_overdue > 0."
         ),
     ),
+    numer_faktury: Optional[str] = Query(         # ← NOWE
+        None, max_length=100,
+        description="Wyszukiwanie częściowe (LIKE) po numerze faktury (NumerFaktury / NR_DOK).",
+    ),
 ):
     from app.services import debtor_service
 
@@ -685,9 +710,20 @@ async def get_debtor_invoices(
             due_date_mode=due_date_mode,
             paid_filter=paid_filter,
             overdue_filter=overdue_filter,
+            numer_faktury=numer_faktury,
         )
     except Exception as exc:
         _raise_from_debtor_error(exc)
+
+    logger.info(
+        "get_debtor_invoices: zapytanie wykonane",
+        extra={
+            "request_id": request_id,
+            "debtor_id": debtor_id,
+            "numer_faktury_filter": numer_faktury,
+            "result_count": len(invoices.get("items", [])),
+        },
+    )
 
     return BaseResponse.ok(
         data=invoices,

@@ -71,6 +71,7 @@ _TRANSIENT_SQL_STATES: frozenset[str] = frozenset({"08001", "08S01", "HYT00", "H
 _COLS_KONTRAHENCI = """
     ID_KONTRAHENTA,
     NazwaKontrahenta,
+    Miejscowosc,
     Email,
     Telefon,
     SumaDlugu,
@@ -116,6 +117,7 @@ _odsetki_logger = logging.getLogger(f"{__name__}.odsetki")
 def _execute_odsetki_sync(
     ids: list[int],
     do_daty: "date | None",
+    od_daty: "date | None",
     query_id: str,
 ) -> dict[int, Decimal]:
     """
@@ -136,12 +138,18 @@ def _execute_odsetki_sync(
     placeholders = ", ".join("?" for _ in ids)
     sql = (
         f"SELECT r.ID_ROZRACHUNKU, "
-        f"{_FUNC_ODSETKI}(r.ID_ROZRACHUNKU, ?) AS Odsetki "
+        f"{_FUNC_ODSETKI}(r.ID_ROZRACHUNKU, ?, ?) AS Odsetki "
         f"FROM dbo.skw_rozrachunki_faktur AS r "
         f"WHERE r.ID_ROZRACHUNKU IN ({placeholders})"
     )
-    # Parametry: najpierw @do_daty (NULL = do dziś), potem lista ID
-    params = (do_daty,) + tuple(ids)
+    params = (do_daty, od_daty) + tuple(ids)
+
+    _odsetki_logger.debug(
+        "Odsetki ID_ROZRACHUNKU=%d od_daty=%s do_daty=%s: %s PLN",
+        id_roz, od_daty, do_daty, odsetki,
+        extra={"od_daty": str(od_daty) if od_daty else None,
+               "do_daty": str(do_daty) if do_daty else None},
+    )
 
     try:
         rows = _execute_query_sync(sql, params, query_id, "odsetki")
@@ -180,6 +188,7 @@ def _execute_odsetki_sync(
 async def get_odsetki_for_rozrachunki(
     ids: list[int],
     do_daty: "date | None" = None,
+    od_daty: "date | None" = None, 
 ) -> dict[int, Decimal]:
     """
     Oblicza odsetki dla listy ID_ROZRACHUNKU.
@@ -208,6 +217,7 @@ async def get_odsetki_for_rozrachunki(
         _execute_odsetki_sync,
         ids,
         do_daty,
+        od_daty,
         query_id,
     )
 
@@ -241,6 +251,7 @@ class DebtorFilterParams:
     has_phone: Optional[bool] = None            # Telefon IS NOT NULL AND Telefon != ''
     min_days_overdue: Optional[int] = None
     max_last_monit_days_ago: Optional[int] = None
+    miejscowosc: Optional[str] = None
     # Filtr daty terminu płatności
     due_date: Optional[date] = None         # filtr po TerminPlatnosci; None = brak filtra
     due_date_mode: str = "up_to"            # "exact" → = | "up_to" → <=
@@ -293,6 +304,17 @@ class DebtorFilterParams:
             and self.min_debt_amount > self.max_debt_amount
         ):
             raise ValueError("min_debt_amount > max_debt_amount")
+
+        if self.miejscowosc is not None:
+            sanitized_mc = unicodedata.normalize("NFC", self.miejscowosc.strip())
+            if len(sanitized_mc) > _MAX_SEARCH_LEN:
+                logger.warning(
+                    "DebtorFilterParams: miejscowosc przekracza %d znaków — obcinam",
+                    _MAX_SEARCH_LEN,
+                    extra={"original_length": len(sanitized_mc)},
+                )
+                sanitized_mc = sanitized_mc[:_MAX_SEARCH_LEN]
+            object.__setattr__(self, "miejscowosc", sanitized_mc if sanitized_mc else None)
 
         # Dni — muszą być >= 0
         for field_name in (
@@ -387,6 +409,7 @@ class InvoiceFilterParams:
     due_date: Optional[date] = None
     due_date_mode: str = "up_to"
     paid_filter: str = "unpaid_only"
+    numer_faktury: Optional[str] = None
     # Filtr kategoryczny przeterminowania
     overdue_filter: str = "all"
     limit: int = 100
@@ -421,6 +444,15 @@ class InvoiceFilterParams:
         if self.order_dir.upper() not in ("ASC", "DESC"):
             raise ValueError(f"Niedozwolone order_dir: {self.order_dir!r}")
         object.__setattr__(self, "order_dir", self.order_dir.upper())
+
+        if self.numer_faktury is not None:
+            sanitized_nf = unicodedata.normalize("NFC", self.numer_faktury.strip())
+            if sanitized_nf and not _re.match(r"^[\w\s/\\.,-]{1,100}$", sanitized_nf, _re.UNICODE):
+                raise ValueError(
+                    f"InvoiceFilterParams: numer_faktury zawiera niedozwolone znaki "
+                    f"lub przekracza 100 znaków: {sanitized_nf[:30]!r}..."
+                )
+            object.__setattr__(self, "numer_faktury", sanitized_nf if sanitized_nf else None)
 
         # due_date_mode — whitelist (NIGDY interpolacja z zewnątrz do SQL)
         if self.due_date_mode not in _VALID_DUE_DATE_MODES:
@@ -976,11 +1008,14 @@ def _build_debtors_query(
     query_params: list[Any] = []
 
     # search_query — LIKE z escape specjalnych znaków
-    if params.search_query:
-        escaped = _escape_like(params.search_query)
-        conditions.append("NazwaKontrahenta LIKE ?")
-        like_val = f"%{escaped}%"
-        query_params.append(like_val)
+    if params.miejscowosc:
+        escaped_mc = _escape_like(params.miejscowosc)
+        conditions.append("Miejscowosc LIKE ?")
+        query_params.append(f"%{escaped_mc}%")
+        logger.debug(
+            "_build_debtors_where: filtr miejscowosc zastosowany",
+            extra={"miejscowosc_raw_len": len(params.miejscowosc)},
+        )
 
     # Kwoty
     if params.min_debt_amount is not None:
@@ -1428,6 +1463,18 @@ def _build_invoices_where(
     elif params.overdue_filter == "not_overdue":
         conditions.append("(DniPo = 0 OR DniPo IS NULL)")
     # "all" → brak klauzuli
+
+    if params.numer_faktury:
+        escaped_nf = _escape_like(params.numer_faktury)
+        conditions.append("NumerFaktury LIKE ?")
+        query_params.append(f"%{escaped_nf}%")
+
+    logger.debug(
+        "_build_invoices_where: kontrahent=%d numer_faktury=%s — %d warunków",
+        params.kontrahent_id,
+        params.numer_faktury or "(brak)",
+        len(conditions),
+    )
 
     # ── Filtr daty terminu płatności ──────────────────────────────────────
     # Operator pochodzi WYŁĄCZNIE z _VALID_DUE_DATE_MODES — walidacja

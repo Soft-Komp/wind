@@ -135,6 +135,7 @@ class DebtorListParams:
     has_active_monit: Optional[bool] = None
     min_days_overdue: Optional[int] = None
     max_last_monit_days_ago: Optional[int] = None
+    miejscowosc: Optional[str] = None
     # Filtr daty terminu płatności
     due_date: Optional[date] = None      # None = brak filtra; date = filtruj po TerminPlatnosci
     due_date_mode: str = "up_to"         # "exact" (=) | "up_to" (<=)
@@ -157,6 +158,10 @@ class DebtorListParams:
         if self.search is not None:
             sanitized = unicodedata.normalize("NFC", self.search.strip())
             object.__setattr__(self, "search", sanitized if sanitized else None)
+
+        if self.miejscowosc is not None:
+            sanitized_mc = unicodedata.normalize("NFC", self.miejscowosc.strip())
+            object.__setattr__(self, "miejscowosc", sanitized_mc if sanitized_mc else None)
 
         # Walidacja kwot
         if self.min_debt is not None and self.min_debt < 0:
@@ -235,6 +240,7 @@ class DebtorListParams:
 
         return DebtorFilterParams(
             search_query=self.search,
+            miejscowosc=self.miejscowosc,
             min_debt_amount=self.min_debt,
             max_debt_amount=self.max_debt,
             overdue_days_min=self.overdue_min_days,
@@ -259,6 +265,7 @@ class DebtorListParams:
         """
         params_bytes = orjson.dumps({
             "s": self.search,
+            "mc": self.miejscowosc,
             "min": self.min_debt,
             "max": self.max_debt,
             "od_min": self.overdue_min_days,
@@ -743,6 +750,7 @@ async def get_invoices(
     due_date_mode: str = "up_to",
     paid_filter: str = "unpaid_only",
     overdue_filter: str = "all",
+    numer_faktury: "str | None" = None, 
     requesting_user_id: Optional[int] = None,
 ) -> dict:
     """
@@ -772,6 +780,11 @@ async def get_invoices(
     """
     if debtor_id <= 0:
         raise DebtorValidationError("debtor_id musi być dodatnią liczbą całkowitą.")
+
+    if numer_faktury:
+        import unicodedata as _ud
+        _nf_sanitized = _ud.normalize("NFC", numer_faktury.strip())
+        cache_key = f"{cache_key}:nf{_nf_sanitized[:50]}"
 
     page      = max(page, 1)
     page_size = min(max(page_size, 1), 200)
@@ -809,6 +822,7 @@ async def get_invoices(
             due_date_mode=due_date_mode,
             paid_filter=paid_filter,
             overdue_filter=overdue_filter,
+            numer_faktury=numer_faktury,
             limit=page_size,
             offset=(page - 1) * page_size,
             order_by=order_by_sql,
