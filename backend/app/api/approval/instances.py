@@ -1628,7 +1628,7 @@ async def list_all_instances(
             f"       ON u.[ID_USER] = i.[dispatched_by] "
             f"LEFT  JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah "
             f"       ON ds.[source_name] = N'fakir' "
-            f"       AND fah.[ID_BUF_DOKUMENT] = TRY_CAST(i.[id_document] AS INT) "
+            f"       AND fah.[KSEF_ID] = i.[id_document] "
             f"WHERE {w} "
             f"ORDER BY i.[is_urgent] DESC, i.[created_at] DESC "
             f"OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"

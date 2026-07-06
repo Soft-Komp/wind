@@ -245,9 +245,9 @@ async def delete_source_admin(id_source: int, current_user: CurrentUser, db: DB)
     responses={404: {"description": "Zrodlo nie istnieje"}},
     dependencies=[require_permission("sources.test_connection")],
 )
-async def test_connection_admin(id_source: int, current_user: CurrentUser, db: DB):
+async def test_connection_admin(id_source: int, current_user: CurrentUser, db: DB, redis: RedisClient):
     try:
-        result = await svc.test_connection(db, id_source)
+        result = await svc.test_connection(db, id_source, redis)
     except SourceNotFoundError as exc:
         _raise_from_service_error(exc)
     return BaseResponse.ok(data=result, app_code="sources.test_connection")

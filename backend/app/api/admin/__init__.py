@@ -27,9 +27,11 @@ from fastapi import APIRouter
 from app.api.admin.sources import router as sources_router
 from app.api.admin.source_hooks_actions import router as hooks_actions_router
 from app.api.admin.endpoints import router as endpoints_router
+from app.api.admin.source_role_access import router as source_role_access_router
 
 router = APIRouter()
 
 router.include_router(sources_router)
 router.include_router(hooks_actions_router)
 router.include_router(endpoints_router)
+router.include_router(source_role_access_router)

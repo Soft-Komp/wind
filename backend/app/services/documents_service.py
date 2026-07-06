@@ -71,6 +71,7 @@ async def list_documents(
     *,
     actor_id: int,
     can_view_all: bool,
+    accessible_source_ids: list[int] | None = None,
     page: int = 1,
     per_page: int = 50,
     id_source: int | None = None,
@@ -80,14 +81,25 @@ async def list_documents(
     search: str | None = None,
 ) -> dict[str, Any]:
     """
-    Lista dokumentow (instancji obiegu) ze wszystkich zrodel, z filtrem widocznosci.
+    Lista dokumentow z filtrem widocznosci (poziom 2) i filtrem dostepu do zrodla (poziom 1).
 
-    id_folder: dopuszczalne wiele wartosci jednoczesnie (wielowymiarowosc teczek) —
-    dokument widoczny jesli jest w KTOREJKOLWIEK z podanych teczek.
+    accessible_source_ids: None = brak filtru (supervisor), [] = brak dostepu, [1,2] = filtr.
+    search: szuka po document_title, id_document ORAZ extra_data.ocr_text (TODO-06/F7).
     """
     where: list[str] = []
     params: dict[str, Any] = {}
 
+    # Poziom 1 — filtr dostępu do źródeł (skw_source_role_access)
+    if not can_view_all and accessible_source_ids is not None:
+        if len(accessible_source_ids) == 0:
+            # Brak dostępu do żadnego źródła — zwróć pustą listę
+            return {"items": [], "total": 0, "page": page, "per_page": per_page}
+        ph = ",".join(f":src_{j}" for j in range(len(accessible_source_ids)))
+        where.append(f"i.[id_source] IN ({ph})")
+        for j, sid in enumerate(accessible_source_ids):
+            params[f"src_{j}"] = sid
+
+    # Poziom 2 — filtr widoczności (skw_approval_filter_visibility)
     if not can_view_all:
         visibility_clause = await _build_visibility_clause(db, actor_id)
         where.append(visibility_clause)
@@ -113,9 +125,11 @@ async def list_documents(
             params[f"folder_{j}"] = fid
     if search:
         safe_search = search.replace("'", "''")[:100]
+        # Wyszukiwanie po tytule, numerze dokumentu ORAZ po tekście OCR (F7)
         where.append(
             "(i.[document_title] LIKE :search "
-            " OR i.[id_document] LIKE :search)"
+            " OR i.[id_document] LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.ocr_text') LIKE :search)"
         )
         params["search"] = f"%{safe_search}%"
 

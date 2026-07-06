@@ -1059,6 +1059,9 @@ def create_app() -> FastAPI:
     from app.core.maintenance_middleware import MaintenanceMiddleware
     app.add_middleware(MaintenanceMiddleware)
 
+    from app.core.endpoint_toggle_middleware import EndpointToggleMiddleware
+    app.add_middleware(EndpointToggleMiddleware)
+
     # ── Routery ───────────────────────────────────────────────────────────────
     _register_routers(app)
 

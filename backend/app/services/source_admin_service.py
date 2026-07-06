@@ -445,7 +445,7 @@ async def verify_webhook_token(db: AsyncSession, token: str) -> DocumentSource |
 # TEST CONNECTION
 # =============================================================================
 
-async def test_connection(db: AsyncSession, id_source: int) -> dict[str, Any]:
+async def test_connection(db: AsyncSession, id_source: int, redis: Any = None) -> dict[str, Any]:
     """
     Testuje polaczenie ze zrodlem bez zapisywania zadnych danych.
 
@@ -489,14 +489,40 @@ async def test_connection(db: AsyncSession, id_source: int) -> dict[str, Any]:
             }
 
         try:
-            result = await db.execute(text(f"SELECT TOP 5 1 AS probe FROM [{view_name}]"))
-            sample_count = len(result.fetchall())
+            result = await db.execute(text(f"SELECT TOP 5 * FROM [{view_name}]"))
+            rows = result.fetchall()
+            cols = list(result.keys()) if rows else []
             latency_ms = round((time.monotonic() - t_start) * 1000)
+
+            sample_fields = []
+            if rows and cols:
+                first_row = rows[0]
+                for i, col in enumerate(cols):
+                    val = first_row[i] if i < len(first_row) else None
+                    sample_fields.append({
+                        "field_name":   col,
+                        "sample_value": str(val) if val is not None else None,
+                    })
+
+            if redis and sample_fields:
+                try:
+                    import json as _json
+                    await redis.set(
+                        f"field_preview:{id_source}",
+                        _json.dumps(sample_fields, ensure_ascii=False, default=str),
+                        ex=3600,
+                    )
+                except Exception as cache_exc:
+                    logger.warning(
+                        "test_connection: blad zapisu field_preview cache: %s", cache_exc
+                    )
+
             return {
                 "success":      True,
                 "message":      f"Polaczenie OK. Widok '{view_name}' dostepny.",
                 "latency_ms":   latency_ms,
-                "sample_count": sample_count,
+                "sample_count": len(rows),
+                "fields":       sample_fields,
                 "tested_at":    datetime.now(timezone.utc),
             }
         except Exception as exc:

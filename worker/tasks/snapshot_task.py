@@ -71,6 +71,10 @@ _SKW_TABLES = [
     "skw_document_folders",
     "skw_document_folder_items",
     "skw_approval_filter_visibility",
+    # ── Etap 2 sesja lipiec 2026 ─────────────────────────────────────────────
+    "skw_ArqJobRegistry",
+    "skw_EndpointRegistry",
+    "skw_source_role_access",
 ]
 
 

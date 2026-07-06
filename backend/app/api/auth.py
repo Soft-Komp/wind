@@ -595,6 +595,94 @@ async def otp_request(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 4b: POST /auth/forgot-password
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/forgot-password",
+    summary="Krok 1/3 — Inicjacja resetu hasła przez email (OTP)",
+    description=(
+        "Generuje 6-cyfrowy kod OTP i wysyła go na podany adres email. "
+        "Zawsze zwraca 200 niezaleznie od tego czy email istnieje "
+        "(anti-enumeration — atakujacy nie wie czy email jest w bazie). "
+        "Krok 2: POST /auth/otp/verify. "
+        "Krok 3: POST /auth/password-reset/confirm."
+    ),
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Jesli email istnieje — OTP wyslany. Jesli nie — odpowiedz identyczna."},
+        422: {"description": "Nieprawidlowy format email"},
+    },
+)
+async def forgot_password(
+    request: Request,
+    db: DB,
+    redis: RedisClient,
+    client_ip: ClientIP,
+    request_id: RequestID,
+):
+    from app.services import auth_service
+    from pydantic import EmailStr, TypeAdapter, ValidationError
+
+    try:
+        body = await request.json()
+        email_raw = (body.get("email") or "").strip()[:254]
+    except Exception:
+        email_raw = ""
+
+    if not email_raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "validation.error", "message": "Blad walidacji",
+                    "errors": [{"field": "email", "message": "Pole wymagane"}]},
+        )
+
+    try:
+        TypeAdapter(EmailStr).validate_python(email_raw)
+    except ValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "validation.error", "message": "Blad walidacji",
+                    "errors": [{"field": "email", "message": "Nieprawidlowy format adresu email"}]},
+        )
+
+    logger.info(
+        orjson.dumps({
+            "event":      "api_forgot_password_initiated",
+            "email_hash": _hash_email(email_raw),
+            "request_id": request_id,
+            "ip":         client_ip,
+            "ts":         datetime.now(timezone.utc).isoformat(),
+        }).decode()
+    )
+
+    try:
+        await auth_service.forgot_password(
+            db=db, redis=redis, email=email_raw, ip=client_ip,
+        )
+    except Exception as exc:
+        logger.error(
+            orjson.dumps({
+                "event":      "api_forgot_password_error",
+                "email_hash": _hash_email(email_raw),
+                "error":      str(exc),
+                "request_id": request_id,
+                "ip":         client_ip,
+                "ts":         datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+
+    return BaseResponse.ok(
+        data={"message": (
+            "Jesli podany adres email istnieje w systemie, "
+            "wyslalismy na niego kod weryfikacyjny. "
+            "Sprawdz skrzynke odbiorczą (w tym folder spam). "
+            "Kod wazny przez 15 minut."
+        )},
+        app_code="auth.forgot_password_initiated",
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINT 5: POST /auth/otp/verify
 # ─────────────────────────────────────────────────────────────────────────────
 
