@@ -75,6 +75,10 @@ class MonitHistory(Base):
     created_at: Mapped[Optional[datetime]] = mapped_column("CreatedAt", DateTime, nullable=True)
     retry_count: Mapped[int] = mapped_column("RetryCount", Integer, default=0)
     error_message: Mapped[Optional[str]] = mapped_column("ErrorMessage", String(500), nullable=True)
+    data_wydruku_recznie: Mapped[Optional[date]] = mapped_column(
+        "DataWydrukuRecznie", Date, nullable=True,
+        comment="Ręcznie ustawiona data druku. NULL = data systemowa.",
+    )
 
 
 class MonitHistoryInvoice(Base):

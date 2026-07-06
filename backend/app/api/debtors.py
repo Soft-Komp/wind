@@ -503,6 +503,50 @@ async def send_bulk_monits(
                     },
                 )
 
+        # ── NOWE (Punkt 3.1) — od_daty, ten sam wzorzec co do_daty ──────────
+        _od_daty_bulk: "date | None" = None
+        _od_daty_raw_bulk = body.get("od_daty")
+        if _od_daty_raw_bulk:
+            try:
+                from datetime import date as _date_cls
+                _od_daty_bulk = _date_cls.fromisoformat(str(_od_daty_raw_bulk))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format od_daty — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "od_daty", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+
+        # ── NOWE (Punkt 3.2) — data_wydruku, WSPÓLNA dla całej paczki bulk ──
+        _data_wydruku_bulk: "date | None" = None
+        _data_wydruku_raw_bulk = body.get("data_wydruku")
+        if _data_wydruku_raw_bulk:
+            try:
+                from datetime import date as _date_cls
+                _data_wydruku_bulk = _date_cls.fromisoformat(str(_data_wydruku_raw_bulk))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "Nieprawidłowy format data_wydruku — oczekiwany ISO: YYYY-MM-DD",
+                        "errors":  [{"field": "data_wydruku", "message": "Format: YYYY-MM-DD"}],
+                    },
+                )
+            if channel != "print":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code":    "validation.error",
+                        "message": "data_wydruku dozwolone wyłącznie dla channel='print'.",
+                        "errors":  [{"field": "data_wydruku",
+                                     "message": "Pole dostępne tylko przy kanale 'print'"}],
+                    },
+                )
+
         bulk_request = monit_service.MonitBulkRequest(
             debtor_ids=debtor_ids,
             monit_type=channel,
@@ -511,6 +555,8 @@ async def send_bulk_monits(
             include_odsetki=_inc_odsetki_bulk,
             include_koszty=_inc_koszty_bulk,
             do_daty=_do_daty_bulk,
+            od_daty=_od_daty_bulk,             # ← NOWE
+            data_wydruku=_data_wydruku_bulk,   # ← NOWE
         )
         result = await monit_service.send_bulk(
             db=db,

@@ -143,13 +143,12 @@ async def generate_pdf_task(
         # tak samo jak generate_pdf_preview (identyczny wyglad)
         if template_body:
             pdf_bytes = await _generate_pdf_from_template(
-                monit_id=monit_id,
-                template_body=template_body,
-                debtor_name=debtor_name,
-                invoice_list=invoice_list_str,
+                monit_id=monit_id, template_body=template_body,
+                debtor_name=debtor_name, invoice_list=invoice_list_str,
                 total_debt=effective_total,
                 payment_deadline=payment_deadline or _calc_deadline(),
                 payment_account=payment_account,
+                issue_date=_issue_date_str,       # ← NOWE — ta sama zmienna co w gałęzi else
             )
         else:
             pdf_bytes = await generate_pdf(
@@ -241,6 +240,7 @@ async def _generate_pdf_from_template(
     total_debt: float,
     payment_deadline: str,
     payment_account: Optional[str] = None,
+    issue_date: Optional[str] = None,        # ← NOWE (pkt 3.2)
 ) -> bytes:
     """
     Generuje PDF z szablonu Jinja2 — identyczny wyglad jak generate_pdf_preview.
@@ -316,6 +316,9 @@ async def _generate_pdf_from_template(
         story.append(Paragraph(f"NIP: {settings.COMPANY_NIP}", style_normal))
     if getattr(settings, "COMPANY_ADDRESS", None):
         story.append(Paragraph(settings.COMPANY_ADDRESS, style_normal))
+    # ── NOWE (Punkt 3.2) ─────────────────────────────────────────────────────
+    _issue_date_final = issue_date or datetime.now(_WARSAW).strftime("%d.%m.%Y")
+    story.append(Paragraph(f"Data wystawienia: {_issue_date_final}", style_normal))
     story.append(Spacer(1, 0.5*cm))
 
     # Każda linia jako osobny paragraf — identycznie jak podgląd

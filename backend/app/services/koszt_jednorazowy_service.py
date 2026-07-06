@@ -52,6 +52,10 @@ class KosztJednorazowyInput:
         object.__setattr__(self, "kwota", kwota_dec)
 
 
+class KosztJednorazowyMonitZamknietyError(KosztJednorazowyValidationError):
+    """Monit nie jest już w statusie 'pending' — PDF prawdopodobnie wygenerowany."""
+
+
 async def dodaj_koszt_jednorazowy(
     db: AsyncSession,
     dane: KosztJednorazowyInput,
@@ -59,10 +63,26 @@ async def dodaj_koszt_jednorazowy(
     ip_address: str | None,
     request_id: str | None,
 ) -> dict:
-    """
-    Dopisuje jednorazowy koszt do monitu. Append-only — brak metody edycji,
-    tylko `unieważnij_koszt_jednorazowy` (is_voided=1).
-    """
+    # ── KROK 1: Weryfikacja, że monit wciąż jest 'pending' ──────────────────
+    # Redundancja obronna: blokujemy na poziomie transakcji, nie tylko UI.
+    _status_row = (await db.execute(
+        text("SELECT Status, KwotaCalkowita FROM dbo.skw_MonitHistory "
+             "WHERE ID_MONIT = :id_monit AND IsActive = 1"),
+        {"id_monit": dane.id_monit},
+    )).fetchone()
+
+    if _status_row is None:
+        raise KosztJednorazowyValidationError(
+            f"Monit ID={dane.id_monit} nie istnieje lub jest nieaktywny."
+        )
+    if _status_row.Status != "pending":
+        raise KosztJednorazowyMonitZamknietyError(
+            f"Monit ID={dane.id_monit} ma status '{_status_row.Status}' — "
+            f"koszt jednorazowy można dodać wyłącznie przed wygenerowaniem PDF "
+            f"(status='pending')."
+        )
+
+    # ── KROK 2: INSERT kosztu (append-only, bez zmian) ──────────────────────
     result = await db.execute(
         text("""
             INSERT INTO dbo.skw_MonitKosztyJednorazowe
@@ -71,39 +91,43 @@ async def dodaj_koszt_jednorazowy(
             VALUES (:id_monit, :opis, :kwota, :id_user_dodal, :ip_address, :request_id)
         """),
         {
-            "id_monit": dane.id_monit,
-            "opis": dane.opis,
-            "kwota": dane.kwota,
-            "id_user_dodal": id_user_dodal,
-            "ip_address": ip_address,
+            "id_monit": dane.id_monit, "opis": dane.opis, "kwota": dane.kwota,
+            "id_user_dodal": id_user_dodal, "ip_address": ip_address,
             "request_id": request_id,
         },
     )
     row = result.fetchone()
+
+    # ── KROK 3: Aktualizacja KwotaCalkowita na MonitHistory (ta sama transakcja) ──
+    await db.execute(
+        text("""
+            UPDATE dbo.skw_MonitHistory
+            SET KwotaCalkowita = ISNULL(KwotaCalkowita, 0) + :kwota
+            WHERE ID_MONIT = :id_monit
+        """),
+        {"id_monit": dane.id_monit, "kwota": dane.kwota},
+    )
     await db.commit()
 
     logger.info(
-        "koszt_jednorazowy: dodano nowy koszt do monitu",
+        "koszt_jednorazowy: dodano i doliczono do kwota_calkowita",
         extra={
             "event": "koszt_jednorazowy.dodano",
             "id_koszt": row.id_koszt,
             "id_monit": dane.id_monit,
-            "kwota": str(dane.kwota),
-            "opis": dane.opis,
+            "kwota_dodana": str(dane.kwota),
+            "kwota_calkowita_przed": float(_status_row.KwotaCalkowita or 0),
+            "kwota_calkowita_po": float(_status_row.KwotaCalkowita or 0) + float(dane.kwota),
             "id_user_dodal": id_user_dodal,
             "ip_address": ip_address,
             "request_id": request_id,
-            "created_at": row.created_at.isoformat(),
         },
     )
     return {
-        "id_koszt": row.id_koszt,
-        "id_monit": dane.id_monit,
-        "opis": dane.opis,
-        "kwota": float(dane.kwota),
+        "id_koszt": row.id_koszt, "id_monit": dane.id_monit,
+        "opis": dane.opis, "kwota": float(dane.kwota),
         "created_at": row.created_at.isoformat(),
     }
-
 
 async def unieważnij_koszt_jednorazowy(
     db: AsyncSession, id_koszt: int, id_user: int, powod: str,

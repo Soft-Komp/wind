@@ -2325,13 +2325,17 @@ async def generate_pdf_preview(
     rendered_subject = tmpl_row.get("Subject") or ""
 
     story = []
-    # Nagłówek — nazwa firmy dłużnika
     nazwa = debtor.get("NazwaKontrahenta") or debtor.get("nazwa_kontrahenta") or f"ID {debtor_id}"
     story.append(Paragraph(f"<b>Podgląd monitu — {nazwa}</b>", style_title))
     story.append(Spacer(1, 0.5 * cm))
-    # Metadane — temat renderowany po Jinja2, wstawiony niżej
     story.append(Paragraph(f"Szablon: {tmpl_row['TemplateName']}", style_normal))
     story.append(Paragraph(f"Kanał: {channel}", style_normal))
+    # ── NOWE (Punkt 3.2/3.3) — data wystawienia w podglądzie ────────────────
+    _issue_date_preview_str = (
+        data_wydruku.strftime("%d.%m.%Y") if data_wydruku
+        else datetime.now(timezone.utc).astimezone().strftime("%d.%m.%Y")
+    )
+    story.append(Paragraph(f"Data wystawienia: {_issue_date_preview_str}", style_normal))
     story.append(Spacer(1, 0.5 * cm))
 
     # ── Krok 2.5: Pobierz numery faktur z WAPRO dla invoice_list ─────────────
