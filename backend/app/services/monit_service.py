@@ -1181,6 +1181,41 @@ async def send_bulk(
 
         kwota_calkowita = total_debt + odsetki_total + _koszty_do_doliczenia
 
+        # ── NOWE (Punkt 3.3) — kwoty zbiorcze, TYLKO dla layout_engine='structured_statement' ──
+        # Świadomie liczone tylko gdy potrzebne — druga zapytanie do WAPRO dla
+        # każdego innego szablonu byłoby marnowaniem połączeń bez żadnej korzyści.
+        _kwota_wplaty_suma: Optional[Decimal] = None
+        _saldo_suma: Optional[Decimal] = None
+        _layout_engine = getattr(template, "layout_engine", "jinja_text") if template else "jinja_text"
+
+        if _layout_engine == "structured_statement" and debtor_invoice_ids:
+            try:
+                from app.db.wapro import get_invoice_brutto_and_pozostala_by_ids as _get_bp
+                _bp_map = await _get_bp(debtor_invoice_ids)
+                _kwota_wplaty_suma = _D(str(sum(
+                    max(v["brutto"] - v["pozostala"], 0.0) for v in _bp_map.values()
+                )))
+                _saldo_suma = total_debt  # tożsame z sumą KwotaPozostala — już policzone wyżej
+                logger.info(
+                    "send_bulk: kwoty zbiorcze policzone dla structured_statement",
+                    extra={
+                        "event": "send_bulk.kwoty_zbiorcze_structured",
+                        "debtor_id": debtor_id,
+                        "kwota_wplaty_suma": str(_kwota_wplaty_suma),
+                        "saldo_suma": str(_saldo_suma),
+                        "invoice_count": len(debtor_invoice_ids),
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "send_bulk: błąd liczenia kwot zbiorczych — zapisuję NULL",
+                    extra={
+                        "event": "send_bulk.kwoty_zbiorcze_blad",
+                        "debtor_id": debtor_id,
+                        "error": str(exc),
+                    },
+                )
+
         monit = MonitHistory(
             id_kontrahenta=debtor_id,
             invoice_numbers=_invoice_numbers_str or None,
@@ -1192,6 +1227,8 @@ async def send_bulk(
             odsetki_total=float(odsetki_total),
             koszty_dodatkowe_total=float(suma_kosztow_dodatkowych),
             kwota_calkowita=float(kwota_calkowita),
+            kwota_wplaty_suma=float(_kwota_wplaty_suma) if _kwota_wplaty_suma is not None else None,   # ← NOWE
+            saldo_suma=float(_saldo_suma) if _saldo_suma is not None else None,                        # ← NOWE
             recipient=debtor_contacts.get(debtor_id, ""),
             subject=subject,
             scheduled_at=request.scheduled_at,

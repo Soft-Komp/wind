@@ -2232,6 +2232,70 @@ async def get_invoice_amounts_by_ids(invoice_ids: list[int]) -> dict[int, float]
         )
         return {}
 
+async def get_invoice_brutto_and_pozostala_by_ids(
+    invoice_ids: list[int],
+) -> dict[int, dict[str, float]]:
+    """
+    Zwraca {id_rozrachunku: {"brutto": ..., "pozostala": ...}} dla podanych ID.
+
+    Funkcja CELOWO odseparowana od get_invoice_amounts_by_ids() — tamta jest
+    współdzielona przez inne ścieżki i zwraca tylko KwotaPozostala; ta służy
+    wyłącznie do liczenia KwotaWplatySuma dla layout_engine='structured_statement'
+    (Punkt 3.3), żeby nie zmieniać kontraktu funkcji używanej gdzie indziej.
+
+    Args:
+        invoice_ids: Lista ID_ROZRACHUNKU.
+
+    Returns:
+        Słownik jak wyżej — tylko dla ID, które faktycznie znaleziono.
+    """
+    if not invoice_ids:
+        return {}
+
+    unique_ids = list({int(i) for i in invoice_ids if i})
+    if not unique_ids:
+        return {}
+
+    query_id = str(uuid.uuid4())
+    placeholders = ", ".join("?" * len(unique_ids))
+    sql = (
+        f"SELECT ID_ROZRACHUNKU, KwotaBrutto, KwotaPozostala "
+        f"FROM {SKW_ROZRACHUNKI_FAKTUR} "
+        f"WHERE ID_ROZRACHUNKU IN ({placeholders})"
+    )
+    params = tuple(unique_ids)
+
+    try:
+        rows = await _run_in_executor(
+            _execute_query_sync, sql, params, query_id, "invoice_brutto_pozostala"
+        )
+        result: dict[int, dict[str, float]] = {}
+        for row in rows:
+            id_roz = row.get("ID_ROZRACHUNKU")
+            if id_roz is None:
+                continue
+            result[int(id_roz)] = {
+                "brutto":    float(row.get("KwotaBrutto") or 0),
+                "pozostala": float(row.get("KwotaPozostala") or 0),
+            }
+        logger.debug(
+            "get_invoice_brutto_and_pozostala_by_ids: requested=%d, found=%d [%s]",
+            len(unique_ids), len(result), query_id,
+            extra={
+                "event": "wapro.invoice_brutto_pozostala",
+                "requested_count": len(unique_ids),
+                "found_count": len(result),
+                "query_id": query_id,
+            },
+        )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "get_invoice_brutto_and_pozostala_by_ids błąd — zwracam pusty dict: %s", exc,
+            extra={"invoice_ids": unique_ids, "error": str(exc), "query_id": query_id},
+        )
+        return {}
+
 # ---------------------------------------------------------------------------
 # Eksport publicznego API
 # ---------------------------------------------------------------------------

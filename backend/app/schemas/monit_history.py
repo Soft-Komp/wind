@@ -88,6 +88,12 @@ class MonitHistoryRead(BaseModel):
     is_active: bool = Field(...)
     created_at: datetime = Field(...)
     updated_at: datetime | None | None = Field(default=None)
+    data_wydruku_recznie: date | None = Field(
+        default=None,
+        description="Ręcznie ustawiona data druku. NULL = użyto daty systemowej.",
+    )
+    kwota_wplaty_suma: Decimal | None = Field(default=None, description="Suma wpłat — tylko dla layout_engine='structured_statement'.")
+    saldo_suma: Decimal | None = Field(default=None, description="Suma salda — tylko dla layout_engine='structured_statement'.")
 
 
 

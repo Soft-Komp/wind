@@ -52,6 +52,12 @@ class Template(AuditMixin, Base):
         "MonitHistory", back_populates=None
     )
 
+    layout_engine: Mapped[str] = mapped_column(
+        "LayoutEngine", String(30), nullable=False, default="jinja_text",
+        server_default="jinja_text",
+        comment="'jinja_text' (wolny tekst) | 'structured_statement' (wyciąg zbiorczy, pkt 3.3)",
+    )
+
     def __repr__(self) -> str:
         return (
             f"<Template id={self.id_template} "

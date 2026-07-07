@@ -618,3 +618,192 @@ def save_pdf_to_disk(
         extra={"path": str(filepath), "size_kb": round(len(pdf_bytes) / 1024, 1)},
     )
     return str(filepath)
+
+
+async def generate_pdf_structured_statement(
+    monit_id: int,
+    debtor_name: str,
+    debtor_id_kontrahenta: int,
+    debtor_nip: Optional[str],
+    debtor_address: Optional[str],
+    invoices: list[dict],              # [{numer, data_dok, kwota_brutto, termin}]
+    kwota_wplaty_suma: float,
+    saldo_suma: float,
+    odsetki_suma: float,
+    koszt_upomnienia: float,
+    template_body: str,
+    payment_account: Optional[str] = None,
+    issue_date: Optional[str] = None,
+) -> bytes:
+    """
+    Layout strukturalny, wierny wzorowi Fakira (nagłówek nadawcy/adresata,
+    tabela faktur z obramowaniem, wiersz 'Razem' z wartościami zbiorczymi,
+    akapity prawne edytowalne przez template_body). Czcionka: DejaVu.
+    Używana identycznie przez podgląd i realną wysyłkę — zero rozjazdu.
+    """
+    _ensure_fonts_registered()
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    )
+    from jinja2 import Environment, BaseLoader
+
+    now = datetime.now(_WARSAW)
+    if issue_date is None:
+        issue_date = now.strftime("%d.%m.%Y")
+
+    logger.info(
+        "generate_pdf_structured_statement: renderowanie",
+        extra={
+            "event": "pdf.structured_statement.render",
+            "monit_id": monit_id,
+            "id_kontrahenta": debtor_id_kontrahenta,
+            "invoice_count": len(invoices),
+            "kwota_wplaty_suma": kwota_wplaty_suma,
+            "saldo_suma": saldo_suma,
+            "odsetki_suma": odsetki_suma,
+            "koszt_upomnienia": koszt_upomnienia,
+            "issue_date": issue_date,
+        },
+    )
+
+    # ── Akapity prawne — Jinja2 na template_body edytowalnym w panelu ───────
+    settings = get_settings()
+    _env = Environment(loader=BaseLoader())
+    try:
+        _rendered_legal = _env.from_string(template_body).render(
+            company_name=settings.COMPANY_NAME,
+            payment_account=payment_account or "",
+        )
+    except Exception as _jinja_exc:
+        logger.error(
+            "generate_pdf_structured_statement: błąd Jinja2 — używam surowej treści",
+            extra={"monit_id": monit_id, "error": str(_jinja_exc)},
+        )
+        _rendered_legal = template_body
+
+    # ── Style (DejaVu — wymóg wierności 1:1 z fontem czytelnym dla PL) ───────
+    _DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", f"{_DEJAVU_DIR}/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVu-Bold", f"{_DEJAVU_DIR}/DejaVuSans-Bold.ttf"))
+        pdfmetrics.registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold")
+        _font, _font_bold = "DejaVu", "DejaVu-Bold"
+    except Exception as _font_exc:
+        logger.warning(
+            "generate_pdf_structured_statement: fallback na Helvetica",
+            extra={"error": str(_font_exc)},
+        )
+        _font, _font_bold = "Helvetica", "Helvetica-Bold"
+
+    base = getSampleStyleSheet()
+    s_normal = ParagraphStyle("N", parent=base["Normal"], fontName=_font, fontSize=9, leading=13)
+    s_bold   = ParagraphStyle("B", parent=base["Normal"], fontName=_font_bold, fontSize=9, leading=13)
+    s_title  = ParagraphStyle("T", parent=base["Title"], fontName=_font_bold, fontSize=14, leading=18)
+    s_header_cell = ParagraphStyle("H", parent=base["Normal"], fontName=_font_bold, fontSize=8,
+                                    leading=11, textColor=colors.white)
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
+    )
+    story = []
+
+    # ── Nagłówek: nadawca + data wydruku ─────────────────────────────────────
+    story.append(Paragraph(f"<b>{settings.COMPANY_NAME}</b>", s_title))
+    if getattr(settings, "COMPANY_NIP", None):
+        story.append(Paragraph(f"NIP: {settings.COMPANY_NIP}", s_normal))
+    if getattr(settings, "COMPANY_ADDRESS", None):
+        story.append(Paragraph(settings.COMPANY_ADDRESS, s_normal))
+    story.append(Spacer(1, 0.4*cm))
+    story.append(Paragraph(f"Data wystawienia: {issue_date}", s_normal))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── Adresat — z (Id: ...) = ID_KONTRAHENTA WAPRO (potwierdzone) ──────────
+    story.append(Paragraph(f"<b>{debtor_name}</b>", s_bold))
+    if debtor_address:
+        story.append(Paragraph(debtor_address, s_normal))
+    story.append(Paragraph(f"(Id: {debtor_id_kontrahenta})", s_normal))
+    story.append(Spacer(1, 0.6*cm))
+
+    # ── Tekst prawny (edytowalny, Jinja2) ────────────────────────────────────
+    for line in _rendered_legal.strip().splitlines():
+        line = line.strip()
+        if line:
+            story.append(Paragraph(line, s_normal))
+        else:
+            story.append(Spacer(1, 0.25*cm))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── Tabela faktur — struktura stała, kod (NIE tekst edytowalny) ──────────
+    table_data = [[
+        Paragraph("Numer dokumentu", s_header_cell),
+        Paragraph("Data dokumentu", s_header_cell),
+        Paragraph("Kwota dokumentu", s_header_cell),
+        Paragraph("Termin płatności", s_header_cell),
+    ]]
+    for inv in invoices:
+        table_data.append([
+            str(inv.get("numer", "")),
+            str(inv.get("data_dok", "")),
+            f'{float(inv.get("kwota_brutto", 0) or 0):.2f}',
+            str(inv.get("termin", "")),
+        ])
+
+    tbl = Table(table_data, colWidths=[5*cm, 3*cm, 3.5*cm, 3.5*cm])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+        ("FONTNAME",       (0, 1), (-1, -1), _font),
+        ("FONTSIZE",       (0, 0), (-1, -1), 8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+        ("GRID",           (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("PADDING",        (0, 0), (-1, -1), 5),
+        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Wiersz "Razem" — wartości zbiorcze (decyzja: bez pojedynczych wpłat) ─
+    story.append(Paragraph(
+        f"<b>Razem — kwota wpłaty: {kwota_wplaty_suma:.2f} PLN &nbsp;|&nbsp; "
+        f"Saldo: {saldo_suma:.2f} PLN &nbsp;|&nbsp; Odsetki: {odsetki_suma:.2f} PLN</b>",
+        s_bold,
+    ))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── Koszt upomnienia — istniejący mechanizm koszty_dodatkowe (potwierdzone) ──
+    if koszt_upomnienia > 0:
+        story.append(Paragraph(
+            f"Dodatkowo doliczono koszty upomnienia — {koszt_upomnienia:.2f} PLN.",
+            s_normal,
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    _naleznosc_razem = saldo_suma + odsetki_suma + koszt_upomnienia
+    story.append(Paragraph(
+        f"<b>Należność w wysokości: {_naleznosc_razem:.2f} PLN</b>", s_bold,
+    ))
+    story.append(Spacer(1, 1*cm))
+
+    story.append(Paragraph(
+        f"Z poważaniem,<br/><b>{settings.COMPANY_NAME}</b><br/>Dział Windykacji",
+        s_normal,
+    ))
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    logger.info(
+        "generate_pdf_structured_statement: wygenerowano",
+        extra={
+            "monit_id": monit_id,
+            "pdf_size_kb": round(len(pdf_bytes) / 1024, 1),
+            "naleznosc_razem": _naleznosc_razem,
+        },
+    )
+    return pdf_bytes

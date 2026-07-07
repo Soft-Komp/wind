@@ -161,6 +161,19 @@ class MonitHistory(Base):
         foreign_keys=[id_user],
         lazy="select",
     )
+    kwota_wplaty_suma: Mapped[Decimal | None] = mapped_column(
+        "KwotaWplatySuma", Numeric(18, 2), nullable=True,
+        comment=(
+            "Suma (KwotaBrutto - KwotaPozostala) po wszystkich fakturach monitu. "
+            "Liczona raz w monit_service.send_bulk() — worker nie ma dostępu "
+            "do WAPRO connection pool, więc odczytuje gotową wartość. "
+            "NULL dla layout_engine='jinja_text' (nieużywane)."
+        ),
+    )
+    saldo_suma: Mapped[Decimal | None] = mapped_column(
+        "SaldoSuma", Numeric(18, 2), nullable=True,
+        comment="Suma KwotaPozostala po wszystkich fakturach monitu. Analogicznie do kwota_wplaty_suma.",
+    )
 
     def __repr__(self) -> str:
         return (

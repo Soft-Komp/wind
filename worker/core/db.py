@@ -79,6 +79,9 @@ class MonitHistory(Base):
         "DataWydrukuRecznie", Date, nullable=True,
         comment="Ręcznie ustawiona data druku. NULL = data systemowa.",
     )
+    layout_engine: Mapped[str] = mapped_column("LayoutEngine", String(30), default="jinja_text")
+    kwota_wplaty_suma: Mapped[Optional[float]] = mapped_column("KwotaWplatySuma", Numeric(18, 2), nullable=True)
+    saldo_suma: Mapped[Optional[float]] = mapped_column("SaldoSuma", Numeric(18, 2), nullable=True)
 
 
 class MonitHistoryInvoice(Base):

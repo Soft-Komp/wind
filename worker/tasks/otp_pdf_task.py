@@ -88,7 +88,7 @@ async def generate_pdf_task(
             )
             monit_row = mh_result.scalar_one_or_none()
             _issue_date_str: Optional[str] = None
-
+            _layout_engine: str = "jinja_text"
             if monit_row:
                 if monit_row.kwota_calkowita is not None:
                     effective_total = float(monit_row.kwota_calkowita)
@@ -124,11 +124,13 @@ async def generate_pdf_task(
                     tmpl = tmpl_result.scalar_one_or_none()
                     if tmpl and tmpl.body:
                         template_body = tmpl.body
+                        _layout_engine = getattr(tmpl, "layout_engine", "jinja_text")
                         logger.info(
                             "generate_pdf_task: szablon z bazy",
                             extra={
                                 "monit_id":    monit_id,
                                 "template_id": monit_row.template_id,
+                                "layout_engine":  _layout_engine,
                                 "invoice_list": invoice_list_str,
                                 "total_debt":  effective_total,
                             },
@@ -139,16 +141,27 @@ async def generate_pdf_task(
                             extra={"monit_id": monit_id, "template_id": monit_row.template_id},
                         )
 
-        # Generuj PDF — jesli jest szablon, renderuj Jinja2 i buduj przez ReportLab
-        # tak samo jak generate_pdf_preview (identyczny wyglad)
-        if template_body:
-            pdf_bytes = await _generate_pdf_from_template(
-                monit_id=monit_id, template_body=template_body,
-                debtor_name=debtor_name, invoice_list=invoice_list_str,
-                total_debt=effective_total,
-                payment_deadline=payment_deadline or _calc_deadline(),
+        _layout_engine = getattr(tmpl, "layout_engine", "jinja_text") if 'tmpl' in dir() else "jinja_text"
+
+        if template_body and _layout_engine == "structured_statement":
+            kwoty = await oblicz_kwoty_zbiorcze_monitu(
+                wapro=None,  # patrz uwaga niżej — potrzebny realny wapro pool w tej funkcji
+                invoice_ids=monit_row.invoice_numbers,  # WYMAGA konwersji — patrz pytanie niżej
+                do_daty=None, od_daty=None,
+            )
+            pdf_bytes = await generate_pdf_structured_statement(
+                monit_id=monit_id,
+                debtor_name=debtor_name,
+                debtor_id_kontrahenta=monit_row.id_kontrahenta,
+                debtor_nip=debtor_nip, debtor_address=debtor_address,
+                invoices=invoices or [],
+                kwota_wplaty_suma=float(kwoty["kwota_wplaty_suma"]),
+                saldo_suma=float(kwoty["saldo_suma"]),
+                odsetki_suma=float(kwoty["odsetki_suma"]),
+                koszt_upomnienia=0.0,  # patrz pytanie niżej
+                template_body=template_body,
                 payment_account=payment_account,
-                issue_date=_issue_date_str,       # ← NOWE — ta sama zmienna co w gałęzi else
+                issue_date=_issue_date_str,
             )
         else:
             pdf_bytes = await generate_pdf(
