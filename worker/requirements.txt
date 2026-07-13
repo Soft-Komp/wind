@@ -37,6 +37,10 @@ orjson==3.10.12
 # Wersja zweryfikowana zgodnie z tym, co realnie zainstalowane w windykacja_api
 # (docker exec windykacja_api pip show cryptography → 49.0.0, 2026-07-10)
 cryptography==49.0.0
+signxml==5.1.0
+lxml==6.1.1
+
+paramiko==5.0.0
 
 # ── Date/Time (timezone support) ─────────────────────────────────────────────
 python-dateutil==2.9.0

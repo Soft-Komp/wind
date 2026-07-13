@@ -109,6 +109,7 @@ services:
       - ./data/approval_attachments:/data/approval_attachments
       # Volume dla recznie wgrywanych dokumentow PDF/obrazow (OCR) — 2026-07-13
       - manual_uploads:/data/manual_uploads
+      - source_downloads:/data/source_downloads
     depends_on:
       redis:
         condition: service_healthy
@@ -165,6 +166,7 @@ services:
       # MUSI byc ten sam named volume co w api, zeby worker widzial pliki
       # zapisane przez api (patrz komentarz na gorze pliku).
       - manual_uploads:/data/manual_uploads
+      - source_downloads:/data/source_downloads
     depends_on:
       redis:
         condition: service_healthy
@@ -353,6 +355,8 @@ volumes:
     # Recznie wgrywane dokumenty PDF/obrazy (upload_document + ocr_task).
     # Named volume — celowo TAKI SAM typ mocowania w api i worker (zobacz
     # komentarz na gorze pliku o rozjezdzie approval_data, ktorego to unika).
+  source_downloads:
+    driver: local
 
 # =============================================================================
 # SIECI

@@ -40,6 +40,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.event_service import _build_event_envelope, _append_event_to_log, _publish_to_channel
 
 logger = logging.getLogger(__name__)
 
@@ -869,19 +870,27 @@ async def resolve_ocr_review(
     # SSE — tylko przy potwierdzeniu (odrzucenie to nie "weryfikacja").
     if decision == "confirm" and redis is not None:
         try:
-            await redis.publish(
-                f"sse:approval:instance:{id_instance}",
-                json.dumps({
-                    "type": "document_ocr_verified",
-                    "data": {
-                        "instance_id": id_instance,
-                        "confidence":  None,
-                        "verified_by": "human",
+            uploaded_by = None
+            try:
+                extra = json.loads(instance.get("extra_data") or "{}")
+                uploaded_by = extra.get("uploaded_by")
+            except Exception:
+                pass
+
+            if uploaded_by:
+                envelope = _build_event_envelope(
+                    "document_ocr_verified",
+                    {
+                        "instance_id":         id_instance,
+                        "confidence":          None,
+                        "verified_by":         "human",
                         "verified_by_user_id": actor_id,
                     },
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }, ensure_ascii=False),
-            )
+                    actor_id,
+                )
+                _append_event_to_log(envelope)
+                await _publish_to_channel(redis, f"channel:user:{uploaded_by}", envelope)
+                await _publish_to_channel(redis, "channel:admins", envelope)
         except Exception as exc:
             logger.warning("resolve_ocr_review: SSE publish blad | id_instance=%s: %s", id_instance, exc)
 

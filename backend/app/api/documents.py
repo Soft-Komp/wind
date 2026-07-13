@@ -507,29 +507,41 @@ async def get_document_pdf(
     )
     source_name = source_name_result.scalar_one_or_none()
 
-    if source_name == "manual_upload":
-        import json as _json
-        import mimetypes
-        from pathlib import Path
-        from fastapi.responses import FileResponse
+    import json as _json
+    import mimetypes
+    from pathlib import Path
+    from fastapi.responses import FileResponse
 
-        try:
-            extra = _json.loads(instance.get("extra_data") or "{}")
-        except Exception:
-            extra = {}
-        file_path = extra.get("file_path")
+    try:
+        extra = _json.loads(instance.get("extra_data") or "{}")
+    except Exception:
+        extra = {}
+    file_path = extra.get("file_path")
 
-        if not file_path or not Path(file_path).exists():
+    if file_path:
+        if not Path(file_path).exists():
             raise HTTPException(
                 status_code=404,
-                detail="Plik zrodlowy nie istnieje na dysku (usuniety recznie lub blad uploadu).",
+                detail="Plik zrodlowy nie istnieje juz na dysku (usuniety recznie lub blad pobrania).",
             )
-
         media_type, _ = mimetypes.guess_type(file_path)
         return FileResponse(
             path=file_path,
             media_type=media_type or "application/octet-stream",
             filename=Path(file_path).name,
+        )
+
+
+    if source_name == "ksef20":
+        # Brak wiernego renderera FA(3)->PDF (stary mechanizm z Etapu 1 nieznaleziony).
+        # Reuzywamy ta sama sciezke co manual_upload — PDF z danych instancji,
+        # nie z surowego XML. XML pozostaje w extra_data.xml na przyszlosc.
+        pdf_bytes = await fak_svc.get_faktura_pdf_from_instance(
+            db=db, redis=redis, id_instance=id_instance, actor_id=current_user.id_user,
+        )
+        return StreamingResponse(
+            content=iter([pdf_bytes]), media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="dokument_{id_instance}.pdf"'},
         )
 
     if source_name != "fakir":

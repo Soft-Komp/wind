@@ -35,6 +35,7 @@ from worker.tasks.source_sync_task import (
     source_sync_task_single as _source_sync_task_single,
 )
 from worker.tasks.auto_dispatch_task import auto_dispatch_task as _auto_dispatch_task
+from worker.tasks.ksef_sync_task import ksef_sync_task as _ksef_sync_task
 # F7 — OCR
 from worker.tasks.ocr_task import ocr_task as _ocr_task
 
@@ -49,6 +50,7 @@ send_approval_notification = track_job("send_approval_notification")(_send_appro
 queue_approval_email       = track_job("queue_approval_email")(_queue_approval_email)
 flush_approval_emails      = track_job("flush_approval_emails")(_flush_approval_emails)
 source_sync_task           = track_job("source_sync_task")(_source_sync_task)
+ksef_sync_task              = track_job("ksef_sync_task")(_ksef_sync_task)
 auto_dispatch_task         = track_job("auto_dispatch_task")(_auto_dispatch_task)
 ocr_task = track_job("ocr_task")(_ocr_task)
 
@@ -189,9 +191,9 @@ class WorkerSettings:
         send_approval_notification,
         queue_approval_email,
         flush_approval_emails,
-        # Etap 2
         source_sync_task,
         _source_sync_task_single,
+        ksef_sync_task,
         auto_dispatch_task,
         ocr_task,
     ]
@@ -223,6 +225,8 @@ class WorkerSettings:
         ),
         # Etap 2 — synchronizacja źródeł co 5 minut
         cron(source_sync_task, minute={0,5,10,15,20,25,30,35,40,45,50,55}, timeout=300, unique=True, run_at_startup=False),
+        # KSeF 2.0 — osobny cron co 60 minut, timeout 45 min (eksport paczek moze trwac do 30 min)
+        cron(ksef_sync_task, minute=0, timeout=2700, unique=True, run_at_startup=False),
         # Etap 2 — auto-dispatch co 1 minutę
         cron(auto_dispatch_task, minute={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59}, timeout=120, unique=True, run_at_startup=False),
     
