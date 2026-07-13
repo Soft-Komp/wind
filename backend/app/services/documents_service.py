@@ -317,6 +317,26 @@ async def get_status_summary(
     )
     folders = [{"id_folder": r[0], "folder_name": r[1], "color": r[2]} for r in folders_result.fetchall()]
 
+    ocr_data = None
+    try:
+        extra = json.loads(instance.get("extra_data") or "{}")
+    except Exception:
+        extra = {}
+    if "ocr_confidence" in extra or "ocr_requires_review" in extra or "ocr_error" in extra:
+        ocr_data = {
+            "requires_review": extra.get("ocr_requires_review", False),
+            "review_reasons":  extra.get("ocr_review_reasons", []),
+            "confidence":      extra.get("ocr_confidence"),
+            "doc_number":      extra.get("ocr_doc_number"),
+            "nip":             extra.get("ocr_nip"),
+            "doc_date":        extra.get("ocr_doc_date"),
+            "amount_gross":    extra.get("ocr_amount_gross"),
+            "contractor":      extra.get("ocr_contractor"),
+            "pages":           extra.get("ocr_pages"),
+            "error":           extra.get("ocr_error"),
+            "raw_text":        extra.get("ocr_text"),
+        }
+
     return {
         "id_instance":             id_instance,
         "id_document":             instance["id_document"],
@@ -328,6 +348,7 @@ async def get_status_summary(
         "current_step":            current_step_info,
         "available_actions_count": available_actions_count,
         "folders":                 folders,
+        "ocr_data":                ocr_data,
         "created_at":              instance["created_at"],
         "updated_at":              instance["updated_at"],
     }
@@ -784,6 +805,7 @@ async def resolve_ocr_review(
     comment: str | None,
     actor_id: int,
     can_view_all: bool,
+    redis: Any = None,
 ) -> dict[str, Any]:
     """
     Rozstrzyga dokument oczekujacy na reczna weryfikacje OCR.
@@ -843,6 +865,25 @@ async def resolve_ocr_review(
         "resolve_ocr_review: id_instance=%s decision=%s new_status=%s actor=%s",
         id_instance, decision, new_status, actor_id,
     )
+
+    # SSE — tylko przy potwierdzeniu (odrzucenie to nie "weryfikacja").
+    if decision == "confirm" and redis is not None:
+        try:
+            await redis.publish(
+                f"sse:approval:instance:{id_instance}",
+                json.dumps({
+                    "type": "document_ocr_verified",
+                    "data": {
+                        "instance_id": id_instance,
+                        "confidence":  None,
+                        "verified_by": "human",
+                        "verified_by_user_id": actor_id,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }, ensure_ascii=False),
+            )
+        except Exception as exc:
+            logger.warning("resolve_ocr_review: SSE publish blad | id_instance=%s: %s", id_instance, exc)
 
     return {"id_instance": id_instance, "status": new_status, "decision": decision}
 

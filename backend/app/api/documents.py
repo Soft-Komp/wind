@@ -277,6 +277,7 @@ async def resolve_ocr_review_endpoint(
     body: OcrReviewResolveBody,
     current_user: CurrentUser,
     db: DB,
+    redis: RedisClient,
 ):
     can_view_all = await _can_view_all(current_user, db)
     try:
@@ -287,6 +288,7 @@ async def resolve_ocr_review_endpoint(
             document_amount=body.document_amount,
             comment=body.comment,
             actor_id=current_user.id_user, can_view_all=can_view_all,
+            redis=redis,
         )
     except DocumentNotFoundError as exc:
         _raise_doc_error(exc)
@@ -504,6 +506,31 @@ async def get_document_pdf(
         {"s": instance["id_source"]},
     )
     source_name = source_name_result.scalar_one_or_none()
+
+    if source_name == "manual_upload":
+        import json as _json
+        import mimetypes
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+
+        try:
+            extra = _json.loads(instance.get("extra_data") or "{}")
+        except Exception:
+            extra = {}
+        file_path = extra.get("file_path")
+
+        if not file_path or not Path(file_path).exists():
+            raise HTTPException(
+                status_code=404,
+                detail="Plik zrodlowy nie istnieje na dysku (usuniety recznie lub blad uploadu).",
+            )
+
+        media_type, _ = mimetypes.guess_type(file_path)
+        return FileResponse(
+            path=file_path,
+            media_type=media_type or "application/octet-stream",
+            filename=Path(file_path).name,
+        )
 
     if source_name != "fakir":
         raise HTTPException(
