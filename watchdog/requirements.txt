@@ -1,0 +1,13 @@
+# =============================================================================
+# watchdog/requirements.txt — System Windykacja Config Watchdog
+# =============================================================================
+# Wersje zsynchronizowane z worker/requirements.txt — ten sam sterownik ODBC
+# w obrazie oznacza, że wersje pyodbc/sqlalchemy muszą się zgadzać, inaczej
+# ryzykujemy subtelne różnice w obsłudze typów MSSQL między kontenerami.
+
+pyodbc==5.2.0
+redis[hiredis]==5.2.1
+aiosmtplib==3.0.2
+pydantic==2.10.3
+pydantic-settings==2.6.1
+orjson==3.10.12

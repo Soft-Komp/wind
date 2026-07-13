@@ -1693,6 +1693,105 @@ async def get_faktura_pdf(
 
     return pdf_bytes
 
+async def get_faktura_pdf_from_instance(
+    *,
+    db: AsyncSession,
+    redis: Redis,
+    id_instance: int,
+    actor_id: int,
+) -> bytes:
+    """
+    PDF dla dokumentow z nowego modelu (Etap 2), ktore NIE maja odpowiednika
+    w legacy skw_faktura_akceptacja (bo wplynely przez source_sync_task).
+
+    Buduje przejsciowe (niezapisywane) instancje FakturaAkceptacja/FakturaPrzypisanie
+    z danych skw_document_approval_instances + skw_approval_log, zeby reuzyc
+    istniejacy, przetestowany generate_pdf() bez duplikowania logiki ReportLab.
+
+    UWAGA: obiekty ORM tworzone tutaj NIGDY nie sa dodawane do sesji (brak db.add()) —
+    sluza wylacznie jako nosniki danych dla generate_pdf(), nie trafiaja do bazy.
+    """
+    row = (await db.execute(
+        text(
+            f"SELECT [id_instance], [id_document], [status], [current_step], "
+            f"       [document_title], [extra_data], [created_at] "
+            f"FROM [dbo].[skw_document_approval_instances] "
+            f"WHERE [id_instance] = :i"
+        ),
+        {"i": id_instance},
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Dokument ID={id_instance} nie istnieje.")
+
+    id_inst, id_document, status_new, current_step, doc_title, extra_data_raw, created_at = row
+
+    try:
+        extra = json.loads(extra_data_raw) if extra_data_raw else {}
+    except Exception:
+        extra = {}
+
+    status_stary = _NEW_STATUS_TO_OLD.get(status_new or "pending_dispatch", "nowe")
+
+    # Przejsciowa instancja FakturaAkceptacja — NIE dodawana do sesji.
+    # POPRAWKA: utworzony_przez jest NOT NULL bez defaultu — musi byc jawnie ustawione.
+    faktura = FakturaAkceptacja(
+        id=id_instance,
+        numer_ksef=id_document,
+        status_wewnetrzny=status_stary,
+        priorytet="normalny",
+        opis_dokumentu=(extra.get("opis_dokumentu") or doc_title),
+        uwagi=None,
+        utworzony_przez=actor_id,
+        CreatedAt=created_at,
+    )
+
+    wapro = await _get_wapro_naglowek(id_document)
+
+    # Historia z skw_approval_log -> lista przejsciowych FakturaPrzypisanie.
+    # POPRAWKA: kolumna to id_user (nie actor_id). Filtr is_voided=0 wyklucza
+    # glosy uniewaznione przez rollback — nie powinny sie liczyc w historii.
+    # username_snapshot juz jest w tabeli (denormalizowane) — bez JOIN do skw_Users.
+    log_rows = (await db.execute(
+        text(
+            f"SELECT l.[action], l.[id_user], l.[username_snapshot], l.[details], l.[logged_at] "
+            f"FROM [dbo].[skw_approval_log] l "
+            f"WHERE l.[id_instance] = :i "
+            f"  AND l.[is_voided] = 0 "
+            f"ORDER BY l.[logged_at] ASC"
+        ),
+        {"i": id_instance},
+    )).fetchall()
+
+    przypisania = []
+    _ACTION_TO_STATUS = {
+        "accepted": "zaakceptowane", "rejected": "odrzucone",
+        "forwarded": "nie_moje",
+    }
+    for action, log_id_user, username_snapshot, details_raw, logged_at in log_rows:
+        mapped_status = _ACTION_TO_STATUS.get(action)
+        if mapped_status is None:
+            continue  # pomijamy zdarzenia bez odpowiednika w starym formacie
+        if log_id_user is None:
+            continue  # FakturaPrzypisanie.user_id jest NOT NULL — pomijamy zdarzenia systemowe bez actora
+        try:
+            details = json.loads(details_raw) if details_raw else {}
+        except Exception:
+            details = {}
+        przypisania.append(FakturaPrzypisanie(
+            id=0,  # przejsciowe, nigdy nie zapisywane
+            faktura_id=id_instance,
+            user_id=log_id_user,
+            status=mapped_status,
+            komentarz=details.get("comment"),
+            decided_at=logged_at,
+            is_active=True,
+        ))
+
+    from app.services.faktura_pdf_service import generate_pdf
+    return await generate_pdf(
+        faktura=faktura, wapro=wapro, przypisania=przypisania, db=db, redis=redis,
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SSE helpers
 # ─────────────────────────────────────────────────────────────────────────────

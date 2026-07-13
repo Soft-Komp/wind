@@ -5,7 +5,8 @@ Zgodne z BaseResponse/PaginatedResponse.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
+from sqlalchemy import Date
 
 from pydantic import BaseModel, ConfigDict, Field
 

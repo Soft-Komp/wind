@@ -162,6 +162,13 @@ mkdir -p "$APPROVAL_DIR" 2>/dev/null \
     && log_ok "Katalog załączników gotowy: ${APPROVAL_DIR}" \
     || log_warn "Nie można utworzyć katalogu załączników: ${APPROVAL_DIR} (sprawdź uprawnienia wolumenu)"
 
+
+# Katalog recznych uploadow (OCR) — ten sam wzorzec co approval_attachments.
+MANUAL_UPLOADS_DIR="${MANUAL_UPLOADS_DIR:-/data/manual_uploads}"
+mkdir -p "$MANUAL_UPLOADS_DIR" 2>/dev/null \
+    && log_ok "Katalog recznych uploadow gotowy: ${MANUAL_UPLOADS_DIR}" \
+    || log_warn "Nie można utworzyć katalogu recznych uploadow: ${MANUAL_UPLOADS_DIR} (sprawdź uprawnienia wolumenu — docker exec -u root <kontener> chown -R appuser:appgroup ${MANUAL_UPLOADS_DIR})"
+
 # =============================================================================
 # KROK 3: Czekaj na MSSQL
 # =============================================================================

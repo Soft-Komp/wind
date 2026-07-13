@@ -35,6 +35,7 @@ logs/*.json
 backend/logs/*.log
 backend/logs/*.jsonl
 backend/logs/*.json
+worker/*
 worker/logs/*.log
 worker/logs/*.jsonl
 worker/logs/*.json

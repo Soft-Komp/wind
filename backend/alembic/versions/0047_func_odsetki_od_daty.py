@@ -148,23 +148,44 @@ def downgrade() -> None:
     logger.warning("[%s] ── DOWNGRADE OK ──", revision)
 
 
-# Pomocnicze — zgodnie z istniejącym wzorcem checksumów w projekcie
+# Pomocnicze — zgodnie z FAKTYCZNYM wzorcem checksumow z migracji 0022/0023/0024.
+# UWAGA: Checksum w skw_SchemaChecksums jest typu INT, wypelniana przez
+# CHECKSUM(definition) — NIE HASHBYTES/SHA2_256 (ktore zwraca string hex
+# i powoduje pyodbc.DataError przy probie wstawienia do kolumny INT).
 def _merge_checksum(bind, rev: str) -> None:
     import sqlalchemy as sa
+
+    checksum_row = bind.execute(sa.text(f"""
+        SELECT CHECKSUM(m.definition)
+        FROM   sys.sql_modules AS m
+        JOIN   sys.objects     AS o ON o.object_id = m.object_id
+        WHERE  o.name = N'{FUNC_NAME}'
+    """)).fetchone()
+
+    if checksum_row is None or checksum_row[0] is None:
+        msg = (
+            f"[{rev}] Nie mozna odczytac CHECKSUM funkcji dbo.{FUNC_NAME} "
+            f"po CREATE — funkcja nie istnieje w sys.sql_modules."
+        )
+        logger.critical(msg)
+        raise RuntimeError(msg)
+
+    checksum = checksum_row[0]
+    logger.debug("[%s] CHECKSUM(%s) = %s", rev, FUNC_NAME, checksum)
+
     bind.execute(sa.text(f"""
         MERGE [dbo].[skw_SchemaChecksums] AS target
         USING (SELECT N'{FUNC_NAME}' AS ObjectName, N'FUNCTION' AS ObjectType) AS src
         ON target.ObjectName = src.ObjectName
         WHEN MATCHED THEN UPDATE SET
-            Checksum = CONVERT(NVARCHAR(64), HASHBYTES('SHA2_256',
-                (SELECT definition FROM sys.sql_modules
-                 WHERE object_id = OBJECT_ID('dbo.{FUNC_NAME}'))), 2),
+            Checksum = {checksum},
             AlembicRevision = N'{rev}',
             UpdatedAt = SYSUTCDATETIME()
         WHEN NOT MATCHED THEN INSERT (ObjectName, ObjectType, Checksum, AlembicRevision, UpdatedAt)
-            VALUES (src.ObjectName, src.ObjectType,
-                CONVERT(NVARCHAR(64), HASHBYTES('SHA2_256',
-                    (SELECT definition FROM sys.sql_modules
-                     WHERE object_id = OBJECT_ID('dbo.{FUNC_NAME}'))), 2),
-                N'{rev}', SYSUTCDATETIME());
+            VALUES (src.ObjectName, src.ObjectType, {checksum}, N'{rev}', SYSUTCDATETIME());
     """))
+
+    logger.info(
+        "[%s] SchemaChecksums MERGE OK — dbo.%s FUNCTION (checksum=%s)",
+        rev, FUNC_NAME, checksum,
+    )

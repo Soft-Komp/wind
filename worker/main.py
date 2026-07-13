@@ -30,7 +30,10 @@ from worker.tasks.email_task_approval import (
     flush_approval_emails as _flush_approval_emails,
 )
 # Etap 2 — nowe taski
-from worker.tasks.source_sync_task import source_sync_task as _source_sync_task
+from worker.tasks.source_sync_task import (
+    source_sync_task as _source_sync_task,
+    source_sync_task_single as _source_sync_task_single,
+)
 from worker.tasks.auto_dispatch_task import auto_dispatch_task as _auto_dispatch_task
 # F7 — OCR
 from worker.tasks.ocr_task import ocr_task as _ocr_task
@@ -188,6 +191,7 @@ class WorkerSettings:
         flush_approval_emails,
         # Etap 2
         source_sync_task,
+        _source_sync_task_single,
         auto_dispatch_task,
         ocr_task,
     ]

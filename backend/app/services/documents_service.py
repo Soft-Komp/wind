@@ -31,9 +31,12 @@ UWAGA: from __future__ import annotations — NIGDY w tym pliku (SQLAlchemy ORM)
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
+import os
+import uuid
 
+from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +69,18 @@ class DuplicateResolveError(Exception):
 # GET /documents — lista z filtrem widoczności
 # =============================================================================
 
+# Whitelist sortowania — analogiczna do faktura_akceptacja_service.get_faktury_list_new.
+# NIGDY nie interpoluj order_by bezposrednio do SQL — tylko przez ten slownik.
+_DOCUMENTS_SORT_MAP: dict[str, str] = {
+    "created_at":      "i.[created_at]",
+    "updated_at":       "i.[updated_at]",
+    "document_title":   "i.[document_title]",
+    "document_amount":  "i.[document_amount]",
+    "status":           "i.[status]",
+    "priority":         "i.[priority]",
+}
+
+
 async def list_documents(
     db: AsyncSession,
     *,
@@ -79,12 +94,23 @@ async def list_documents(
     id_category: int | None = None,
     status: str | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    priority: int | None = None,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
 ) -> dict[str, Any]:
     """
     Lista dokumentow z filtrem widocznosci (poziom 2) i filtrem dostepu do zrodla (poziom 1).
 
     accessible_source_ids: None = brak filtru (supervisor), [] = brak dostepu, [1,2] = filtr.
     search: szuka po document_title, id_document ORAZ extra_data.ocr_text (TODO-06/F7).
+    date_from/date_to: filtr po i.created_at (data wejscia dokumentu do systemu,
+        NIE data samego dokumentu zrodlowego — skw_document_approval_instances
+        nie ma osobnej kolumny na date dokumentu).
+    order_by/order_dir: sortowanie przez whitelist _DOCUMENTS_SORT_MAP — wartosc
+        spoza listy cicho spada na domyslne 'created_at' (bez bledu, zgodnie
+        z istniejacym wzorcem w projekcie).
     """
     where: list[str] = []
     params: dict[str, Any] = {}
@@ -113,6 +139,15 @@ async def list_documents(
     if status is not None:
         where.append("i.[status] = :status")
         params["status"] = status
+    if priority is not None:
+        where.append("i.[priority] = :priority")
+        params["priority"] = priority
+    if date_from is not None:
+        where.append("i.[created_at] >= :date_from")
+        params["date_from"] = date_from
+    if date_to is not None:
+        where.append("i.[created_at] <= :date_to_end")
+        params["date_to_end"] = f"{date_to} 23:59:59"
     if id_folder:
         ph = ",".join(f":folder_{j}" for j in range(len(id_folder)))
         where.append(
@@ -144,15 +179,28 @@ async def list_documents(
     params["offset"] = (page - 1) * per_page
     params["limit"] = per_page
 
+    sort_col = _DOCUMENTS_SORT_MAP.get(order_by, "i.[created_at]")
+    sort_dir_sql = "ASC" if order_dir.lower() == "asc" else "DESC"
+
     result = await db.execute(
         text(f"""
             SELECT
                 i.[id_instance], i.[id_source], i.[id_document], i.[status],
                 i.[document_title], i.[document_amount], i.[is_urgent],
                 i.[created_at], i.[updated_at],
-                s.[source_name]
+                s.[source_name],
+                p.[path_name],
+                g.[group_name] AS current_group_name
             FROM [{_SCHEMA}].[skw_document_approval_instances] i
-            JOIN [{_SCHEMA}].[skw_document_sources] s ON s.[id_source] = i.[id_source]
+            JOIN [{_SCHEMA}].[skw_document_sources] s
+              ON s.[id_source] = i.[id_source]
+            LEFT JOIN [{_SCHEMA}].[skw_approval_paths] p
+              ON p.[id_path] = i.[id_path]
+            LEFT JOIN [{_SCHEMA}].[skw_document_approval_snapshot_steps] ss
+              ON ss.[id_instance] = i.[id_instance]
+             AND ss.[step_order]  = i.[current_step]
+            LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g
+              ON g.[id_group] = ss.[id_group]
             {where_sql}
             ORDER BY i.[is_urgent] DESC, i.[created_at] DESC
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
@@ -164,6 +212,8 @@ async def list_documents(
     for row in result.fetchall():
         r = dict(zip(cols, row))
         r["status_display"] = _STATUS_DISPLAY.get(r["status"], r["status"])
+        if r.get("document_amount") is not None:
+            r["document_amount"] = float(r["document_amount"])
         items.append(r)
 
     return {"items": items, "total": total, "page": page, "per_page": per_page}
@@ -593,3 +643,231 @@ async def _check_user_permission(db: AsyncSession, actor_id: int, permission_nam
         {"u": actor_id, "perm": permission_name},
     )
     return (result.scalar() or 0) > 0
+
+_ALLOWED_UPLOAD_MIME = frozenset({
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/tiff",
+    "image/bmp",
+})
+
+
+class OcrReviewStateError(Exception):
+    """Instancja nie jest w stanie ocr_review_pending — nie mozna rozstrzygnac."""
+
+
+async def upload_document(
+    db: AsyncSession,
+    redis: Any,
+    *,
+    file: Any,
+    actor_id: int,
+) -> dict[str, Any]:
+    """
+    Reczne wgranie dokumentu PDF -> nowa instancja (status=ocr_review_pending),
+    kolejkowanie OCR w tle. Wymaga istniejacego zrodla 'manual_upload'
+    (zakladane migracja 0053).
+    """
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=422, detail="Plik jest pusty.")
+
+    max_mb_raw = await redis.get("syscfg:APPROVAL_MAX_ATTACHMENT_MB")
+    max_mb = int(max_mb_raw.decode() if isinstance(max_mb_raw, bytes) else max_mb_raw) if max_mb_raw else 20
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Plik za duzy. Max: {max_mb} MB.")
+
+    try:
+        import magic
+        detected_mime = magic.from_buffer(content, mime=True)
+    except ImportError:
+        detected_mime = getattr(file, "content_type", None) or "application/octet-stream"
+
+    if detected_mime not in _ALLOWED_UPLOAD_MIME:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Dozwolone sa wylacznie pliki PDF. Wykryto: {detected_mime}.",
+        )
+
+    src_row = (await db.execute(
+        text(f"SELECT [id_source] FROM [{_SCHEMA}].[skw_document_sources] WHERE [source_name]=N'manual_upload'")
+    )).fetchone()
+    if not src_row:
+        raise HTTPException(
+            status_code=500,
+            detail="Brak skonfigurowanego zrodla 'manual_upload'. Uruchom migracje 0053 lub skontaktuj sie z administratorem.",
+        )
+    id_source = src_row[0]
+
+    def _sanitize_filename(name: str) -> str:
+        import re as _re
+        base = Path(name).stem
+        ext  = Path(name).suffix.lower()[:10]
+        safe = _re.sub(r"[^a-zA-Z0-9._\-]", "_", base)[:100]
+        return f"{safe}{ext}" or f"file{ext}"
+
+    uploads_dir = Path(os.environ.get("MANUAL_UPLOADS_DIR", "/data/manual_uploads"))
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_filename(getattr(file, "filename", None) or "dokument.pdf")
+    file_path = uploads_dir / f"{uuid.uuid4().hex}_{safe_name}"
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    id_document = f"manual_{uuid.uuid4().hex}"
+    now = datetime.now(timezone.utc)
+    extra_data = {
+        "file_path": str(file_path),
+        "uploaded_by": actor_id,
+        "original_filename": getattr(file, "filename", None),
+    }
+
+    insert_result = await db.execute(
+        text(f"""
+            INSERT INTO [{_SCHEMA}].[skw_document_approval_instances]
+                ([id_source],[id_document],[status],[document_title],[document_amount],
+                 [extra_data],[dispatch_attempts],[created_at],[updated_at])
+            OUTPUT INSERTED.[id_instance]
+            VALUES (:src,:doc,N'ocr_review_pending',:title,NULL,:extra,0,:now,:now)
+        """),
+        {
+            "src": id_source, "doc": id_document,
+            "title": safe_name, "extra": json.dumps(extra_data, ensure_ascii=False),
+            "now": now,
+        },
+    )
+    id_instance = insert_result.scalar_one()
+    await db.commit()
+
+    ocr_queued = False
+    try:
+        from app.core.arq_pool import get_arq_pool
+        arq_pool = get_arq_pool()
+        await arq_pool.enqueue_job("ocr_task", id_instance=id_instance, file_path=str(file_path))
+        ocr_queued = True
+    except Exception as exc:
+        logger.error("upload_document: blad enqueue ocr_task dla id_instance=%s: %s", id_instance, exc)
+
+    await _audit_log(
+        db, actor_id=actor_id, action="document.manual_upload",
+        entity_id=id_instance,
+        details={"original_filename": getattr(file, "filename", None), "ocr_queued": ocr_queued},
+    )
+    await db.commit()
+
+    logger.info(
+        "upload_document: nowy dokument | id_instance=%s file=%s ocr_queued=%s actor=%s",
+        id_instance, safe_name, ocr_queued, actor_id,
+    )
+
+    return {
+        "id_instance":  id_instance,
+        "id_document":  id_document,
+        "status":       "ocr_review_pending",
+        "ocr_queued":   ocr_queued,
+        "message": (
+            "Dokument przyjety. Trwa automatyczne rozpoznawanie danych (OCR) w tle. "
+            "Sprawdz status przez GET /documents/{id}/status-summary za chwile."
+            if ocr_queued else
+            "Dokument przyjety, ale nie udalo sie zakolejkowac OCR — wymaga recznej weryfikacji."
+        ),
+    }
+
+
+async def resolve_ocr_review(
+    db: AsyncSession,
+    id_instance: int,
+    *,
+    decision: str,
+    document_title: str | None,
+    document_amount: float | None,
+    comment: str | None,
+    actor_id: int,
+    can_view_all: bool,
+) -> dict[str, Any]:
+    """
+    Rozstrzyga dokument oczekujacy na reczna weryfikacje OCR.
+
+    decision='confirm': operator potwierdza/poprawia pola -> status=pending_dispatch
+                          (wchodzi w normalny automatyczny obieg przez auto_dispatch_task)
+    decision='reject':   dokument odrzucony -> status=cancelled
+    """
+    instance = await _get_instance_or_404(db, id_instance)
+    await _ensure_visibility(db, instance, actor_id=actor_id, can_view_all=can_view_all)
+
+    if instance["status"] != "ocr_review_pending":
+        raise OcrReviewStateError(
+            f"Instancja ID={id_instance} nie jest w stanie ocr_review_pending "
+            f"(aktualnie: {instance['status']})."
+        )
+
+    now = datetime.now(timezone.utc)
+
+    if decision == "confirm":
+        set_clauses = ["[status]=N'pending_dispatch'", "[updated_at]=:now"]
+        params: dict[str, Any] = {"i": id_instance, "now": now}
+        if document_title is not None:
+            set_clauses.append("[document_title]=:title")
+            params["title"] = document_title[:500]
+        if document_amount is not None:
+            set_clauses.append("[document_amount]=:amount")
+            params["amount"] = document_amount
+        await db.execute(
+            text(f"""
+                UPDATE [{_SCHEMA}].[skw_document_approval_instances]
+                SET {", ".join(set_clauses)}
+                WHERE [id_instance]=:i
+            """),
+            params,
+        )
+        new_status = "pending_dispatch"
+    else:
+        await db.execute(
+            text(f"""
+                UPDATE [{_SCHEMA}].[skw_document_approval_instances]
+                SET [status]=N'cancelled', [updated_at]=:now
+                WHERE [id_instance]=:i
+            """),
+            {"i": id_instance, "now": now},
+        )
+        new_status = "cancelled"
+
+    await _audit_log(
+        db, actor_id=actor_id, action="document.ocr_review_resolved",
+        entity_id=id_instance,
+        details={"decision": decision, "comment": comment},
+    )
+    await db.commit()
+
+    logger.info(
+        "resolve_ocr_review: id_instance=%s decision=%s new_status=%s actor=%s",
+        id_instance, decision, new_status, actor_id,
+    )
+
+    return {"id_instance": id_instance, "status": new_status, "decision": decision}
+
+async def _audit_log(
+    db: AsyncSession,
+    *,
+    actor_id: int,
+    action: str,
+    entity_id: int,
+    details: dict[str, Any],
+) -> None:
+    """Zapisuje wpis do AuditLog. Blad zapisu nie przerywa operacji."""
+    try:
+        await db.execute(
+            text(
+                f"INSERT INTO [{_SCHEMA}].[skw_AuditLog] "
+                f"([ID_USER], [Action], [EntityType], [EntityID], [NewValue], [Success], [Timestamp]) "
+                f"VALUES (:uid, :action, N'DocumentInstance', :eid, :details, 1, SYSUTCDATETIME())"
+            ),
+            {
+                "uid":     actor_id,
+                "action":  action,
+                "eid":     str(entity_id),
+                "details": json.dumps(details, ensure_ascii=False, default=str),
+            },
+        )
+    except Exception as exc:
+        logger.error("_audit_log: blad zapisu dla action=%s: %s", action, exc)

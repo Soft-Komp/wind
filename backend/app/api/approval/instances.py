@@ -1841,7 +1841,7 @@ async def get_instance_votes(
         consensus_reached = voted_accepted >= total_members and total_members > 0
 
     logger.info(
-        "get_instance_votes | inst=%d step=%d group=%d members=%d voted=%d/%d",
+        "get_instance_votes | inst=%d step=%d group=%s members=%d voted=%d/%d",
         id_instance, current_step, id_group, total_members,
         voted_accepted + voted_rejected, total_members,
     )

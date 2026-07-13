@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     WORKER_SECRET_KEY: str = Field(..., description="X-Worker-Key header secret")
     WORKER_API_TITLE: str = "Windykacja Worker API"
 
+    # ── Szyfrowanie (Etap 2.1 — deszyfrowanie connection_config zrodel) ────────
+    # MUSI byc identyczny z ENCRYPTION_KEY w backend/app/core/config.py —
+    # to ten sam plik .env, wiec w normalnych warunkach zawsze sa zgodne.
+    ENCRYPTION_KEY: str = Field(
+        ...,
+        description="Klucz Fernet (44 znaki) — identyczny z ENCRYPTION_KEY backendu.",
+        min_length=44,
+        max_length=44,
+    )
+
     # ── SMTP (JSON array) ──────────────────────────────────────────────────────
     # Format: '[{"host":"smtp1.com","port":587,"user":"x","password":"y","from_email":"z@x.com","from_name":"Windykacja"}]'
     SMTP_CONFIGS_JSON: str = Field(

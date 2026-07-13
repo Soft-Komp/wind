@@ -36,7 +36,14 @@ BEGIN
     ALTER TABLE dbo.skw_Templates
     ADD LayoutEngine NVARCHAR(30) NOT NULL
         CONSTRAINT DF_skw_Templates_LayoutEngine DEFAULT (N'jinja_text');
+END
+"""
 
+_ADD_CHECK_CONSTRAINT: Final[str] = """
+IF NOT EXISTS (
+    SELECT 1 FROM sys.check_constraints WHERE name = 'CK_skw_Templates_LayoutEngine'
+)
+BEGIN
     ALTER TABLE dbo.skw_Templates
     ADD CONSTRAINT CK_skw_Templates_LayoutEngine
         CHECK (LayoutEngine IN (N'jinja_text', N'structured_statement'));
@@ -76,6 +83,7 @@ def upgrade() -> None:
     logger.info("[%s] UPGRADE — LayoutEngine + seed (is_active=0)", revision)
     bind = op.get_bind()
     bind.execute(sa.text(_ADD_COLUMN))
+    bind.execute(sa.text(_ADD_CHECK_CONSTRAINT))
     bind.execute(sa.text(_SEED_TEMPLATE))
 
 def downgrade() -> None:

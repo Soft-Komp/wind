@@ -488,8 +488,14 @@ async def test_connection(db: AsyncSession, id_source: int, redis: Any = None) -
                 "tested_at":    datetime.now(timezone.utc),
             }
 
+        # POPRAWKA: [{view_name}] dla nazwy z kropka (np. 'dbo.widok') dawalo
+        # blednie '[dbo.widok]' (jeden identyfikator z kropka), zamiast
+        # dwuczesciowego '[dbo].[widok]'. Patrz identyczna poprawka w
+        # DatabaseAdapter._bracket_qualify (unified_document.py / source_adapter.py).
+        qualified_view = ".".join(f"[{p}]" for p in view_name.split(".") if p)
+
         try:
-            result = await db.execute(text(f"SELECT TOP 5 * FROM [{view_name}]"))
+            result = await db.execute(text(f"SELECT TOP 5 * FROM {qualified_view}"))
             rows = result.fetchall()
             cols = list(result.keys()) if rows else []
             latency_ms = round((time.monotonic() - t_start) * 1000)
@@ -586,19 +592,18 @@ async def trigger_sync(db: AsyncSession, redis: Any, id_source: int, *, actor_id
     # Enqueue do ARQ — wspoldzieli ten sam task co cron (source_sync_task),
     # ale tylko dla jednego zrodla
     job_id = None
-    if redis:
-        try:
-            from arq.connections import ArqRedis
-            arq_redis: ArqRedis = redis  # type: ignore[assignment]
-            job = await arq_redis.enqueue_job("source_sync_task_single", id_source=id_source)
-            job_id = job.job_id if job else None
-        except Exception as exc:
-            logger.error("trigger_sync: blad enqueue ARQ dla id_source=%s: %s", id_source, exc)
-            return {
-                "queued":  False,
-                "job_id":  None,
-                "message": f"Blad kolejkowania: {exc}",
-            }
+    try:
+        from app.core.arq_pool import get_arq_pool
+        arq_pool = get_arq_pool()
+        job = await arq_pool.enqueue_job("source_sync_task_single", id_source=id_source)
+        job_id = job.job_id if job else None
+    except Exception as exc:
+        logger.error("trigger_sync: blad enqueue ARQ dla id_source=%s: %s", id_source, exc)
+        return {
+            "queued":  False,
+            "job_id":  None,
+            "message": f"Blad kolejkowania: {exc}",
+        }
 
     await _audit_log(
         db, actor_id=actor_id, action="source.sync_triggered_manually",

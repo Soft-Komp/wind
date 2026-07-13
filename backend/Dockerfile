@@ -73,6 +73,7 @@ RUN groupadd --gid 1001 appgroup \
 # ─────────────────────────────────────────────────────────────────────────────
 RUN mkdir -p /app/logs /app/snapshots /app/archives \
     && mkdir -p /data/approval_attachments \
+    && mkdir -p /data/manual_uploads \
     && chown -R appuser:appgroup /app \
     && chown -R appuser:appgroup /data
 

@@ -1,0 +1,102 @@
+================================================================ 
+ WINDYKACJA GPGK -- RAPORT STRUKTURY PROJEKTU 
+ Data: 10.07.2026  Czas:  8:37:43,61 
+ Katalog bazowy: C:\python\Windykacja-gpgk-backend 
+================================================================ 
+ 
+===== GIT STATUS ===== 
+ 
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   worker/core/db.py
+	modified:   worker/services/ocr_service.py
+	modified:   worker/tasks/email_task.py
+	modified:   worker/tasks/ocr_task.py
+	modified:   worker/tasks/otp_pdf_task.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	backend/tmp/
+	projekt_raport_2026-07-10_08-37.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+ 
+===== GIT LOG (ostatnie 10 commitow) ===== 
+ 
+bb1485d Etap 2.1
+35ab8f5 Etap 2.1
+aca8f5c Etap 2.1
+987ef06 Etap 2.1
+a7f190b Etap 2.1
+da2dc87 Etap 2.1
+0676b28 Etap 2.1
+10af7af Etap 2
+48a1c53 Etap 2
+6553554 Etap 2
+ 
+===== GIT BRANCH ===== 
+ 
+* master
+  remotes/origin/master
+ 
+===== MIGRACJE ALEMBIC (backend\alembic\versions\) ===== 
+ 
+0002_update_view_skw_rozrachunki_faktur.py
+0003_add_monit_history_invoices.py
+0004_update_views_dniPo.py
+0005_add_templates_permissions.py
+0006_faktura_akceptacja.py
+0007_add_faktury_category.py
+0008_skw_alert_log.py
+0009_faktury_system_config_seed.py
+0010_faktury_widoki_dbo.py
+0011_kontrahenci_widok_dbo.py
+0012_cache_bypass_config.py
+0013_schema_checksums_brakujace_widoki.py
+0014_update_view_faktury_akceptacja_naglowek.py
+0015_faktura_pole_permissions.py
+0016_dashboard_views.py
+0017_dashboard_permissions.py
+0018_update_widoki_faktury_akceptacja.py
+0019_add_orphaned_status.py
+0020_update_views_rodzaj_typ_dok.py
+0021_koszty_dodatkowe.py
+0022_func_odsetki_rozrachunku.py
+0023_func_odsetki_rozrachunku_v2.py
+0024_func_odsetki_rozrachunku_v2.py
+0025_filtered_unique_numer_ksef.py
+0026_schema_transfer.py
+0027_fix_skw_users_transfer.py
+0028_approval_module.py
+0029_approval_views_and_fixes.py
+0030_add_consensus_type_to_snapshot_steps.py
+0031_fix_approval_log_trigger.py
+0032_fix_approval_views_join_ksef.py
+0033_stomil_catchup.py
+0034_fix_skw_kontrahenci_column_names.py
+0035_approval_instance_detail_category.py
+0036_mask_view_faktury_akceptacja_naglowek.py
+0037_mask_views_kontrahenci_rozrachunki.py
+0038_unmask_views.py
+0039_etap2_ddl_infrastructure.py
+0040_hook_service_procedure.py
+0041_sources_view_health_permission.py
+0042_deadline_sms_phone_number.py
+0043_arq_job_registry.py
+0044_maintenance_mode_config.py
+0045_endpoint_registry.py
+0046_source_role_access.py
+0047_func_odsetki_od_daty.py
+0048_koszty_jednorazowe_monitu.py
+0049_monit_data_wydruku_recznie.py
+0050_template_layout_engine.py
+0051_monit_kwoty_zbiorcze.py
+0052_watchdog_kolekcje.py
+f124fa9b58eb_initial_schema.py
+ 
+ -- alembic current przez docker: 
+^C

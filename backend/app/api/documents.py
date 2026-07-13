@@ -30,9 +30,11 @@ jako wartosc {id_instance} i zwroci 422 (nie da sie skonwertowac na int).
 UWAGA: from __future__ import annotations NIGDY w tym pliku.
 """
 import logging
+from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.dependencies import DB, CurrentUser, RedisClient, require_permission
@@ -42,6 +44,7 @@ from app.services.documents_service import (
     DocumentNotFoundError,
     DuplicateResolveError,
 )
+from app.services.documents_service import OcrReviewStateError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -110,6 +113,14 @@ async def list_documents_endpoint(
     id_category: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None, max_length=100),
+    date_from: Optional[date] = Query(None, description="Filtr: created_at >= date_from"),
+    date_to: Optional[date] = Query(None, description="Filtr: created_at <= date_to (cały dzień)"),
+    priority: Optional[int] = Query(None, description="Filtr po priorytecie dokumentu"),
+    order_by: str = Query(
+        "created_at",
+        description="Dozwolone: created_at | updated_at | document_title | document_amount | status | priority",
+    ),
+    order_dir: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     can_view_all = await _can_view_all(current_user, db)
     result = await svc.list_documents(
@@ -118,6 +129,8 @@ async def list_documents_endpoint(
         page=page, per_page=per_page,
         id_source=id_source, id_folder=id_folder, id_category=id_category,
         status=status, search=search,
+        date_from=date_from, date_to=date_to, priority=priority,
+        order_by=order_by, order_dir=order_dir,
     )
     return BaseResponse.ok(data=result, app_code="documents.list")
 
@@ -179,6 +192,107 @@ async def list_duplicate_pending_endpoint(
     )
     return BaseResponse.ok(data=result, app_code="documents.duplicate_pending_list")
 
+
+
+@router.post(
+    "/upload",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Reczne wgranie dokumentu PDF do listy obiegowej",
+    description=(
+        "Zapisuje plik, tworzy nowa instancje (status=ocr_review_pending, "
+        "zrodlo='manual_upload') i kolejkuje OCR w tle. Po zakonczeniu OCR: "
+        "wysoka pewnosc + numer dokumentu i kwota znalezione -> "
+        "status=pending_dispatch (normalny automatyczny obieg dalej). "
+        "Niska pewnosc lub brak wymaganych pol -> status pozostaje "
+        "ocr_review_pending, wymaga POST /documents/{id}/ocr-review/resolve. "
+        "**Wymaga:** `documents.upload`."
+    ),
+    responses={
+        413: {"description": "Plik za duzy"},
+        415: {"description": "Niedozwolony typ pliku (tylko PDF)"},
+        422: {"description": "Plik pusty"},
+        500: {"description": "Brak skonfigurowanego zrodla manual_upload"},
+    },
+    dependencies=[require_permission("documents.upload")],
+)
+async def upload_document_endpoint(
+    file: UploadFile,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+):
+    result = await svc.upload_document(db, redis, file=file, actor_id=current_user.id_user)
+    return BaseResponse.ok(data=result, app_code="documents.uploaded")
+
+
+@router.get(
+    "/ocr-review-pending",
+    summary="Lista dokumentow oczekujacych na reczna weryfikacje OCR",
+    description=(
+        "Dokumenty recznie wgrane, ktorych OCR nie znalazl wymaganych pol "
+        "(numer, kwota) z wystarczajaca pewnoscia. "
+        "**Wymaga:** `documents.upload`."
+    ),
+    dependencies=[require_permission("documents.upload")],
+)
+async def list_ocr_review_pending_endpoint(
+    current_user: CurrentUser,
+    db: DB,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+):
+    can_view_all = await _can_view_all(current_user, db)
+    result = await svc.list_documents(
+        db, actor_id=current_user.id_user, can_view_all=can_view_all,
+        page=page, per_page=per_page, status="ocr_review_pending",
+    )
+    return BaseResponse.ok(data=result, app_code="documents.ocr_review_pending_list")
+
+
+class OcrReviewResolveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: str = Field(..., pattern=r"^(confirm|reject)$")
+    document_title: Optional[str] = Field(None, max_length=500)
+    document_amount: Optional[float] = Field(None, ge=0)
+    comment: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post(
+    "/{id_instance}/ocr-review/resolve",
+    summary="Rozstrzygniecie recznej weryfikacji OCR",
+    description=(
+        "decision='confirm' — operator potwierdza/poprawia numer i kwote, "
+        "dokument wchodzi w normalny obieg (status=pending_dispatch). "
+        "decision='reject' — dokument odrzucony (status=cancelled). "
+        "**Wymaga:** `documents.upload`."
+    ),
+    responses={
+        404: {"description": "Dokument nie istnieje"},
+        409: {"description": "Dokument nie jest w stanie ocr_review_pending"},
+    },
+    dependencies=[require_permission("documents.upload")],
+)
+async def resolve_ocr_review_endpoint(
+    id_instance: int,
+    body: OcrReviewResolveBody,
+    current_user: CurrentUser,
+    db: DB,
+):
+    can_view_all = await _can_view_all(current_user, db)
+    try:
+        result = await svc.resolve_ocr_review(
+            db, id_instance,
+            decision=body.decision,
+            document_title=body.document_title,
+            document_amount=body.document_amount,
+            comment=body.comment,
+            actor_id=current_user.id_user, can_view_all=can_view_all,
+        )
+    except DocumentNotFoundError as exc:
+        _raise_doc_error(exc)
+    except OcrReviewStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return BaseResponse.ok(data=result, app_code="documents.ocr_review_resolved")
 
 # =============================================================================
 # POST /documents/{id_instance}/duplicate-pending/resolve
@@ -346,4 +460,87 @@ async def execute_action_endpoint(
             "execution_ms":     result.execution_ms,
         },
         app_code="documents.action_executed",
+    )
+
+
+@router.get(
+    "/{id_instance}/pdf",
+    summary="Podglad PDF dokumentu (tylko jesli zrodlo go udostepnia)",
+    description=(
+        "Dla zrodla 'fakir' deleguje do istniejacej logiki generowania PDF "
+        "modulu faktur (identyczny dokument, nowy adres URL, zero duplikacji "
+        "kodu generowania). Dla pozostalych zrodel (ksef, ftp, email, manual) "
+        "zwraca 404 z jasnym komunikatem — brak PDF nie jest bledem serwera, "
+        "tylko informacja ze to zrodlo nie udostepnia jeszcze podgladu. "
+        "**Wymaga:** `pdf.download`."
+    ),
+    responses={
+        403: {"description": "Brak dostepu (filtr restricted) lub brak uprawnienia pdf.download"},
+        404: {"description": "Dokument nie istnieje, brak odpowiadajacego rekordu, lub zrodlo nie udostepnia PDF"},
+    },
+    response_class=StreamingResponse,
+    dependencies=[require_permission("pdf.download")],
+)
+
+async def get_document_pdf(
+    id_instance: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+) -> StreamingResponse:
+    can_view_all = await _can_view_all(current_user, db)
+    try:
+        instance = await svc._get_instance_or_404(db, id_instance)
+        await svc._ensure_visibility(db, instance, actor_id=current_user.id_user, can_view_all=can_view_all)
+    except DocumentNotFoundError as exc:
+        _raise_doc_error(exc)
+
+    # _get_instance_or_404 nie zwraca source_name (tylko id_source) —
+    # osobny lookup, zamiast rozszerzac wspoldzielona funkcje uzywana
+    # tez przez inne endpointy.
+    from sqlalchemy import text as _text
+    source_name_result = await db.execute(
+        _text("SELECT [source_name] FROM [dbo].[skw_document_sources] WHERE [id_source] = :s"),
+        {"s": instance["id_source"]},
+    )
+    source_name = source_name_result.scalar_one_or_none()
+
+    if source_name != "fakir":
+        raise HTTPException(
+            status_code=404,
+            detail=f"Zrodlo '{source_name}' nie udostepnia jeszcze podgladu PDF.",
+        )
+
+    # id_document dla fakir == numer_ksef (KSEF_ID) — znajdz odpowiadajacy
+    # rekord w legacy tabeli skw_faktura_akceptacja, ktorej PK oczekuje
+    # istniejaca funkcja get_faktura_pdf().
+    from sqlalchemy import select as _select
+    from app.db.models.faktura_akceptacja import FakturaAkceptacja
+    from app.services import faktura_akceptacja_service as fak_svc
+
+    result = await db.execute(
+        _select(FakturaAkceptacja.id).where(
+            FakturaAkceptacja.numer_ksef == instance["id_document"]
+        )
+    )
+    faktura_id = result.scalar_one_or_none()
+
+    if faktura_id is not None:
+        # Dokument zmigrowany Krokiem 0 — legacy sciezka (bez zmian)
+        pdf_bytes = await fak_svc.get_faktura_pdf(
+            db=db, redis=redis, faktura_id=faktura_id, actor_id=current_user.id_user,
+        )
+    else:
+        # Dokument z nowego modelu (Etap 2) — nowa sciezka
+        pdf_bytes = await fak_svc.get_faktura_pdf_from_instance(
+            db=db, redis=redis, id_instance=id_instance, actor_id=current_user.id_user,
+        )
+
+    return StreamingResponse(
+        content=iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="dokument_{id_instance}.pdf"',
+            "Cache-Control": "no-store",
+        },
     )

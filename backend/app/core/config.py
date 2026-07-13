@@ -235,6 +235,24 @@ class Settings(BaseSettings):
     )
 
     # -----------------------------------------------------------------------
+    # Sekcja: ENCRYPTION (Etap 2 — szyfrowanie connection_config zrodel)
+    # -----------------------------------------------------------------------
+
+    encryption_key: SecretStr = Field(
+        ...,
+        description=(
+            "Klucz Fernet (32 bajty base64url, 44 znaki) do szyfrowania "
+            "connection_config w skw_document_sources. TYLKO w .env. "
+            "Generuj: python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\". "
+            "UWAGA: zmiana klucza bez rotacji (app.core.encryption.rotate_key) "
+            "unieważni wszystkie już zaszyfrowane connection_config."
+        ),
+        min_length=44,
+        max_length=44,
+    )
+
+    # -----------------------------------------------------------------------
     # Sekcja: REDIS
     # -----------------------------------------------------------------------
 
@@ -740,6 +758,8 @@ class Settings(BaseSettings):
             "secret_key":                   "**REDACTED**",
             # Master key — tylko flaga istnienia
             "master_key":                   "**REDACTED**",
+            # Encryption key (Fernet, connection_config zrodel) — tylko flaga istnienia
+            "encryption_key":               "**REDACTED**",
             # Redis — może zawierać hasło, maskujemy credentials
             "redis_url":                    self._mask_redis_url(),
             # SMTP — bez hasła

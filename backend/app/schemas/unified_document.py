@@ -197,6 +197,13 @@ class DatabaseAdapter(BaseDocumentAdapter):
         "SQL Server",
     })
 
+    _DRIVER_ALIASES = {
+        "mssql":     "ODBC Driver 18 for SQL Server",
+        "sqlserver": "ODBC Driver 18 for SQL Server",
+        "odbc18":    "ODBC Driver 18 for SQL Server",
+        "odbc17":    "ODBC Driver 17 for SQL Server",
+    }
+
     def __init__(
         self,
         id_source: int,
@@ -210,31 +217,79 @@ class DatabaseAdapter(BaseDocumentAdapter):
             source_name:    Nazwa zrodla.
             config:         Odszyfrowany connection_config (JSON).
             field_mappings: Lista rekordow z skw_document_source_field_mappings.
+
+        connection_string moze byc podany:
+          (a) wprost jako gotowy string ODBC w config['connection_string'], lub
+          (b) zbudowany automatycznie z osobnych pol: host, port, database,
+              username, password, driver, encrypt, trust_server_certificate
+              (dokladnie to, co wysyla dzis panel admina — patrz SourceCreate
+              w backend/app/schemas/sources.py). Wariant (a) ma pierwszenstwo,
+              jesli oba sa obecne.
         """
         self.id_source    = id_source
         self.source_name  = source_name
         self._config      = config
         self._mappings    = field_mappings or []
 
-        self._conn_str    = config.get("connection_string", "")
+        self._conn_str = config.get("connection_string", "") or self._build_connection_string(config)
         self._view_name   = config.get("view_name", "")
         self._id_col      = config.get("id_column", "KSEF_ID")
         self._date_col    = config.get("date_column")  # None = brak filtrowania dat
 
         self._validate_config()
 
+    def _build_connection_string(self, config: dict[str, Any]) -> str:
+        """
+        Buduje connection string ODBC z osobnych pol, gdy connection_string
+        nie zostal podany wprost. Zwraca pusty string, jesli brakuje ktoregos
+        z wymaganych pol — _validate_config() zglosi to jako czytelny blad.
+
+        NIGDY nie loguje zwroconego stringa (zawiera haslo w plaintext).
+        """
+        host     = config.get("host")
+        database = config.get("database")
+        username = config.get("username")
+        password = config.get("password")
+
+        if not all([host, database, username, password]):
+            return ""
+
+        port         = config.get("port", 1433)
+        driver_raw   = str(config.get("driver", "mssql")).strip()
+        driver       = self._DRIVER_ALIASES.get(driver_raw.lower(), driver_raw)
+        encrypt      = config.get("encrypt", True)
+        trust_cert   = config.get("trust_server_certificate", False)
+
+        if driver not in self._SAFE_DRIVERS:
+            logger.error(
+                "DatabaseAdapter [%s]: niedozwolony driver '%s' (po aliasowaniu: '%s') "
+                "przy budowie connection_string z osobnych pol",
+                self.source_name, driver_raw, driver,
+            )
+            return ""
+
+        return (
+            f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={database};"
+            f"UID={username};PWD={password};"
+            f"Encrypt={'yes' if encrypt else 'no'};"
+            f"TrustServerCertificate={'yes' if trust_cert else 'no'};"
+            "Connection Timeout=30;MARS_Connection=yes"
+        )
+
     def _validate_config(self) -> None:
         """Waliduje konfiguracje przy tworzeniu adaptera."""
         if not self._conn_str:
             raise ValueError(
-                f"DatabaseAdapter [{self.source_name}]: brak 'connection_string' w config"
+                f"DatabaseAdapter [{self.source_name}]: brak 'connection_string' w config "
+                f"i nie udalo sie go zbudowac z osobnych pol (wymagane: host, database, "
+                f"username, password, oraz driver z dozwolonej listy: {sorted(self._SAFE_DRIVERS)})"
             )
         if not self._view_name:
             raise ValueError(
                 f"DatabaseAdapter [{self.source_name}]: brak 'view_name' w config"
             )
         # Walidacja nazwy widoku — tylko litery, cyfry, podkreslenia, bez SQL injection
-        if not re.match(r'^[a-zA-Z0-9_]+$', self._view_name):
+        if not re.match(r'^[a-zA-Z0-9_.]+$', self._view_name):
             raise ValueError(
                 f"DatabaseAdapter [{self.source_name}]: "
                 f"view_name '{self._view_name}' zawiera niedozwolone znaki"
@@ -244,6 +299,20 @@ class DatabaseAdapter(BaseDocumentAdapter):
                 f"DatabaseAdapter [{self.source_name}]: "
                 f"id_column '{self._id_col}' zawiera niedozwolone znaki"
             )
+
+    @staticmethod
+    def _bracket_qualify(name: str) -> str:
+        """
+        Konwertuje 'dbo.widok' na poprawne '[dbo].[widok]'.
+
+        POPRAWKA: poprzedni kod robil f"[{view_name}]" co dla nazwy z kropka
+        dawalo '[dbo.widok]' — SQL Server odczytuje to jako JEDEN identyfikator
+        z kropka w nazwie (nie istnieje), zamiast dwuczesciowej nazwy
+        schemat.obiekt. Stad falszywe "Invalid object name" nawet gdy widok
+        istnieje. Obsluguje tez nazwy bez schematu ('widok' -> '[widok]').
+        """
+        parts = [p for p in name.split(".") if p]
+        return ".".join(f"[{p}]" for p in parts)
 
     def _get_pyodbc_conn(self) -> pyodbc.Connection:
         """Tworzy nowe polaczenie pyodbc. Nie cachujemy — kazda synchronizacja to osobna sesja."""
@@ -394,18 +463,19 @@ class DatabaseAdapter(BaseDocumentAdapter):
             with self._get_pyodbc_conn() as conn:
                 cur = conn.cursor()
 
+                qualified_view = self._bracket_qualify(self._view_name)
                 if self._date_col and since:
                     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
                     # date_col jest zwalidowany w __init__
                     sql = (
-                        f"SELECT TOP {int(limit)} * FROM [{self._view_name}] "
+                        f"SELECT TOP {int(limit)} * FROM {qualified_view} "
                         f"WHERE [{self._date_col}] >= ? "
                         f"ORDER BY [{self._id_col}] ASC"
                     )
                     cur.execute(sql, (since_str,))
                 else:
                     sql = (
-                        f"SELECT TOP {int(limit)} * FROM [{self._view_name}] "
+                        f"SELECT TOP {int(limit)} * FROM {qualified_view} "
                         f"ORDER BY [{self._id_col}] ASC"
                     )
                     cur.execute(sql)

@@ -16,6 +16,12 @@
 #   - windykacja_redis: port 6379 tylko wewnętrzny (NIGDY nie wystawiaj na zewnątrz)
 #   - dodano volume: approval_data dla załączników
 #   - dodano: windykacja_nginx, windykacja_frontend
+#   - dodano volume: manual_uploads (recznie wgrywane PDF/obrazy + OCR, 2026-07-13) —
+#     WSPOLDZIELONY miedzy api i worker (api zapisuje plik, worker go odczytuje
+#     do OCR). W przeciwienstwie do approval_data, ktory mial rozjechane
+#     mapowanie (bind mount w api, named volume w worker) — tu OBA serwisy
+#     uzywaja tego samego named volume od poczatku, celowo, zeby uniknac
+#     tego samego bledu.
 #
 # Uruchomienie:
 #   docker compose up --build
@@ -101,6 +107,8 @@ services:
       - ./pdf_cache:/app/pdf_cache
       # Volume dla załączników modułu approval
       - ./data/approval_attachments:/data/approval_attachments
+      # Volume dla recznie wgrywanych dokumentow PDF/obrazow (OCR) — 2026-07-13
+      - manual_uploads:/data/manual_uploads
     depends_on:
       redis:
         condition: service_healthy
@@ -153,6 +161,10 @@ services:
       - ./archives:/app/archives
       - ./pdf_cache:/app/pdf_cache
       - approval_data:/data/approval_attachments
+      # Volume dla recznie wgrywanych dokumentow PDF/obrazow (OCR) — 2026-07-13
+      # MUSI byc ten sam named volume co w api, zeby worker widzial pliki
+      # zapisane przez api (patrz komentarz na gorze pliku).
+      - manual_uploads:/data/manual_uploads
     depends_on:
       redis:
         condition: service_healthy
@@ -221,6 +233,43 @@ services:
         max-size: "10m"
         max-file: "5"
 
+
+  watchdog:
+    build:
+      context: ./watchdog
+      dockerfile: Dockerfile
+    container_name: windykacja_watchdog
+    env_file:
+      - .env
+    environment:
+      DB_HOST: "${DB_HOST:-192.168.0.53}"
+      DB_PORT: "${DB_PORT:-1433}"
+      DB_NAME: "${DB_NAME}"
+      DB_USER: "${DB_USER:-sa}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TZ: "Europe/Warsaw"
+      PYTHONPATH: "/app"
+      WATCHDOG_CHECK_INTERVAL_SECONDS: "${WATCHDOG_CHECK_INTERVAL_SECONDS:-180}"
+      WATCHDOG_ALERT_EMAIL: "${WATCHDOG_ALERT_EMAIL}"
+    # BRAK ports — proces w tle, bez własnego API
+    volumes:
+      - ./watchdog:/app/watchdog
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - windykacja_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+        
   # ───────────────────────────────────────────────────────────────────────────
   # FRONTEND — Vue.js SPA
   # Port 3000: TYLKO wewnętrzny — dostępny przez nginx (/)
@@ -299,6 +348,11 @@ volumes:
     #   type: none
     #   o: bind
     #   device: /data/windykacja/approval_attachments
+  manual_uploads:
+    driver: local
+    # Recznie wgrywane dokumenty PDF/obrazy (upload_document + ocr_task).
+    # Named volume — celowo TAKI SAM typ mocowania w api i worker (zobacz
+    # komentarz na gorze pliku o rozjezdzie approval_data, ktorego to unika).
 
 # =============================================================================
 # SIECI

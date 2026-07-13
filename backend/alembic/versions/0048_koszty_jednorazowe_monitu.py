@@ -28,7 +28,7 @@ IF OBJECT_ID(N'[dbo].[{TABLE}]', N'U') IS NULL
 BEGIN
     CREATE TABLE [dbo].[{TABLE}] (
         [id_koszt]        INT IDENTITY(1,1) PRIMARY KEY,
-        [id_monit]        INT             NOT NULL,
+        [id_monit]        BIGINT          NOT NULL,
         [opis]            NVARCHAR(200)   NOT NULL,
         [kwota]           DECIMAL(15,2)   NOT NULL CHECK ([kwota] > 0 AND [kwota] <= 100000),
         [id_user_dodal]   INT             NOT NULL,

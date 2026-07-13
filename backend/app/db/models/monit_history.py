@@ -6,7 +6,7 @@ ID_KONTRAHENTA to referencja do tabeli WAPRO.KONTRAHENT — read-only, bez FK co
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
