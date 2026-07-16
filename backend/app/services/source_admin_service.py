@@ -69,6 +69,49 @@ class SourceValidationError(Exception):
 
 
 # =============================================================================
+# Tier 2 — walidacja connection_config zalezna od connection_mode
+# (Recenzja Krytyczna Tier1/Tier2 + Rozstrzygniecia Koncowe)
+# =============================================================================
+
+# Pola typowe dla connection_mode='pull' w zrodlach source_type='api'.
+# Obecnosc ktoregokolwiek z nich w konfiguracji zrodla push jest odrzucana
+# (422) — swiadoma decyzja: glosny fail, zero cichej tolerancji, zeby
+# integrator natychmiast wiedzial o pomylce w konfiguracji, zamiast
+# odkryc to dopiero przy proba uzycia (np. line-items zwracajace mylacy
+# 409 not_applicable, jak w incydencie z sesji 2026-07-16).
+_PULL_ONLY_API_FIELDS = frozenset({
+    "base_url", "endpoint_list", "endpoint_detail", "endpoint_line_items",
+})
+
+
+def _validate_connection_config_for_mode(
+    source_type: str,
+    connection_mode: str,
+    config: dict[str, Any],
+) -> None:
+    """
+    Waliduje connection_config wzgledem connection_mode.
+
+    Swiadomie NIE dzieli SourceCreate/SourceUpdate na osobne, dyskryminowane
+    modele Pydantic (duza, ryzykowna zmiana obejmujaca tez zrodla
+    database/ftp/email) — to jedna funkcja walidacyjna w warstwie serwisu,
+    wolana przed source.set_config() w create_source() i update_source().
+
+    Raises:
+        SourceValidationError: obecne pole typowe dla pull w konfiguracji
+                                zrodla push (tylko source_type='api').
+    """
+    if source_type != "api" or connection_mode != "push":
+        return
+    present = _PULL_ONLY_API_FIELDS & config.keys()
+    if present:
+        raise SourceValidationError(
+            f"Pola {sorted(present)} sa przeznaczone dla connection_mode='pull' "
+            f"i nie naleza do trybu 'push'. Usun je z connection_config."
+        )
+
+
+# =============================================================================
 # CRUD — lista i odczyt
 # =============================================================================
 
@@ -135,7 +178,16 @@ def to_source_out_dict(source: DocumentSource) -> dict[str, Any]:
         "source_type":            source.source_type,
         "connection_mode":        source.connection_mode,
         "connection_config_keys": config_keys,
-        "sync_interval_minutes":  source.sync_interval_minutes,
+        # NAPRAWA 2026-07-16 (Rozstrzygniecia Koncowe #1): kolumna w bazie
+        # pozostaje NOT NULL i NIETKNIETA (zero migracji, zero zmiany
+        # semantyki partial-update w update_source()) — maskujemy
+        # WYLACZNIE w odpowiedzi API, bo dla connection_mode='push' ta
+        # wartosc jest operacyjnie nieuzywana (needs_sync zwraca False
+        # zanim do niej dojdzie) i pokazywanie jej administratorowi
+        # myliloby ("czemu tu jest 15 minut, skoro to push?").
+        "sync_interval_minutes": (
+            None if source.connection_mode == "push" else source.sync_interval_minutes
+        ),
         "last_sync_at":           source.last_sync_at,
         "last_sync_status":       source.last_sync_status,
         "last_sync_message":      source.last_sync_message,
@@ -182,6 +234,7 @@ async def create_source(
     )
 
     if connection_config:
+        _validate_connection_config_for_mode(source_type, connection_mode, connection_config)
         try:
             source.set_config(connection_config)
         except ValueError as exc:
@@ -247,6 +300,13 @@ async def update_source(
                 "wywolaj POST /sources/%s/webhook-token", id_source, id_source,
             )
     if connection_config is not None:
+        # Uzywamy source.source_type / source.connection_mode PO ewentualnej
+        # zmianie powyzej w tym samym wywolaniu (przypisania juz sie
+        # wykonaly) — to daje efektywny tryb/typ DLA TEJ operacji, nie
+        # stary stan sprzed partial-update.
+        _validate_connection_config_for_mode(
+            source.source_type, source.connection_mode, connection_config
+        )
         try:
             source.set_config(connection_config)
         except ValueError as exc:
@@ -459,6 +519,28 @@ async def test_connection(db: AsyncSession, id_source: int, redis: Any = None) -
     """
     source = await get_source(db, id_source)
     t_start = time.monotonic()
+
+    # NAPRAWA 2026-07-16 (Tier 2, Rozstrzygniecia Koncowe #2): test-connection
+    # zaklada wychodzace polaczenie (sensowne dla pull) — dla push nie ma nic
+    # do "testowania" w ten sposob (zewnetrzny system sam inicjuje polaczenie
+    # do naszego webhooka, nie odwrotnie).
+    # UWAGA: analogiczny blad "zly connection_mode dla operacji" w
+    # generate_webhook_token() (ponizej w tym pliku) uzywa HTTP 400.
+    # Tutaj celowo 409 (Conflict) — semantyka lepiej pasuje do proby
+    # operacji sprzecznej z biezacym stanem zasobu. Niespojnosc kodow
+    # HTTP miedzy tymi dwoma miejscami jest znana i zaakceptowana,
+    # nie przeoczeniem — nie ujednolicac bez osobnej decyzji.
+    if source.connection_mode != "pull":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source.test_connection_not_applicable",
+                "message": (
+                    f"Test polaczenia niedostepny dla connection_mode='{source.connection_mode}'. "
+                    "Zrodla push nie maja polaczenia wychodzacego do przetestowania."
+                ),
+            },
+        )
 
     try:
         cfg = source.get_config()

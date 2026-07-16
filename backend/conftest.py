@@ -592,3 +592,163 @@ def template_testowy_id(authed_client: httpx.Client) -> Generator[int, None, Non
         logger.info("[conftest] Szablon testowy ID=%d usunięty (status=%d)", tid, r.status_code)
     except Exception as exc:
         logger.warning("[conftest] Cleanup szablonu %d error: %s", tid, exc)
+
+
+# ---------------------------------------------------------------------------
+# Fixture: zrodlo push testowe (Tier 1/Tier 2 — 2026-07-16)
+# ---------------------------------------------------------------------------
+
+TEST_PUSH_SOURCE_NAME = "selftest_push_9999"
+
+
+@pytest.fixture(scope="session")
+def push_source(authed_client: httpx.Client) -> Generator[dict, None, None]:
+    """
+    Tworzy zrodlo testowe source_type='api' connection_mode='push',
+    generuje webhook token. Uzywane przez testy idempotencji, race
+    condition, pozycji (items) i walidacji Tier 2.
+
+    UWAGA cleanup: delete_source() BLOKUJE hard-delete zrodel z
+    powiazanymi instancjami (409 source.has_instances) — testy webhooka
+    nieuchronnie tworza dokumenty, wiec cleanup DEZAKTYWUJE zrodlo
+    (is_active=false) zamiast je usuwac, zgodnie z komunikatem bledu
+    w istniejacym kodzie ("dezaktywuj zrodlo zamiast usuwac").
+    """
+    resp = authed_client.post(
+        "/admin/sources",
+        json={
+            "source_name":      TEST_PUSH_SOURCE_NAME,
+            "source_type":      "api",
+            "connection_mode":  "push",
+            "connection_config": {},
+            "is_active":        True,
+        },
+    )
+
+    if resp.status_code == 409:
+        # Zrodlo juz istnieje z poprzedniego, przerwanego przebiegu testow
+        lista = authed_client.get("/admin/sources", params={"source_type": "api"})
+        assert lista.status_code == 200, f"Nie mozna pobrac listy zrodel: {lista.text[:200]}"
+        items = lista.json().get("data", {}).get("items", [])
+        existing = [s for s in items if s.get("source_name") == TEST_PUSH_SOURCE_NAME]
+        assert existing, (
+            f"409 przy tworzeniu zrodla push, ale nie znaleziono go na liscie: {resp.text[:200]}"
+        )
+        id_source = existing[0]["id_source"]
+        logger.warning("[conftest] Zrodlo push testowe ID=%d juz istnieje — uzywam", id_source)
+    else:
+        assert resp.status_code in (200, 201), (
+            f"Nie udalo sie utworzyc zrodla testowego push: "
+            f"{resp.status_code} — {resp.text[:300]}"
+        )
+        id_source = resp.json()["data"]["id_source"]
+        logger.info("[conftest] Zrodlo push testowe ID=%d utworzone", id_source)
+
+    token_resp = authed_client.post(f"/admin/sources/{id_source}/webhook-token")
+    assert token_resp.status_code in (200, 201), (
+        f"Nie udalo sie wygenerowac webhook token: "
+        f"{token_resp.status_code} — {token_resp.text[:300]}"
+    )
+    token_data = token_resp.json()["data"]
+    webhook_token = token_data["token"]
+
+    # Upewnij sie ze zrodlo jest aktywne (na wypadek gdyby poprzedni
+    # przebieg testow zostawil je zdezaktywowane)
+    authed_client.put(f"/admin/sources/{id_source}", json={"is_active": True})
+
+    # NAPRAWA (self-review "Nic nie brakuje?"): testy webhooka nieuchronnie
+    # tworza dokumenty (skw_document_approval_instances) — bez cleanup
+    # narastalyby bez ograniczenia przy kazdym przebiegu. Lista mutowalna,
+    # wypelniana przez testy (patrz test_webhook_push.py — kazdy test
+    # tworzacy dokument dopisuje tu swoj id_instance), anulowana w teardown
+    # przez POST /approval/instances/{id}/cancel (jedyny status wypadajacy
+    # z filtrowanego indeksu UNIQUE obok 'approved').
+    created_instances: list[int] = []
+
+    yield {
+        "id_source":          id_source,
+        "webhook_token":      webhook_token,
+        "created_instances":  created_instances,
+    }
+
+    _cleanup_push_instances(authed_client, created_instances)
+
+    try:
+        r = authed_client.put(f"/admin/sources/{id_source}", json={"is_active": False})
+        logger.info(
+            "[conftest] Zrodlo push testowe ID=%d dezaktywowane (cleanup, status=%d)",
+            id_source, r.status_code,
+        )
+    except Exception as exc:
+        logger.warning("[conftest] Cleanup zrodla push ID=%d error: %s", id_source, exc)
+
+
+def _cleanup_push_instances(authed_client: httpx.Client, id_instances: list[int]) -> None:
+    """
+    Anuluje wszystkie dokumenty utworzone przez testy webhooka push.
+    409 (juz approved/cancelled) jest tolerowany — nie jest bledem cleanup,
+    tylko oznacza ze instancja jest juz w stanie terminalnym (np. idempotentny
+    retry w tescie mogl wskazywac na juz posprzatana instancje z wczesniejszego
+    testu w tej samej sesji).
+    """
+    ok, skipped, failed = 0, 0, 0
+    for id_instance in id_instances:
+        try:
+            resp = authed_client.post(
+                f"/approval/instances/{id_instance}/cancel",
+                json={"comment": "SELFTEST cleanup — automatyczne anulowanie po testach"},
+            )
+            if resp.status_code == 200:
+                ok += 1
+            elif resp.status_code == 409:
+                skipped += 1  # juz approved/cancelled — nie problem
+            else:
+                failed += 1
+                logger.warning(
+                    "[conftest] Cleanup instancji push ID=%d nieudany: %d — %s",
+                    id_instance, resp.status_code, resp.text[:150],
+                )
+        except Exception as exc:
+            failed += 1
+            logger.warning("[conftest] Cleanup instancji push ID=%d error: %s", id_instance, exc)
+
+    logger.info(
+        "[conftest] Cleanup instancji push zakonczony | anulowano=%d pominieto=%d "
+        "nieudane=%d razem=%d",
+        ok, skipped, failed, len(id_instances),
+    )
+
+
+@pytest.fixture(scope="session")
+def http_timeout() -> float:
+    """Timeout uzywany przy budowie doraznych klientow httpx (np. w watkach roboczych testu race condition)."""
+    return TIMEOUT
+
+
+def get_webhook_max_items_limit(authed_client: httpx.Client, default: int = 500) -> int:
+    """
+    Odczytuje aktualny WEBHOOK_MAX_ITEMS_PER_DOCUMENT z /system/config —
+    testy limitu NIE zakladaja na sztywno wartosci domyslnej z migracji
+    0057, na wypadek gdyby administrator zmienil ja w SystemConfig.
+    """
+    try:
+        resp = authed_client.get("/system/config")
+        if resp.status_code == 200:
+            items = resp.json().get("data", {}).get("items", {})
+            val = items.get("WEBHOOK_MAX_ITEMS_PER_DOCUMENT")
+            if val is not None:
+                return int(val)
+    except Exception as exc:
+        logger.warning("[conftest] get_webhook_max_items_limit error: %s", exc)
+    return default
+
+
+@pytest.fixture(scope="session")
+def webhook_max_items_limit(authed_client: httpx.Client) -> int:
+    """
+    Fixture zamiast zwyklej funkcji importowanej miedzy plikami testowymi —
+    import 'from conftest import ...' w pliku pod backend/tests/ nie jest
+    gwarantowany (zalezy od trybu importu pytest / obecnosci __init__.py).
+    DI przez fixture jest bezpieczne niezaleznie od tego trybu.
+    """
+    return get_webhook_max_items_limit(authed_client)

@@ -84,17 +84,30 @@ async def _can_view_all(current_user: CurrentUser, db: DB) -> bool:
     # Uzywamy juz zaladowanych uprawnien przez request — fallback przez bezposrednie zapytanie
     try:
         from sqlalchemy import text as _text
+        # NAPRAWA 2026-07-16: skw_UserRoles nie istnieje w schemacie (brak DDL,
+        # brak migracji — zalozenie architektoniczne bledne od poczatku).
+        # Realna architektura: skw_Users.RoleID (FK bezposredni, jedna rola
+        # na usera). Ten sam blad wystepowal rownolegle w
+        # documents_service._check_user_permission() — patrz incydent
+        # 2026-07-16, request_id=c5478023-0f42-4e1d-80c4-c1626ec1b109.
+        # ZACHOWANO try/except celowo (fallback bezpieczny = False przy innych,
+        # nieprzewidzianych bledach DB), ale logujemy teraz kazdy przypadek —
+        # wczesniej cichy except Exception ukrywal ten bug miesiacami.
         result = await db.execute(
             _text(
-                "SELECT COUNT(*) FROM dbo.skw_UserRoles ur "
-                "JOIN dbo.skw_RolePermissions rp ON rp.ID_ROLE = ur.ID_ROLE "
+                "SELECT COUNT(*) FROM dbo.skw_Users u "
+                "JOIN dbo.skw_RolePermissions rp ON rp.ID_ROLE = u.RoleID "
                 "JOIN dbo.skw_Permissions p ON p.ID_PERMISSION = rp.ID_PERMISSION "
-                "WHERE ur.ID_USER = :uid AND p.PermissionName = 'documents.view_all' AND p.IsActive = 1"
+                "WHERE u.ID_USER = :uid AND p.PermissionName = 'documents.view_all' AND p.IsActive = 1"
             ),
             {"uid": current_user.id_user},
         )
         return (result.scalar() or 0) > 0
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "_can_view_all: blad sprawdzania documents.view_all dla user_id=%s: %s",
+            current_user.id_user, exc,
+        )
         return False
 
 

@@ -245,6 +245,21 @@ class DatabaseAdapter(BaseDocumentAdapter):
         self._line_items_view    = config.get("line_items_view", "")
         self._line_items_id_col  = config.get("line_items_id_column") or self._id_col
 
+        # NAPRAWA 2026-07-16 (incydent request_id=328e7376-23ad-46a6-adbf-29603c3c3bcb,
+        # pyodbc.ProgrammingError 42S22 "Invalid column name 'KSEF_ID'"):
+        # zalozenie "line_items_id_column = id_column" okazalo sie bledne
+        # dla realnego widoku Fakira — skw_faktury_akceptacja_pozycje nie ma
+        # kolumny KSEF_ID w ogole, tylko ID_BUF_DOKUMENT (INT, rozny typ i
+        # wartosc od KSEF_ID stringa). Nowe, OPCJONALNE pole:
+        # line_items_join_column — kolumna obecna W OBU widokach (naglowka
+        # i pozycji), uzywana do dwustopniowego zapytania:
+        #   1. znajdz join_column w widoku NAGLOWKA po id_column = id_document
+        #   2. filtruj widok POZYCJI po join_column = znaleziona wartosc
+        # Brak tego pola = zachowanie DOKLADNIE jak dotychczas (jednostopniowe
+        # zapytanie) — pelna wsteczna kompatybilnosc dla zrodel gdzie klucz
+        # jest spojny miedzy naglowkiem a pozycjami.
+        self._line_items_join_col = config.get("line_items_join_column", "")
+
         self._validate_config()
 
     def _build_connection_string(self, config: dict[str, Any]) -> str:
@@ -321,6 +336,16 @@ class DatabaseAdapter(BaseDocumentAdapter):
                 raise ValueError(
                     f"DatabaseAdapter [{self.source_name}]: "
                     f"line_items_id_column '{self._line_items_id_col}' zawiera niedozwolone znaki"
+                )
+        # Walidacja opcjonalnego pola join — tylko jesli podane (niezaleznie
+        # od line_items_view, bo teoretycznie ktos mogby je podac bledne;
+        # w praktyce jest uzywane tylko gdy line_items_view tez jest ustawiony,
+        # ale walidujemy formalnie zawsze gdy obecne).
+        if self._line_items_join_col:
+            if not re.match(r'^[a-zA-Z0-9_]+$', self._line_items_join_col):
+                raise ValueError(
+                    f"DatabaseAdapter [{self.source_name}]: "
+                    f"line_items_join_column '{self._line_items_join_col}' zawiera niedozwolone znaki"
                 )
 
     @staticmethod
@@ -443,8 +468,18 @@ class DatabaseAdapter(BaseDocumentAdapter):
         with self._get_pyodbc_conn() as conn:
             cur = conn.cursor()
             # view_name i id_col sa zwalidowane w __init__ — bezpieczne f-string
+            # NAPRAWA 2026-07-16 (incydent request_id=48e2c37c-bde3-4ac5-b4e9-6feb249bf068):
+            # f"[{self._view_name}]" dla nazwy z kropka (np. 'dbo.widok') dawalo
+            # blednie '[dbo.widok]' — SQL Server odczytuje to jako JEDEN
+            # identyfikator z kropka w nazwie, nie dwuczesciowa nazwe
+            # schemat.obiekt. Stad falszywe "Invalid object name" mimo ze
+            # widok istnieje. Ten sam bug zostal juz naprawiony w
+            # fetch_new_documents() przez _bracket_qualify() — poprawka nigdy
+            # nie zostala propagowana do tej metody. Uzywamy tego samego
+            # sprawdzonego mechanizmu.
+            qualified_view = self._bracket_qualify(self._view_name)
             cur.execute(
-                f"SELECT * FROM [{self._view_name}] WHERE [{self._id_col}] = ?",
+                f"SELECT * FROM {qualified_view} WHERE [{self._id_col}] = ?",
                 (id_document,),
             )
             row_raw = cur.fetchone()
@@ -477,19 +512,93 @@ class DatabaseAdapter(BaseDocumentAdapter):
             raise
 
     def _get_line_items_sync(self, id_document: str) -> list[dict[str, Any]]:
-        """Synchroniczna czesc get_line_items — wolana przez asyncio.to_thread."""
+        """
+        Synchroniczna czesc get_line_items — wolana przez asyncio.to_thread.
+
+        Dwie strategie, zaleznie od konfiguracji:
+
+        A) BEZ line_items_join_column (domyslne, wsteczna kompatybilnosc):
+           jednostopniowe zapytanie — zaklada ze widok pozycji ma kolumne
+           o tej samej semantyce co id_document (self._line_items_id_col).
+
+        B) Z line_items_join_column (NAPRAWA 2026-07-16, incydent
+           request_id=328e7376-23ad-46a6-adbf-29603c3c3bcb, pyodbc 42S22
+           "Invalid column name 'KSEF_ID'"): dwustopniowe zapytanie —
+           widok pozycji (np. skw_faktury_akceptacja_pozycje) nie ma
+           kolumny id_document (KSEF_ID), tylko klucz techniczny wewnetrzny
+           (np. ID_BUF_DOKUMENT), obecny TAKZE w widoku naglowka. Krok 1
+           tlumaczy id_document -> klucz techniczny przez widok naglowka,
+           krok 2 filtruje pozycje po tym kluczu.
+        """
         with self._get_pyodbc_conn() as conn:
             cur = conn.cursor()
-            # line_items_view i line_items_id_col sa zwalidowane w __init__
-            cur.execute(
-                f"SELECT * FROM [{self._line_items_view}] WHERE [{self._line_items_id_col}] = ?",
-                (id_document,),
-            )
+            qualified_items_view = self._bracket_qualify(self._line_items_view)
+
+            if self._line_items_join_col:
+                # --- KROK 1: znajdz klucz laczacy w widoku NAGLOWKA ---------
+                qualified_header_view = self._bracket_qualify(self._view_name)
+                logger.debug(
+                    "DatabaseAdapter._get_line_items_sync KROK 1/2 | source=%s "
+                    "header_view=%s id_col=%s join_col=%s id_document=%s",
+                    self.source_name, self._view_name, self._id_col,
+                    self._line_items_join_col, id_document,
+                )
+                cur.execute(
+                    f"SELECT [{self._line_items_join_col}] FROM {qualified_header_view} "
+                    f"WHERE [{self._id_col}] = ?",
+                    (id_document,),
+                )
+                header_row = cur.fetchone()
+                if not header_row or header_row[0] is None:
+                    logger.warning(
+                        "DatabaseAdapter._get_line_items_sync KROK 1/2 BRAK WYNIKU | "
+                        "source=%s id_document=%s — dokument nie istnieje w widoku "
+                        "naglowka %s, zwracam pusta liste pozycji (nie None — to nie "
+                        "jest brak konfiguracji, to brak danych).",
+                        self.source_name, id_document, self._view_name,
+                    )
+                    return []
+
+                join_value = header_row[0]
+                logger.debug(
+                    "DatabaseAdapter._get_line_items_sync KROK 1/2 OK | source=%s "
+                    "id_document=%s -> join_value=%s",
+                    self.source_name, id_document, join_value,
+                )
+
+                # --- KROK 2: filtruj widok POZYCJI po znalezionym kluczu ---
+                logger.debug(
+                    "DatabaseAdapter._get_line_items_sync KROK 2/2 | source=%s "
+                    "items_view=%s join_col=%s join_value=%s",
+                    self.source_name, self._line_items_view,
+                    self._line_items_join_col, join_value,
+                )
+                cur.execute(
+                    f"SELECT * FROM {qualified_items_view} "
+                    f"WHERE [{self._line_items_join_col}] = ?",
+                    (join_value,),
+                )
+            else:
+                # --- Jednostopniowe zapytanie (zachowanie dotychczasowe) ---
+                cur.execute(
+                    f"SELECT * FROM {qualified_items_view} "
+                    f"WHERE [{self._line_items_id_col}] = ?",
+                    (id_document,),
+                )
+
             cols = [d[0] for d in cur.description]
-            return [
+            items = [
                 {k: (str(v) if v is not None else None) for k, v in zip(cols, row)}
                 for row in cur.fetchall()
             ]
+            logger.info(
+                "DatabaseAdapter._get_line_items_sync ZAKONCZONE | source=%s "
+                "id_document=%s tryb=%s liczba_pozycji=%d",
+                self.source_name, id_document,
+                "dwustopniowy" if self._line_items_join_col else "jednostopniowy",
+                len(items),
+            )
+            return items
 
     async def get_line_items(self, id_document: str) -> list[dict[str, Any]] | None:
         """
@@ -900,6 +1009,47 @@ class RestApiAdapter(BaseDocumentAdapter):
             parts.append(doc.contractor_name)
         return " | ".join(parts) if parts else f"Dokument #{doc.id_document}"
 
+    async def get_line_items(self, id_document: str) -> Any | None:
+            """
+            Pobiera pozycje dokumentu z opcjonalnego endpoint_line_items.
+
+            Zwraca None jesli zrodlo nie ma skonfigurowanej tej sciezki.
+            Zwraca SUROWY JSON (list albo dict — cokolwiek zwroci zewnetrzne
+            API) bez zadnego mapowania — zgodnie z ustaleniem: "front bedzie
+            zakladal ze jest struktura prawidlowa (...) nawet jesli nie
+            zgadzalyby sie pola to po prostu na froncie wyswietle naglowki
+            pol i ich wartosci". Reuzywa self._get_auth_headers() — zero
+            duplikacji logiki autoryzacji.
+            """
+            if not self._ep_line_items:
+                return None
+
+            import httpx
+            url = f"{self._base_url}{self._ep_line_items.format(id=id_document)}"
+            headers = self._get_auth_headers()
+
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(url, headers=headers)
+
+                    if resp.status_code == 401 and self._auth_type == "bearer_refresh":
+                        await self._refresh_bearer_token()
+                        headers = self._get_auth_headers()
+                        resp = await client.get(url, headers=headers)
+
+                    if resp.status_code == 404:
+                        return None
+
+                    resp.raise_for_status()
+                    return resp.json()
+
+            except Exception as exc:
+                logger.error(
+                    "RestApiAdapter.get_line_items blad | source=%s id=%s: %s",
+                    self.source_name, id_document, exc,
+                )
+                raise
+
 
 # =============================================================================
 # FakirDocumentAdapter — legacy adapter (pozostaje do czasu weryfikacji F3)
@@ -1189,44 +1339,3 @@ async def invalidate_adapter_cache(redis: Any, id_source: int) -> None:
         logger.debug("invalidate_adapter_cache: id_source=%s", id_source)
     except Exception as exc:
         logger.warning("invalidate_adapter_cache blad: %s", exc)
-
-async def get_line_items(self, id_document: str) -> Any | None:
-        """
-        Pobiera pozycje dokumentu z opcjonalnego endpoint_line_items.
-
-        Zwraca None jesli zrodlo nie ma skonfigurowanej tej sciezki.
-        Zwraca SUROWY JSON (list albo dict — cokolwiek zwroci zewnetrzne
-        API) bez zadnego mapowania — zgodnie z ustaleniem: "front bedzie
-        zakladal ze jest struktura prawidlowa (...) nawet jesli nie
-        zgadzalyby sie pola to po prostu na froncie wyswietle naglowki
-        pol i ich wartosci". Reuzywa self._get_auth_headers() — zero
-        duplikacji logiki autoryzacji.
-        """
-        if not self._ep_line_items:
-            return None
-
-        import httpx
-        url = f"{self._base_url}{self._ep_line_items.format(id=id_document)}"
-        headers = self._get_auth_headers()
-
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(url, headers=headers)
-
-                if resp.status_code == 401 and self._auth_type == "bearer_refresh":
-                    await self._refresh_bearer_token()
-                    headers = self._get_auth_headers()
-                    resp = await client.get(url, headers=headers)
-
-                if resp.status_code == 404:
-                    return None
-
-                resp.raise_for_status()
-                return resp.json()
-
-        except Exception as exc:
-            logger.error(
-                "RestApiAdapter.get_line_items blad | source=%s id=%s: %s",
-                self.source_name, id_document, exc,
-            )
-            raise

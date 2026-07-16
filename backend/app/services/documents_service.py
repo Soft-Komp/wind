@@ -654,13 +654,23 @@ async def _ensure_visibility(
 
 
 async def _check_user_permission(db: AsyncSession, actor_id: int, permission_name: str) -> bool:
+    """
+    UWAGA (naprawa 2026-07-16): pierwotna wersja odpytywala nieistniejaca
+    tabele posredniczaca dbo.skw_UserRoles (many-to-many User<->Rola),
+    ktora nigdy nie zostala utworzona w tym projekcie — brak DDL, brak
+    migracji. Realna architektura: skw_Users.RoleID (FK bezposredni,
+    jedna rola na usera), potwierdzone w database/ddl/003_users.sql.
+    Kazde wywolanie tej funkcji konczylo sie pyodbc.ProgrammingError
+    42S02 "Invalid object name" — patrz incydent 2026-07-16,
+    request_id=c5478023-0f42-4e1d-80c4-c1626ec1b109.
+    """
     result = await db.execute(
         text(f"""
             SELECT COUNT(*)
-            FROM [{_SCHEMA}].[skw_UserRoles] ur
-            JOIN [{_SCHEMA}].[skw_RolePermissions] rp ON rp.[ID_ROLE] = ur.[ID_ROLE]
+            FROM [{_SCHEMA}].[skw_Users] u
+            JOIN [{_SCHEMA}].[skw_RolePermissions] rp ON rp.[ID_ROLE] = u.[RoleID]
             JOIN [{_SCHEMA}].[skw_Permissions] p ON p.[ID_PERMISSION] = rp.[ID_PERMISSION]
-            WHERE ur.[ID_USER] = :u AND p.[PermissionName] = :perm AND p.[IsActive] = 1
+            WHERE u.[ID_USER] = :u AND p.[PermissionName] = :perm AND p.[IsActive] = 1
         """),
         {"u": actor_id, "perm": permission_name},
     )
@@ -955,11 +965,15 @@ async def get_line_items(
     id_document = instance["id_document"]
 
     src_result = await db.execute(
-        text(f"SELECT [source_type] FROM [{_SCHEMA}].[skw_document_sources] WHERE [id_source] = :s"),
+        text(
+            f"SELECT [source_type], [connection_mode] "
+            f"FROM [{_SCHEMA}].[skw_document_sources] WHERE [id_source] = :s"
+        ),
         {"s": id_source},
     )
     src_row = src_result.fetchone()
     source_type = src_row[0] if src_row else None
+    connection_mode = src_row[1] if src_row else None
 
     if source_type in ("ftp", "email", "manual"):
         raise HTTPException(
@@ -977,6 +991,31 @@ async def get_line_items(
             raise HTTPException(status_code=404, detail="Brak surowego XML dla tego dokumentu KSeF.")
         return {"format": "ksef_xml", "raw": xml_raw}
 
+    if source_type == "api" and connection_mode == "push":
+        # NAPRAWA 2026-07-16 (Tier 1c, Recenzja Krytyczna Tier1/Tier2,
+        # Rekomendacja D.1): zrodla push maja pozycje zapisane bezposrednio
+        # w skw_document_push_items (Tier 1b), nie przez RestApiAdapter
+        # (ktory zaklada wychodzace polaczenie HTTP — pull, kierunek
+        # odwrotny niz push). Omijamy fabryke adapterow CALKOWICIE dla tej
+        # kombinacji source_type+connection_mode, zamiast ja latac —
+        # nizsze ryzyko niz modyfikacja get_adapter_by_source_id/_build_adapter
+        # uzywanych tez przez inne, niezweryfikowane dzis sciezki wywolania.
+        items_result = await db.execute(
+            text(f"""
+                SELECT [item_data]
+                FROM [{_SCHEMA}].[skw_document_push_items]
+                WHERE [id_instance] = :i
+                ORDER BY [item_order] ASC
+            """),
+            {"i": id_instance},
+        )
+        push_items = [json.loads(r[0]) for r in items_result.fetchall()]
+        # Brak pozycji = 200 + [] (Rozstrzygniecia Koncowe #13) — spojne
+        # z precedensem juz istniejacym dla database+pull (brak wiersza w
+        # widoku naglowka -> pusta lista, NIE 409 not_configured), bo brak
+        # pozycji push to cecha konkretnego dokumentu, nie brak konfiguracji.
+        return {"format": "structured", "items": push_items}
+
     if source_type in ("database", "api"):
         # Cache Redis TTL 60s — patrz uzasadnienie w rozmowie roboczej
         # (wielu userow otwierajacych ten sam dokument w krotkim czasie).
@@ -992,7 +1031,36 @@ async def get_line_items(
                 "code": "line_items.not_applicable",
                 "message": "Adapter tego zrodla nie obsluguje pozycji.",
             })
-        items = await adapter.get_line_items(id_document)
+        try:
+            items = await adapter.get_line_items(id_document)
+        except Exception as exc:
+            # NAPRAWA 2026-07-16 (incydent request_id=68f6de26-0248-4bb7-a5e4-6fc3656d4722):
+            # Adaptery (DatabaseAdapter, RestApiAdapter) celowo re-raise'uja
+            # wyjatki po zalogowaniu (nie tlumia ich cicho) — ale bez obslugi
+            # tutaj kazda awaria zewnetrznej infrastruktury (baza SQL
+            # nieosiagalna, zewnetrzne API nie odpowiada) konczyla sie
+            # nieopisanym 500 (server.internal_error) zamiast czytelnego
+            # komunikatu. Rozrozniamy tu WYLACZNIE awarie transportowe/
+            # polaczenia — NIE lapiemy httpx.HTTPStatusError (to znaczy ze
+            # zewnetrzne API odpowiedzialo, tylko blednym kodem — inny
+            # przypadek, celowo zostawiony jako 500 do dalszej analizy).
+            import pyodbc
+            import httpx
+
+            if isinstance(exc, (pyodbc.Error, httpx.RequestError)):
+                logger.error(
+                    "get_line_items: zewnetrzne zrodlo danych niedostepne | "
+                    "id_source=%s id_document=%s source_type=%s exc_type=%s error=%s",
+                    id_source, id_document, source_type, type(exc).__name__, exc,
+                )
+                raise HTTPException(status_code=503, detail={
+                    "code": "line_items.source_unavailable",
+                    "message": "Zrodlo danych pozycji jest chwilowo niedostepne. Sprobuj ponownie za chwile.",
+                }) from exc
+            # Nieprzewidziany blad logiki aplikacji — propagujemy dalej jako
+            # 500, nie maskujemy go pod "niedostepnosc zrodla zewnetrznego".
+            raise
+
         if items is None:
             raise HTTPException(status_code=409, detail={
                 "code": "line_items.not_configured",
