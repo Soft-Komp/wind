@@ -49,6 +49,7 @@ from app.db.fakir_write import update_kod_statusu
 
 
 from app.core.redis_lock import approval_lock
+from app.services.hook_service import HookService
 from app.db.models.approval.document_approval_instance import (
     ACTIVE_STATUSES,
     DocumentApprovalInstance,
@@ -832,6 +833,18 @@ async def accept(
                     ip_address=ip_address,
                 )
 
+        # ── Krok 9.5: Hooki po akcji obiegowej ────────────────────────────────
+        # Odpala sie na KAZDE pojedyncze accept() (decyzja z 2026-07-15) —
+        # nie tylko przy approved_terminal. PRZED db.commit() (F0.1) —
+        # HookError = brak commit() = rollback calego accept().
+        hook_results = await HookService.run_after(
+            action="accepted",
+            id_instance=id_instance,
+            db=db,
+            redis=redis,
+            id_user=id_user,
+        )
+
         # ── Krok 10: Commit ──────────────────────────────────────────────────
         await db.commit()
 
@@ -883,6 +896,14 @@ async def accept(
         "step_complete":  step_complete,
         "approved":       approved_terminal,
         "next_step":      next_step,
+        "hook_results": [
+            {
+                "status":           r.status,
+                "message":          r.message,
+                "refresh_document": r.refresh_document,
+            }
+            for r in hook_results
+        ],
     }
 
 
@@ -1204,12 +1225,32 @@ async def reject(
         )
 
         await _sync_faktura_akceptacja_status(db, id_document, "rejected")
+
+        hook_results = await HookService.run_after(
+            action="rejected",
+            id_instance=id_instance,
+            db=db,
+            redis=redis,
+            id_user=id_user,
+        )
+
         await db.commit()
 
     _jsonl_log("rejected", {
         "id_instance": id_instance, "id_user": id_user, "step": current_step,
     })
-    return {"id_instance": id_instance, "new_status": "rejected"}
+    return {
+        "id_instance": id_instance,
+        "new_status":  "rejected",
+        "hook_results": [
+            {
+                "status":           r.status,
+                "message":          r.message,
+                "refresh_document": r.refresh_document,
+            }
+            for r in hook_results
+        ],
+    }
 
 
 # =============================================================================
@@ -2022,3 +2063,24 @@ async def _fakir_kod_statusu_sync_bg(*, id_instance: int, id_document: str) -> N
                 "operation_id": fakir_result.operation_id,
             }).decode()
         )
+
+        # NOWY — dopisać po _increment_notif_unread (koło linii 325):
+
+def _hook_result_to_dict(hook_results: list) -> dict | None:
+    """
+    Konwertuje liste HookResult zwrocona przez HookService.run_after() na
+    pojedynczy dict do zwrocenia we frontcie.
+
+    W praktyce 0 lub 1 element — DB wymusza max 1 aktywny hook per
+    (id_source, trigger_action) przez UQ_skw_sh_source_action_active.
+    Jesli kiedys model danych pozwoli na wiecej niz jeden — bierzemy
+    PIERWSZY (rozstrzygniecie wlasne, nieudokumentowane).
+    """
+    if not hook_results:
+        return None
+    first = hook_results[0]
+    return {
+        "status":           first.status,
+        "message":          first.message,
+        "refresh_document": first.refresh_document,
+    }

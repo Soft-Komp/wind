@@ -139,16 +139,24 @@ class SourceHook(Base):
 
     def get_operation_config(self) -> dict[str, Any]:
         """
-        Zwraca operation_config jako slownik.
-        Pusty dict jesli NULL lub niepoprawny JSON.
+        Odszyfrowuje i zwraca operation_config jako slownik.
+        Pusty dict jesli NULL, blad deszyfrowania lub niepoprawny JSON.
+
+        POPRAWKA (2026-07-15): operation_config jest szyfrowany Fernet,
+        identycznie jak DocumentSource.connection_config. Headers hookow
+        typu api_call zawieraja realne klucze API/tokeny — to samo ryzyko
+        co connection_config zrodel, wiec identyczna ochrona.
         """
         if not self.operation_config:
             return {}
         try:
-            return json.loads(self.operation_config)
-        except json.JSONDecodeError:
+            from app.core.encryption import decrypt_value
+            raw = decrypt_value(self.operation_config)
+            return json.loads(raw)
+        except Exception as exc:
             logger.warning(
-                "Niepoprawny JSON w operation_config hooka id=%s", self.id_hook
+                "Blad odczytu operation_config hooka id=%s: %s",
+                self.id_hook, type(exc).__name__,
             )
             return {}
 
@@ -167,8 +175,10 @@ class SourceHook(Base):
         return max(MIN_HOOK_TIMEOUT_SECONDS, min(MAX_HOOK_TIMEOUT_SECONDS, val))
 
     def set_operation_config(self, config: dict[str, Any]) -> None:
-        """Zapisuje operation_config jako JSON string."""
-        self.operation_config = json.dumps(config, ensure_ascii=False)
+        """Szyfruje (Fernet) i zapisuje operation_config."""
+        from app.core.encryption import encrypt_value
+        raw = json.dumps(config, ensure_ascii=False)
+        self.operation_config = encrypt_value(raw)
 
     def validate(self) -> list[str]:
         """Waliduje obiekt. Zwraca liste bledow."""

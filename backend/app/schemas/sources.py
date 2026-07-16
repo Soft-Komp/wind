@@ -336,7 +336,18 @@ class HookUpdate(BaseModel):
 
 
 class HookOut(BaseModel):
-    """Odpowiedz dla GET/POST/PUT hookow."""
+    """
+    Odpowiedz dla GET/POST/PUT hookow.
+
+    KRYTYCZNE (poprawka bezpieczenstwa, 2026-07-15): operation_config jest
+    MASKOWANY przed zwroceniem — headers w calosci, pola body/params o
+    nazwach wygladajacych na wrazliwe. Front NIGDY nie dostaje realnych
+    sekretow z powrotem po zapisaniu — przy edycji formularz musi
+    traktowac wartosc "***" jako "bez zmian", nie jako literalna wartosc
+    do zapisania (patrz uwaga w update_hook, source_hook_action_service.py
+    — wymaga osobnej poprawki, zeby PUT nie nadpisal prawdziwego sekretu
+    literalnym stringiem "***").
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -352,13 +363,15 @@ class HookOut(BaseModel):
     @field_validator("operation_config", mode="before")
     @classmethod
     def _parse_config_json(cls, v: Any) -> dict:
-        """operation_config w DB jest NVARCHAR(MAX) z JSON-em — parsuj przy odczycie."""
+        """operation_config w DB jest NVARCHAR(MAX) z JSON-em — parsuj i zamaskuj przy odczycie."""
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                parsed = json.loads(v)
             except json.JSONDecodeError:
                 return {}
-        return v or {}
+        else:
+            parsed = v or {}
+        return _mask_operation_config_secrets(parsed)
 
 
 # =============================================================================
@@ -464,3 +477,43 @@ class ActionOut(BaseModel):
             except json.JSONDecodeError:
                 return {}
         return v or {}
+
+# Wzorce nazw kluczy uznawane za wrazliwe w body/params (headers maskowane
+# ZAWSZE w calosci, bez wzgledu na nazwe klucza — patrz uzasadnienie nizej).
+_HOOK_SENSITIVE_KEY_PATTERNS = ("key", "token", "secret", "password", "auth", "credential", "pwd")
+
+
+def _mask_operation_config_secrets(cfg: dict) -> dict:
+    """
+    Maskuje potencjalne sekrety w operation_config przed zwroceniem przez API.
+
+    UWAGA: headers maskowane W CALOSCI, bez wzgledu na nazwe klucza —
+    naglowki HTTP w kontekscie tego systemu praktycznie zawsze niosa dane
+    uwierzytelniajace (X-Api-Key, Authorization, cokolwiek administrator
+    wymysli), wiec proba rozpoznawania "ktory naglowek jest bezpieczny"
+    po nazwie bylaby zgadywanka z realnym ryzykiem przeoczenia. body/params
+    maskowane selektywnie — po dopasowaniu nazwy klucza do wzorca, bo tam
+    typowo sa tez pola biznesowe (np. "action", "ksef_id"), ktorych front
+    potrzebuje widziec w podgladzie konfiguracji.
+
+    Rozstrzygniecie wlasne (nie w dokumentacji): to jest maskowanie
+    JEDNOKIERUNKOWE — dane wychodzace z API sa zamaskowane, ale surowa
+    (nieszyfrowana — patrz Fix 2/notatka nizej) wartosc nadal siedzi w DB.
+    To lata na zaufaniu do warstwy API jako jedynej linii obrony; prawdziwe
+    rozwiazanie to szyfrowanie operation_config w bazie, tak jak juz jest
+    zrobione dla connection_config zrodel (patrz get_config_safe()).
+    """
+    masked = dict(cfg)
+
+    if isinstance(masked.get("headers"), dict):
+        masked["headers"] = {k: "***" for k in masked["headers"]}
+
+    for container_key in ("body", "params"):
+        container = masked.get(container_key)
+        if isinstance(container, dict):
+            masked[container_key] = {
+                k: ("***" if any(p in k.lower() for p in _HOOK_SENSITIVE_KEY_PATTERNS) else v)
+                for k, v in container.items()
+            }
+
+    return masked

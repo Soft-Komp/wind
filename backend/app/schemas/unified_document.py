@@ -22,6 +22,7 @@ SQLAlchemy i Pydantic wymagaja resolved annotations.
 import json
 import logging
 import re
+import asyncio
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -236,6 +237,14 @@ class DatabaseAdapter(BaseDocumentAdapter):
         self._id_col      = config.get("id_column", "KSEF_ID")
         self._date_col    = config.get("date_column")  # None = brak filtrowania dat
 
+        # POPRAWKA (pozycje faktur, 2026-07-15): opcjonalny widok pozycji.
+        # line_items_id_column domyslnie = id_column (ta sama kolumna klucza
+        # w widoku pozycji co w widoku naglowka) — decyzja swiadoma (KSEF_ID
+        # dla Fakira), nadpisywalna, gdyby ktos napisal widok z inna nazwa
+        # kolumny klucza.
+        self._line_items_view    = config.get("line_items_view", "")
+        self._line_items_id_col  = config.get("line_items_id_column") or self._id_col
+
         self._validate_config()
 
     def _build_connection_string(self, config: dict[str, Any]) -> str:
@@ -299,6 +308,20 @@ class DatabaseAdapter(BaseDocumentAdapter):
                 f"DatabaseAdapter [{self.source_name}]: "
                 f"id_column '{self._id_col}' zawiera niedozwolone znaki"
             )
+        # Walidacja opcjonalnego widoku pozycji — tylko jesli podany.
+        # Pozycje sa OPCJONALNE (decyzja 2026-07-15) — brak tego pola
+        # oznacza po prostu "to zrodlo nie wspiera pozycji", nie blad.
+        if self._line_items_view:
+            if not re.match(r'^[a-zA-Z0-9_.]+$', self._line_items_view):
+                raise ValueError(
+                    f"DatabaseAdapter [{self.source_name}]: "
+                    f"line_items_view '{self._line_items_view}' zawiera niedozwolone znaki"
+                )
+            if not re.match(r'^[a-zA-Z0-9_]+$', self._line_items_id_col):
+                raise ValueError(
+                    f"DatabaseAdapter [{self.source_name}]: "
+                    f"line_items_id_column '{self._line_items_id_col}' zawiera niedozwolone znaki"
+                )
 
     @staticmethod
     def _bracket_qualify(name: str) -> str:
@@ -415,30 +438,76 @@ class DatabaseAdapter(BaseDocumentAdapter):
         # string (domyslny)
         return str(val) if val is not None else None
 
+    def _get_document_sync(self, id_document: str) -> UnifiedDocument | None:
+        """Synchroniczna czesc get_document — wolana przez asyncio.to_thread."""
+        with self._get_pyodbc_conn() as conn:
+            cur = conn.cursor()
+            # view_name i id_col sa zwalidowane w __init__ — bezpieczne f-string
+            cur.execute(
+                f"SELECT * FROM [{self._view_name}] WHERE [{self._id_col}] = ?",
+                (id_document,),
+            )
+            row_raw = cur.fetchone()
+            if not row_raw:
+                return None
+            cols = [d[0] for d in cur.description]
+            row = dict(zip(cols, row_raw))
+            return self._row_to_unified(row)
+
     async def get_document(
         self, db: AsyncSession, id_document: str
     ) -> UnifiedDocument | None:
         """
         Pobiera jeden dokument po id_column = id_document.
-        Uzywa pyodbc (synchronicznie) — wrappowane w executor jesli potrzeba async.
+
+        POPRAWKA (2026-07-15): poprzednia wersja wywolywala blokujacy pyodbc
+        bezposrednio w funkcji async def, bez asyncio.to_thread() — blokowalo
+        to event loop na czas zapytania SQL. Znalezione przy analizie pod
+        katem nowego mechanizmu pozycji faktur (wywolanie na zadanie, per
+        otwarcie dokumentu — czestotliwosc wywolan tej funkcji rosnie,
+        wiec blokujacy event loop przestaje byc teoretycznym ryzykiem).
         """
         try:
-            with self._get_pyodbc_conn() as conn:
-                cur = conn.cursor()
-                # view_name i id_col sa zwalidowane w __init__ — bezpieczne f-string
-                cur.execute(
-                    f"SELECT * FROM [{self._view_name}] WHERE [{self._id_col}] = ?",
-                    (id_document,),
-                )
-                row_raw = cur.fetchone()
-                if not row_raw:
-                    return None
-                cols = [d[0] for d in cur.description]
-                row = dict(zip(cols, row_raw))
-                return self._row_to_unified(row)
+            return await asyncio.to_thread(self._get_document_sync, id_document)
         except Exception as exc:
             logger.error(
                 "DatabaseAdapter.get_document blad | source=%s id=%s: %s",
+                self.source_name, id_document, exc,
+            )
+            raise
+
+    def _get_line_items_sync(self, id_document: str) -> list[dict[str, Any]]:
+        """Synchroniczna czesc get_line_items — wolana przez asyncio.to_thread."""
+        with self._get_pyodbc_conn() as conn:
+            cur = conn.cursor()
+            # line_items_view i line_items_id_col sa zwalidowane w __init__
+            cur.execute(
+                f"SELECT * FROM [{self._line_items_view}] WHERE [{self._line_items_id_col}] = ?",
+                (id_document,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [
+                {k: (str(v) if v is not None else None) for k, v in zip(cols, row)}
+                for row in cur.fetchall()
+            ]
+
+    async def get_line_items(self, id_document: str) -> list[dict[str, Any]] | None:
+        """
+        Pobiera pozycje dokumentu z opcjonalnego widoku line_items_view.
+
+        Zwraca None jesli zrodlo nie ma skonfigurowanego widoku pozycji
+        (pozycje sa opcjonalne — decyzja 2026-07-15). Surowe dane, bez
+        mapowania — front dostaje nazwy kolumn i wartosci wprost z widoku,
+        tak jak ustalono (front wyswietla naglowki pol i wartosci, zero
+        wymaganej normalizacji po stronie backendu).
+        """
+        if not self._line_items_view:
+            return None
+        try:
+            return await asyncio.to_thread(self._get_line_items_sync, id_document)
+        except Exception as exc:
+            logger.error(
+                "DatabaseAdapter.get_line_items blad | source=%s id=%s: %s",
                 self.source_name, id_document, exc,
             )
             raise
@@ -563,6 +632,11 @@ class RestApiAdapter(BaseDocumentAdapter):
         self._ep_list     = config.get("endpoint_list", "")
         self._ep_detail   = config.get("endpoint_detail", "")
         self._pagination  = config.get("pagination", {})
+        # Pozycje faktur (2026-07-15) — OPCJONALNA, osobna sciezka. Nie
+        # reuzywamy endpoint_detail, bo zewnetrzne API moze zwracac pozycje
+        # pod innym URL-em niz szczegoly nagl0wka (ustalone jawnie, nie
+        # zalozenie wlasne).
+        self._ep_line_items = config.get("endpoint_line_items", "")
         self._json_mappings = config.get("field_mappings", {})
 
         self._validate_config()
@@ -572,7 +646,11 @@ class RestApiAdapter(BaseDocumentAdapter):
             raise ValueError(f"RestApiAdapter [{self.source_name}]: brak 'base_url'")
         if not self._ep_list:
             raise ValueError(f"RestApiAdapter [{self.source_name}]: brak 'endpoint_list'")
-        valid_auth = {"bearer_refresh", "api_key", "basic"}
+        # POPRAWKA (2026-07-15): dodano 'none' — publiczne API bez autoryzacji
+        # (np. testowe/demo endpointy typu JSONPlaceholder). auth_config
+        # pozostaje wtedy pusty dict, _get_auth_headers() zwraca {} bez
+        # zadnych naglowkow.
+        valid_auth = {"bearer_refresh", "api_key", "basic", "none"}
         if self._auth_type not in valid_auth:
             raise ValueError(
                 f"RestApiAdapter [{self.source_name}]: "
@@ -581,6 +659,9 @@ class RestApiAdapter(BaseDocumentAdapter):
 
     def _get_auth_headers(self) -> dict[str, str]:
         """Buduje naglowki autoryzacyjne."""
+        if self._auth_type == "none":
+            return {}
+
         if self._auth_type == "api_key":
             key   = self._auth_config.get("api_key", "")
             hdr   = self._auth_config.get("header_name", "X-Api-Key")
@@ -1108,3 +1189,44 @@ async def invalidate_adapter_cache(redis: Any, id_source: int) -> None:
         logger.debug("invalidate_adapter_cache: id_source=%s", id_source)
     except Exception as exc:
         logger.warning("invalidate_adapter_cache blad: %s", exc)
+
+async def get_line_items(self, id_document: str) -> Any | None:
+        """
+        Pobiera pozycje dokumentu z opcjonalnego endpoint_line_items.
+
+        Zwraca None jesli zrodlo nie ma skonfigurowanej tej sciezki.
+        Zwraca SUROWY JSON (list albo dict — cokolwiek zwroci zewnetrzne
+        API) bez zadnego mapowania — zgodnie z ustaleniem: "front bedzie
+        zakladal ze jest struktura prawidlowa (...) nawet jesli nie
+        zgadzalyby sie pola to po prostu na froncie wyswietle naglowki
+        pol i ich wartosci". Reuzywa self._get_auth_headers() — zero
+        duplikacji logiki autoryzacji.
+        """
+        if not self._ep_line_items:
+            return None
+
+        import httpx
+        url = f"{self._base_url}{self._ep_line_items.format(id=id_document)}"
+        headers = self._get_auth_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url, headers=headers)
+
+                if resp.status_code == 401 and self._auth_type == "bearer_refresh":
+                    await self._refresh_bearer_token()
+                    headers = self._get_auth_headers()
+                    resp = await client.get(url, headers=headers)
+
+                if resp.status_code == 404:
+                    return None
+
+                resp.raise_for_status()
+                return resp.json()
+
+        except Exception as exc:
+            logger.error(
+                "RestApiAdapter.get_line_items blad | source=%s id=%s: %s",
+                self.source_name, id_document, exc,
+            )
+            raise

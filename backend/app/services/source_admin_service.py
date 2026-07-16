@@ -22,11 +22,15 @@ Wzorce bezpieczenstwa:
 UWAGA: from __future__ import annotations — NIGDY w tym pliku (SQLAlchemy ORM).
 """
 
+import asyncio
+import fnmatch
+import imaplib
 import json
 import logging
 import secrets
 import time
 from datetime import datetime, timezone
+from ftplib import FTP
 from typing import Any
 
 from fastapi import HTTPException
@@ -541,8 +545,18 @@ async def test_connection(db: AsyncSession, id_source: int, redis: Any = None) -
                 "tested_at":    datetime.now(timezone.utc),
             }
 
-    # Inne typy zrodel — test connection bedzie rozszerzony przy implementacji
-    # konkretnych adapterow (RestApiAdapter, FtpAdapter, EmailAdapter)
+    if source.source_type == "ftp":
+        return await _test_connection_ftp(cfg, t_start, id_source, redis)
+
+    if source.source_type == "email":
+        return await _test_connection_email(cfg, t_start, id_source, redis)
+
+    if source.source_type == "api":
+        return await _test_connection_api(cfg, t_start, id_source, redis)
+
+    # Inne typy zrodel (api, ksef20, manual) — test connection dla tych typow
+    # albo nie ma zastosowania (manual: brak polaczenia zewnetrznego), albo
+    # zostanie dodany osobno przy nastepnej turze prac (api, ksef20).
     return {
         "success":      False,
         "message":      f"Test polaczenia dla source_type='{source.source_type}' nie jest jeszcze zaimplementowany.",
@@ -551,6 +565,72 @@ async def test_connection(db: AsyncSession, id_source: int, redis: Any = None) -
         "tested_at":    datetime.now(timezone.utc),
     }
 
+
+# =============================================================================
+# FIELD PREVIEW — podglad pol do mapowania (TYLKO database/api)
+# =============================================================================
+
+# source_type, dla ktorych mapowanie pol architektonicznie nie ma zastosowania —
+# patrz notatka "Mapowanie pol nie dotyczy zrodel plikowych (FTP/Email)" +
+# ustalenie dla ksef20 z tej samej sesji (14.07.2026). Zrodlo prawdy: konstruktory
+# FtpAdapter/EmailAdapter/KSeF20Adapter nie przyjmuja field_mappings.
+_SOURCE_TYPES_WITHOUT_FIELD_MAPPING = frozenset({"ftp", "email", "ksef20", "manual"})
+
+
+class FieldPreviewNotApplicableError(Exception):
+    """source_type nie obsluguje mapowania pol — nie jest to blad cache, tylko architektury."""
+
+
+class FieldPreviewCacheEmptyError(Exception):
+    """source_type obsluguje mapowanie, ale cache jeszcze nie zostal zapelniony."""
+
+
+async def get_field_preview(db: AsyncSession, redis: Any, id_source: int) -> dict[str, Any]:
+    """
+    Zwraca probke pol do mapowania — WYLACZNIE dla source_type, ktore realnie
+    obsluguja field_mappings w adapterze (database, api).
+
+    Dla ftp/email/ksef20/manual — rzuca FieldPreviewNotApplicableError zamiast
+    sugerowac "wykonaj test-connection", bo dla tych typow zaden test-connection
+    nigdy nie zapelni cache (adaptery nie przyjmuja field_mappings w konstruktorze).
+
+    Raises:
+        SourceNotFoundError:            zrodlo nie istnieje.
+        FieldPreviewNotApplicableError: source_type nie wspiera mapowania.
+        FieldPreviewCacheEmptyError:    source_type wspiera mapowanie, ale cache pusty.
+    """
+    source = await get_source(db, id_source)
+
+    if source.source_type in _SOURCE_TYPES_WITHOUT_FIELD_MAPPING:
+        logger.info(
+            "get_field_preview: source_type=%r nie obsluguje mapowania pol | id_source=%s",
+            source.source_type, id_source,
+        )
+        raise FieldPreviewNotApplicableError(source.source_type)
+
+    if not redis:
+        raise FieldPreviewCacheEmptyError(id_source)
+
+    try:
+        cached_raw = await redis.get(f"field_preview:{id_source}")
+    except Exception as exc:
+        logger.warning("get_field_preview: blad odczytu cache Redis dla id_source=%s: %s", id_source, exc)
+        raise FieldPreviewCacheEmptyError(id_source) from exc
+
+    if not cached_raw:
+        raise FieldPreviewCacheEmptyError(id_source)
+
+    try:
+        fields = json.loads(cached_raw)
+    except (TypeError, ValueError) as exc:
+        logger.error("get_field_preview: cache field_preview:%s zawiera nieprawidlowy JSON: %s", id_source, exc)
+        raise FieldPreviewCacheEmptyError(id_source) from exc
+
+    return {
+        "id_source": id_source,
+        "source_type": source.source_type,
+        "fields": fields,
+    }
 
 # =============================================================================
 # SYNC TRIGGER + STATUS
@@ -759,6 +839,311 @@ async def set_test_mode(
 # Pomocnicze
 # =============================================================================
 
+# =============================================================================
+# TEST CONNECTION — implementacje per source_type: ftp, email
+# =============================================================================
+# UWAGA: rozstrzygniecia wlasne (dokumentacja nie precyzuje):
+#   - Timeout 15s per polaczenie testowe — wartosc arbitralna, wystarczajaca
+#     dla polaczenia+login+listowania, bez ryzyka wieszania requestu HTTP.
+#   - Test NIGDY nie pobiera plikow/wiadomosci — tylko listuje/liczy, spojne
+#     z zasada "test nie zapisuje zadnych danych" z docstringa test_connection().
+#   - Probka nazw plikow ograniczona do 5 — spojne z DatabaseAdapter (SELECT TOP 5).
+#   - Walidacja pol connection_config lustrzana wzgledem FtpAdapter/EmailAdapter
+#     (worker/services/ftp_adapter.py, email_adapter.py) — ten sam kontrakt,
+#     zeby "Testuj polaczenie" w UI nigdy nie klamalo wzgledem realnej synchronizacji.
+#   - Haslo NIGDY nie trafia do logow — logowane sa wylacznie host/port/login/
+#     protocol/folder, nigdy connection_config w calosci.
+# =============================================================================
+
+_FTP_TEST_TIMEOUT_SECONDS = 15
+_EMAIL_TEST_TIMEOUT_SECONDS = 15
+_MAX_DIRECTORY_LENGTH = 500
+_MAX_FILE_PATTERN_LENGTH = 100
+_MAX_FOLDER_LENGTH = 200
+
+
+def _test_connection_fail(message: str, t_start: float) -> dict[str, Any]:
+    """Buduje jednolita odpowiedz bledu dla test_connection_* — DRY."""
+    return {
+        "success":      False,
+        "message":      message,
+        "latency_ms":   round((time.monotonic() - t_start) * 1000),
+        "sample_count": None,
+        "tested_at":    datetime.now(timezone.utc),
+    }
+
+
+async def _test_connection_ftp(
+    cfg: dict[str, Any], t_start: float, id_source: int, redis: Any,
+) -> dict[str, Any]:
+    """
+    Testuje polaczenie FTP/SFTP bez pobierania zadnych plikow.
+
+    Waliduje connection_config identycznie jak FtpAdapter
+    (worker/services/ftp_adapter.py) — 'protocol' jest WYMAGANY, zero
+    domyslnego zgadywania po porcie (ta sama decyzja co tam, patrz UWAGA 1
+    w naglowku tamtego pliku). Sprawdza polaczenie + login + dostepnosc
+    katalogu, liczy pliki pasujace do file_pattern, zwraca probke nazw.
+    """
+    host          = cfg.get("host")
+    login         = cfg.get("login")
+    password      = cfg.get("password", "")
+    directory     = cfg.get("directory", "/")
+    file_pattern  = cfg.get("file_pattern", "*")
+    protocol      = cfg.get("protocol")
+
+    # --- Walidacja wejscia (redundantna, defensywna) ---
+    if not host or not isinstance(host, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'host' w connection_config.", t_start)
+    if not login or not isinstance(login, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'login' w connection_config.", t_start)
+    if protocol not in ("ftp", "sftp"):
+        return _test_connection_fail(
+            f"Pole 'protocol' jest WYMAGANE i musi byc 'ftp' albo 'sftp' "
+            f"(otrzymano: {protocol!r}). Swiadomy wybor administratora — brak "
+            f"domyslnego zgadywania po porcie.",
+            t_start,
+        )
+    if not isinstance(directory, str) or len(directory) > _MAX_DIRECTORY_LENGTH:
+        return _test_connection_fail("Pole 'directory' ma nieprawidlowy typ lub przekracza dozwolona dlugosc.", t_start)
+    if not isinstance(file_pattern, str) or len(file_pattern) > _MAX_FILE_PATTERN_LENGTH:
+        return _test_connection_fail("Pole 'file_pattern' ma nieprawidlowy typ lub przekracza dozwolona dlugosc.", t_start)
+
+    default_port = 22 if protocol == "sftp" else 21
+    try:
+        port = int(cfg.get("port") or default_port)
+        if not (1 <= port <= 65535):
+            raise ValueError
+    except (TypeError, ValueError):
+        return _test_connection_fail("Pole 'port' musi byc liczba calkowita w zakresie 1-65535.", t_start)
+
+    logger.info(
+        "test_connection[ftp]: rozpoczynam test | host=%s port=%s protocol=%s login=%s directory=%s",
+        host, port, protocol, login, directory,
+    )
+
+    try:
+        if protocol == "sftp":
+            sample = await asyncio.to_thread(
+                _ftp_test_sftp_sync, host, port, login, password, directory, file_pattern
+            )
+        else:
+            sample = await asyncio.to_thread(
+                _ftp_test_ftp_sync, host, port, login, password, directory, file_pattern
+            )
+    except ImportError as exc:
+        return _test_connection_fail(
+            f"Brak biblioteki wymaganej dla protokolu '{protocol}' w kontenerze backendu: {exc}. "
+            f"Sprawdz backend/requirements.txt (paramiko).",
+            t_start,
+        )
+    except Exception as exc:
+        latency_ms = round((time.monotonic() - t_start) * 1000)
+        logger.warning(
+            "test_connection[ftp]: polaczenie nieudane | host=%s port=%s protocol=%s "
+            "blad=%s typ=%s latency_ms=%s",
+            host, port, protocol, str(exc)[:200], type(exc).__name__, latency_ms,
+        )
+        return {
+            "success":      False,
+            "message":      f"Blad polaczenia {protocol.upper()}: {type(exc).__name__}: {str(exc)[:200]}",
+            "latency_ms":   latency_ms,
+            "sample_count": None,
+            "tested_at":    datetime.now(timezone.utc),
+        }
+
+        # Cache pol do podgladu (diagnostyczny — patrz docstring _cache_field_preview).
+    # Probka bierze PIERWSZY dopasowany plik; jesli sample_names jest puste
+    # (katalog istnieje, ale nic nie pasuje do wzorca), fields = same nazwy pol
+    # bez wartosci przykladowej — front i tak zobaczy STRUKTURE.
+    first_name = sample["sample_names"][0] if sample["sample_names"] else None
+    preview_fields = [
+        {"field_name": "original_filename", "sample_value": first_name},
+        {"field_name": "file_path", "sample_value": None},  # znane dopiero po pobraniu — nie testujemy pobierania
+        {"field_name": "file_size", "sample_value": None},  # jw. — test nie pobiera plikow, wylacznie listuje
+    ]
+    await _cache_field_preview(redis, id_source, preview_fields)
+
+    latency_ms = round((time.monotonic() - t_start) * 1000)
+    logger.info(
+        "test_connection[ftp]: polaczenie OK | host=%s port=%s protocol=%s "
+        "plikow_pasujacych=%d latency_ms=%s",
+        host, port, protocol, sample["matched_count"], latency_ms,
+    )
+    return {
+        "success":      True,
+        "message":      (
+            f"Polaczenie {protocol.upper()} OK. Katalog '{directory}' dostepny, "
+            f"{sample['matched_count']} plik(ow) pasuje do wzorca '{file_pattern}'."
+        ),
+        "latency_ms":   latency_ms,
+        "sample_count": sample["matched_count"],
+        "fields":       [{"field_name": "plik", "sample_value": n} for n in sample["sample_names"]],
+        "tested_at":    datetime.now(timezone.utc),
+    }
+
+
+def _ftp_test_ftp_sync(host: str, port: int, login: str, password: str,
+                        directory: str, file_pattern: str) -> dict[str, Any]:
+    """Synchroniczna czesc testu FTP — wywolywana przez asyncio.to_thread."""
+    with FTP() as ftp:
+        ftp.connect(host, port, timeout=_FTP_TEST_TIMEOUT_SECONDS)
+        ftp.login(login, password)
+        ftp.cwd(directory)
+        filenames = ftp.nlst()
+    matched = [n for n in filenames if fnmatch.fnmatch(n, file_pattern)]
+    return {"matched_count": len(matched), "sample_names": matched[:5]}
+
+
+def _ftp_test_sftp_sync(host: str, port: int, login: str, password: str,
+                         directory: str, file_pattern: str) -> dict[str, Any]:
+    """Synchroniczna czesc testu SFTP — wywolywana przez asyncio.to_thread."""
+    import paramiko
+
+    transport = paramiko.Transport((host, port))
+    try:
+        transport.banner_timeout = _FTP_TEST_TIMEOUT_SECONDS
+        transport.connect(username=login, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            filenames = sftp.listdir(directory)
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+    matched = [n for n in filenames if fnmatch.fnmatch(n, file_pattern)]
+    return {"matched_count": len(matched), "sample_names": matched[:5]}
+
+
+async def _test_connection_email(
+    cfg: dict[str, Any], t_start: float, id_source: int, redis: Any,
+) -> dict[str, Any]:
+    """
+    Testuje polaczenie IMAP bez pobierania zadnych wiadomosci.
+    Waliduje connection_config identycznie jak EmailAdapter
+    (worker/services/email_adapter.py).
+    """
+    host    = cfg.get("host")
+    login   = cfg.get("login")
+    password = cfg.get("password", "")
+    folder  = cfg.get("folder", "INBOX")
+    use_ssl = bool(cfg.get("use_ssl", True))
+
+    if not host or not isinstance(host, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'host' w connection_config.", t_start)
+    if not login or not isinstance(login, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'login' w connection_config.", t_start)
+    if not isinstance(folder, str) or len(folder) > _MAX_FOLDER_LENGTH:
+        return _test_connection_fail("Pole 'folder' ma nieprawidlowy typ lub przekracza dozwolona dlugosc.", t_start)
+
+    default_port = 993 if use_ssl else 143
+    try:
+        port = int(cfg.get("port") or default_port)
+        if not (1 <= port <= 65535):
+            raise ValueError
+    except (TypeError, ValueError):
+        return _test_connection_fail("Pole 'port' musi byc liczba calkowita w zakresie 1-65535.", t_start)
+
+    logger.info(
+        "test_connection[email]: rozpoczynam test | host=%s port=%s ssl=%s login=%s folder=%s",
+        host, port, use_ssl, login, folder,
+    )
+
+    try:
+        message_count, sample_envelope = await asyncio.to_thread(
+            _email_test_sync, host, port, login, password, folder, use_ssl
+        )
+    except Exception as exc:
+        latency_ms = round((time.monotonic() - t_start) * 1000)
+        logger.warning(
+            "test_connection[email]: polaczenie nieudane | host=%s port=%s "
+            "blad=%s typ=%s latency_ms=%s",
+            host, port, str(exc)[:200], type(exc).__name__, latency_ms,
+        )
+        return {
+            "success":      False,
+            "message":      f"Blad polaczenia IMAP: {type(exc).__name__}: {str(exc)[:200]}",
+            "latency_ms":   latency_ms,
+            "sample_count": None,
+            "tested_at":    datetime.now(timezone.utc),
+        }
+
+    latency_ms = round((time.monotonic() - t_start) * 1000)
+    # NOWY (zastępuje cały fragment z Diff 4 dotyczący sample_envelope):
+    # UWAGA: rozstrzygniecie wlasne — test connection NIGDY nie pobiera tresci
+    # wiadomosci (zgodnie z zasada ustalona w naglowku tej sekcji). Cache
+    # field_preview zawiera WYLACZNIE stale nazwy pol z EmailAdapter.raw_data
+    # (worker/services/email_adapter.py), bez probek wartosci — bo jedyny
+    # sposob zdobycia realnej probki wymagalby pobrania tresci wiadomosci,
+    # co jest poza zakresem tej funkcji. To i tak cache czysto diagnostyczny:
+    # EmailAdapter nie przyjmuje field_mappings w konstruktorze, wiec front
+    # NIE powinien oferowac kroku mapowania dla tego typu zrodla (patrz
+    # rekomendacja w dokumencie dla frontu, sekcja 7).
+    preview_fields = [
+        {"field_name": "email_subject",    "sample_value": None},
+        {"field_name": "email_from",       "sample_value": None},
+        {"field_name": "email_message_id", "sample_value": None},
+        {"field_name": "original_filename","sample_value": None},
+        {"field_name": "file_path",        "sample_value": None},
+    ]
+    await _cache_field_preview(redis, id_source, preview_fields)
+    logger.info(
+        "test_connection[email]: polaczenie OK | host=%s port=%s folder=%s "
+        "wiadomosci=%d latency_ms=%s",
+        host, port, folder, message_count, latency_ms,
+    )
+    return {
+        "success":      True,
+        "message":      f"Polaczenie IMAP OK. Folder '{folder}' dostepny, {message_count} wiadomosci.",
+        "latency_ms":   latency_ms,
+        "sample_count": message_count,
+        "tested_at":    datetime.now(timezone.utc),
+    }
+
+
+def _email_test_sync(host: str, port: int, login: str, password: str,
+                      folder: str, use_ssl: bool) -> int:
+    """Synchroniczna czesc testu IMAP — wywolywana przez asyncio.to_thread."""
+    if use_ssl:
+        conn = imaplib.IMAP4_SSL(host, port, timeout=_EMAIL_TEST_TIMEOUT_SECONDS)
+    else:
+        conn = imaplib.IMAP4(host, port, timeout=_EMAIL_TEST_TIMEOUT_SECONDS)
+    try:
+        conn.login(login, password)
+        status, data = conn.select(folder, readonly=True)
+        if status != "OK":
+            raise RuntimeError(f"Nie mozna otworzyc folderu '{folder}': {status}")
+        count = int(data[0]) if data and data[0] else 0
+
+        sample_envelope: dict[str, Optional[str]] = {"subject": None, "from": None}
+        if count > 0:
+            # Probka NAJNOWSZEJ wiadomosci — tylko koperta (ENVELOPE), zero
+            # pobierania tresci/zalacznikow. UWAGA: rozstrzygniecie wlasne —
+            # dokumentacja nie precyzuje ktora wiadomosc powinna byc probka.
+            _status, msg_nums = conn.search(None, "ALL")
+            if msg_nums and msg_nums[0]:
+                last_num = msg_nums[0].split()[-1]
+                _status, env_data = conn.fetch(last_num, "(BODY[HEADER.FIELDS (SUBJECT FROM)])")
+                if env_data and env_data[0] and len(env_data[0]) > 1:
+                    header_bytes = env_data[0][1]
+                    header_text = header_bytes.decode("utf-8", errors="replace")
+                    for line in header_text.splitlines():
+                        if line.lower().startswith("subject:"):
+                            sample_envelope["subject"] = line.split(":", 1)[1].strip()
+                        elif line.lower().startswith("from:"):
+                            sample_envelope["from"] = line.split(":", 1)[1].strip()
+
+        return count, sample_envelope
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
 async def _get_config_int(db: AsyncSession, key: str, default: int) -> int:
     try:
         result = await db.execute(
@@ -799,3 +1184,220 @@ async def _audit_log(
         )
     except Exception as exc:
         logger.error("_audit_log: blad zapisu dla action=%s: %s", action, exc)
+
+_FIELD_PREVIEW_TTL_SECONDS = 3600  # spojne z galezia database (linia ~519 oryginalu)
+
+
+async def _cache_field_preview(redis: Any, id_source: int, fields: list[dict[str, Any]]) -> None:
+    """
+    Zapisuje probke pol do Redis pod kluczem field_preview:{id_source} — DOKLADNIE
+    ten sam format i TTL co galaz source_type='database' (patrz test_connection()).
+
+    UWAGA: dla ftp/email te pola sa STALE (raw_data z FtpAdapter/EmailAdapter),
+    NIE pochodza z konfigurowalnego field_mappings — te adaptery go nie przyjmuja
+    w konstruktorze. Front NIE powinien oferowac kroku "mapowania" tych pol,
+    bo adapter i tak go zignoruje. Cache istnieje wylacznie zeby GET /field-preview
+    nie zwracalo bledu i dawalo podglad diagnostyczny.
+    """
+    if not redis or not fields:
+        return
+    try:
+        await redis.set(
+            f"field_preview:{id_source}",
+            json.dumps(fields, ensure_ascii=False, default=str),
+            ex=_FIELD_PREVIEW_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_cache_field_preview: blad zapisu cache dla id_source=%s: %s",
+            id_source, exc,
+        )
+
+# =============================================================================
+# TEST CONNECTION — source_type='api'
+# =============================================================================
+# UWAGA: wierne odwzorowanie logiki juz istniejacego RestApiAdapter
+# (backend/app/schemas/unified_document.py) — te same nazwy pol config,
+# ta sama walidacja auth_type, ten sam sposob budowania naglowkow i
+# odswiezania tokenu Bearer. Rozstrzygniecia wlasne (dokumentacja tego
+# nie precyzuje dla samego testu, tylko dla realnej synchronizacji):
+#   - page_size=1 wymuszone w tescie (nie z configu source'a) — minimalizuje
+#     obciazenie zewnetrznego API, testujemy DOSTEPNOSC, nie pobieramy danych.
+#   - Nazwy pol do field_preview brane z pierwszego zwroconego rekordu —
+#     dla API ma to sens (w przeciwienstwie do ftp/email), bo RestApiAdapter
+#     REALNIE uzywa field_mappings, wiec ten podglad jest uzyteczny, nie
+#     kosmetyczny.
+#   - Limit 30 pol w probce — zabezpieczenie przed absurdalnie szerokim
+#     JSON-em (np. API zwracajace 200 kolumn) zapychajacym cache Redis.
+# =============================================================================
+
+_API_TEST_TIMEOUT_SECONDS = 15
+_MAX_BASE_URL_LENGTH = 500
+_MAX_ENDPOINT_LENGTH = 300
+_VALID_API_AUTH_TYPES = {"bearer_refresh", "api_key", "basic", "none"}
+
+
+async def _test_connection_api(
+    cfg: dict[str, Any], t_start: float, id_source: int, redis: Any,
+) -> dict[str, Any]:
+    """
+    Testuje polaczenie REST API — jedno zapytanie GET z page_size=1,
+    bez pobierania pelnej listy dokumentow. Waliduje connection_config
+    identycznie jak RestApiAdapter._validate_config().
+    """
+    base_url    = (cfg.get("base_url") or "").rstrip("/")
+    auth_type   = cfg.get("auth_type", "api_key")
+    auth_config = cfg.get("auth_config", {})
+    ep_list     = cfg.get("endpoint_list", "")
+    pagination  = cfg.get("pagination", {})
+
+    if not base_url or not isinstance(base_url, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'base_url' w connection_config.", t_start)
+    if len(base_url) > _MAX_BASE_URL_LENGTH:
+        return _test_connection_fail("Pole 'base_url' przekracza dozwolona dlugosc.", t_start)
+    if not ep_list or not isinstance(ep_list, str):
+        return _test_connection_fail("Brak lub nieprawidlowy 'endpoint_list' w connection_config.", t_start)
+    if len(ep_list) > _MAX_ENDPOINT_LENGTH:
+        return _test_connection_fail("Pole 'endpoint_list' przekracza dozwolona dlugosc.", t_start)
+    if auth_type not in _VALID_API_AUTH_TYPES:
+        return _test_connection_fail(
+            f"Pole 'auth_type' musi byc jednym z {sorted(_VALID_API_AUTH_TYPES)} "
+            f"(otrzymano: {auth_type!r}).",
+            t_start,
+        )
+    if not isinstance(auth_config, dict):
+        return _test_connection_fail("Pole 'auth_config' musi byc obiektem JSON.", t_start)
+
+    logger.info(
+        "test_connection[api]: rozpoczynam test | base_url=%s auth_type=%s endpoint_list=%s",
+        base_url, auth_type, ep_list,
+    )
+
+    try:
+        sample = await _api_test_request(base_url, ep_list, auth_type, auth_config, pagination)
+    except ImportError as exc:
+        return _test_connection_fail(f"Brak biblioteki httpx w kontenerze backendu: {exc}.", t_start)
+    except Exception as exc:
+        latency_ms = round((time.monotonic() - t_start) * 1000)
+        logger.warning(
+            "test_connection[api]: polaczenie nieudane | base_url=%s blad=%s typ=%s latency_ms=%s",
+            base_url, str(exc)[:200], type(exc).__name__, latency_ms,
+        )
+        return {
+            "success":      False,
+            "message":      f"Blad polaczenia API: {type(exc).__name__}: {str(exc)[:200]}",
+            "latency_ms":   latency_ms,
+            "sample_count": None,
+            "tested_at":    datetime.now(timezone.utc),
+        }
+
+    latency_ms = round((time.monotonic() - t_start) * 1000)
+
+    if sample["field_names"]:
+        preview_fields = [
+            {"field_name": name, "sample_value": sample["first_item"].get(name)}
+            for name in sample["field_names"]
+        ]
+        await _cache_field_preview(redis, id_source, preview_fields)
+
+    logger.info(
+        "test_connection[api]: polaczenie OK | base_url=%s status_code=%s pol_znalezionych=%d latency_ms=%s",
+        base_url, sample["status_code"], len(sample["field_names"]), latency_ms,
+    )
+    return {
+        "success":      True,
+        "message":      (
+            f"Polaczenie API OK (HTTP {sample['status_code']}). "
+            f"Znaleziono {sample['item_count']} rekord(ow), {len(sample['field_names'])} pol w probce."
+        ),
+        "latency_ms":   latency_ms,
+        "sample_count": sample["item_count"],
+        "fields":       [
+            {"field_name": n, "sample_value": sample["first_item"].get(n)}
+            for n in sample["field_names"]
+        ],
+        "tested_at":    datetime.now(timezone.utc),
+    }
+
+
+def _api_build_auth_headers(auth_type: str, auth_config: dict[str, Any]) -> dict[str, str]:
+    """Identyczna logika jak RestApiAdapter._get_auth_headers() — zero rozjazdu zachowania."""
+    if auth_type == "none":
+        return {}
+
+    if auth_type == "api_key":
+        key = auth_config.get("api_key", "")
+        hdr = auth_config.get("header_name", "X-Api-Key")
+        return {hdr: key}
+    if auth_type == "basic":
+        import base64
+        login = auth_config.get("login", "")
+        pwd   = auth_config.get("password", "")
+        token = base64.b64encode(f"{login}:{pwd}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+    if auth_type == "bearer_refresh":
+        token = auth_config.get("access_token", "")
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+async def _api_refresh_bearer_token(auth_config: dict[str, Any]) -> None:
+    """Identyczna logika jak RestApiAdapter._refresh_bearer_token() — mutuje auth_config in-place."""
+    import httpx
+
+    refresh_url = auth_config.get("token_url", "")
+    if not refresh_url:
+        return
+    async with httpx.AsyncClient(timeout=_API_TEST_TIMEOUT_SECONDS) as client:
+        resp = await client.post(
+            refresh_url,
+            data={
+                "grant_type":    "refresh_token",
+                "refresh_token": auth_config.get("refresh_token", ""),
+                "client_id":     auth_config.get("client_id", ""),
+                "client_secret": auth_config.get("client_secret", ""),
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        auth_config["access_token"] = data.get("access_token", "")
+
+
+async def _api_test_request(
+    base_url: str, ep_list: str, auth_type: str,
+    auth_config: dict[str, Any], pagination: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Jedno zapytanie GET testowe (page_size=1). Zwraca liczbe rekordow i
+    nazwy pol pierwszego rekordu do field_preview. Wylacznie odczyt.
+    """
+    import httpx
+
+    url     = f"{base_url}{ep_list}"
+    headers = _api_build_auth_headers(auth_type, auth_config)
+
+    page_param = pagination.get("page_param", "page")
+    params = {page_param: 1, "page_size": 1}
+
+    async with httpx.AsyncClient(timeout=_API_TEST_TIMEOUT_SECONDS) as client:
+        resp = await client.get(url, headers=headers, params=params)
+
+        if resp.status_code == 401 and auth_type == "bearer_refresh":
+            await _api_refresh_bearer_token(auth_config)
+            headers = _api_build_auth_headers(auth_type, auth_config)
+            resp = await client.get(url, headers=headers, params=params)
+
+        resp.raise_for_status()
+        data = resp.json()
+
+    items_key = pagination.get("items_key", "data")
+    items = data if isinstance(data, list) else data.get(items_key, [])
+
+    first_item = items[0] if items and isinstance(items[0], dict) else {}
+
+    return {
+        "status_code": resp.status_code,
+        "item_count":  len(items) if isinstance(items, list) else 0,
+        "first_item":  first_item,
+        "field_names": list(first_item.keys())[:30],
+    }

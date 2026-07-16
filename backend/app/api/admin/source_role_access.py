@@ -151,22 +151,30 @@ async def list_my_accessible_sources(
 # GET /sources/{id}/field-preview — probka pol ze zrodla (cache Redis)
 # =============================================================================
 
+_SOURCE_TYPES_WITHOUT_FIELD_MAPPING = frozenset({"ftp", "email", "ksef20", "manual"})
+
+
 @router.get(
     "/{id_source}/field-preview",
     summary="Probka pol dostepnych w zrodle (z cache Redis)",
     description=(
         "Zwraca liste pol dostepnych w zrodle z przykladowymi wartosciami — "
-        "uzywane przy konfiguracji mapowania pol w UI. "
+        "uzywane przy konfiguracji mapowania pol w UI. Dotyczy WYLACZNIE "
+        "source_type='database'/'api' — te typy realnie obsluguja field_mappings "
+        "w adapterze. Dla source_type in (ftp, email, ksef20, manual) endpoint "
+        "zwraca 409 (nie 424) — te typy nie obsluguja mapowania pol architektonicznie, "
+        "wiec zaden test-connection tego nie zmieni. "
         "Rozni sie od test-connection tym ze: (1) uzywane jest cache Redis (TTL 1h), "
         "(2) zwraca sformatowana liste par {field_name, sample_value} gotowa do "
         "renderowania dropdownow mapowania, (3) nie pobiera nowych danych jesli cache aktualny. "
-        "Wymaga wcczesniejszego wykonania POST /sources/{id}/test-connection "
+        "Dla database/api wymaga wczesniejszego wykonania POST /sources/{id}/test-connection "
         "ktore zapelnia cache. "
         "**Wymaga:** `sources.view`."
     ),
     responses={
         404: {"description": "Zrodlo nie istnieje"},
-        424: {"description": "Cache pusty — wykonaj najpierw test-connection"},
+        409: {"description": "Ten source_type nie obsluguje mapowania pol (ftp/email/ksef20/manual)"},
+        424: {"description": "Cache pusty — wykonaj najpierw test-connection (tylko database/api)"},
     },
     dependencies=[require_permission("sources.view")],
 )
@@ -176,6 +184,41 @@ async def get_field_preview(
     db: DB,
     redis: RedisClient,
 ):
+    # Pobierz TEZ source_type — poprzednia wersja pobierala tylko id/nazwe,
+    # przez co endpoint nie mial jak odroznic "cache jeszcze pusty" od
+    # "ten typ zrodla nigdy nie bedzie mial cache". Sprawdzamy PRZED cache,
+    # zeby nie marnowac odpytania Redis dla typow ktore i tak dostana 409.
+    from sqlalchemy import text
+    result = await db.execute(
+        text(
+            f"SELECT [id_source], [source_name], [source_type] "
+            f"FROM [dbo].[skw_document_sources] WHERE [id_source] = :s"
+        ),
+        {"s": id_source},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Zrodlo ID={id_source} nie istnieje.")
+
+    source_type = row[2]
+    if source_type in _SOURCE_TYPES_WITHOUT_FIELD_MAPPING:
+        logger.info(
+            "field_preview: source_type=%r nie obsluguje mapowania pol | id_source=%s",
+            source_type, id_source,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code":    "field_preview.not_applicable",
+                "message": (
+                    f"Zrodlo typu '{source_type}' nie obsluguje mapowania pol. "
+                    f"Dane sa przetwarzane automatycznie (OCR dla ftp/email, "
+                    f"predefiniowany adapter dla ksef20, brak synchronizacji dla manual) — "
+                    f"nie wymagaja konfiguracji mapowania przez administratora."
+                ),
+            },
+        )
+
     cache_key = f"field_preview:{id_source}"
 
     # Probuj z cache (TTL 1h — test-connection jest kosztowne)
@@ -196,15 +239,6 @@ async def get_field_preview(
             data={"fields": cached_preview, "from_cache": True},
             app_code="sources.field_preview",
         )
-
-    # Brak cache — sprawdz czy zrodlo istnieje i zaproponuj test-connection
-    from sqlalchemy import text
-    result = await db.execute(
-        text(f"SELECT [id_source], [source_name] FROM [dbo].[skw_document_sources] WHERE [id_source] = :s"),
-        {"s": id_source},
-    )
-    if not result.fetchone():
-        raise HTTPException(status_code=404, detail=f"Zrodlo ID={id_source} nie istnieje.")
 
     raise HTTPException(
         status_code=424,

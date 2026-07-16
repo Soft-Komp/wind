@@ -23,8 +23,9 @@ Kontrakt odpowiedzi zewnetrznego systemu (sql_procedure):
     Dokladnie 3 kolumny, dokladnie 1 wiersz.
 
 Kontrakt odpowiedzi zewnetrznego systemu (api_call):
-    HTTP 200 z JSON: {"status": "success|error|warning", "message": "...", "refresh_document": 0|1}
-    HTTP != 200 → traktowane jako error.
+    HTTP 2xx z JSON: {"status": "success|error|warning", "message": "...", "refresh_document": 0|1}
+    HTTP poza zakresem 200-299 → traktowane jako error (body nie jest wtedy
+    nawet parsowane jako JSON — patrz _execute_api_call).
 
 Placeholdery w operation_config:
     {id_instance}, {id_document}, {doc_number}, {contractor_name},
@@ -35,6 +36,16 @@ Logowanie:
     Kazde wywolanie → skw_source_action_log niezaleznie od wyniku.
     request_payload, response_payload — kontrolowane przez SystemConfig:
     HOOK_LOG_REQUEST_PAYLOAD, HOOK_LOG_RESPONSE_PAYLOAD (domyslnie true).
+    Naglowki HTTP (headers) NIGDY nie trafiaja do request_payload — patrz
+    _execute_api_call, budowa request_payload celowo pomija headers_resolved.
+
+Szyfrowanie operation_config (POPRAWKA 2026-07-15):
+    skw_source_hooks.operation_config jest szyfrowany Fernet na poziomie
+    modelu ORM (SourceHook.set_operation_config/get_operation_config),
+    identycznie jak DocumentSource.connection_config. _get_hooks() ponizej
+    czyta ta kolumne surowym SQL (JOIN z instancja, z powodow wydajnosciowych
+    — omija ORM), wiec MUSI recznie deszyfrowac operation_config po stronie
+    Pythona, inaczej _execute_hook() dostanie ciphertext zamiast JSON-a.
 
 UWAGA: from __future__ import annotations — NIGDY (SQLAlchemy ORM, FastAPI).
 """
@@ -169,6 +180,7 @@ class HookService:
                         doc_data=doc_data,
                         action=action,
                         id_instance=id_instance,
+                        timeout_s=timeout_s,
                     ),
                     timeout=timeout_s,
                 )
@@ -302,6 +314,7 @@ class HookService:
         doc_data: dict[str, Any],
         action: str,
         id_instance: int,
+        timeout_s: float,
     ) -> dict[str, Any]:
         """
         Wykonuje hook zgodnie z operation_type.
@@ -327,6 +340,7 @@ class HookService:
                 doc_data=doc_data,
                 action=action,
                 id_instance=id_instance,
+                timeout_s=timeout_s,
             )
 
         raise ValueError(f"Nieznany operation_type: {op_type!r}")
@@ -425,12 +439,14 @@ class HookService:
         doc_data: dict[str, Any],
         action: str,
         id_instance: int,
+        timeout_s: float,
     ) -> dict[str, Any]:
         """
         Wykonuje HTTP call do zewnetrznego API.
 
         Kontrakt odpowiedzi: JSON {"status": "...", "message": "...", "refresh_document": 0|1}
-        HTTP != 200 → status=error z kodem HTTP w message.
+        HTTP poza zakresem 2xx → status=error z kodem HTTP w message, body
+        NIE jest wtedy parsowane jako JSON.
 
         Przyklad op_config:
         {
@@ -466,12 +482,20 @@ class HookService:
                 if isinstance(v, str) else str(v)
             )
 
+        # UWAGA: headers_resolved CELOWO nie wchodzi do request_payload —
+        # zawiera realne sekrety (np. X-Api-Key). Payload logowany do
+        # skw_source_action_log ogranicza sie do url/method/body.
         request_payload = json.dumps({
             "url": url, "method": method, "body": body_resolved,
         }, ensure_ascii=False, default=str)
 
-        async with httpx.AsyncClient(timeout=None) as client:
-            # Timeout zarzadzany przez asyncio.wait_for w run_after — tu None
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            # Jeden limit czasu, jedno zrodlo prawdy: timeout_seconds z
+            # operation_config hooka (5-120s). Wczesniej httpx mial timeout=None
+            # i polegal wylacznie na zewnetrznym asyncio.wait_for w run_after —
+            # dzialalo, ale administrator ustawiajacy np. timeout_seconds=60
+            # nie mial zadnego sposobu zobaczyc TEGO w samym httpx (i odwrotnie,
+            # ryzyko rozjazdu gdyby ktos kiedys zmienil jeden limit bez drugiego).
             resp = await client.request(
                 method=method,
                 url=url,
@@ -481,7 +505,7 @@ class HookService:
 
         response_payload = resp.text[:_MAX_PAYLOAD_LOG_BYTES]
 
-        if resp.status_code != 200:
+        if not 200 <= resp.status_code < 300:
             return {
                 "status":            "error",
                 "message":           f"HTTP {resp.status_code}: {resp.text[:200]}",
@@ -527,7 +551,25 @@ class HookService:
         id_instance: int,
         action: str,
     ) -> list[dict[str, Any]]:
-        """Pobiera aktywne hooki dla zrodla instancji i danej akcji."""
+        """
+        Pobiera aktywne hooki dla zrodla instancji i danej akcji.
+
+        POPRAWKA (2026-07-15): operation_config jest szyfrowany Fernet w DB
+        (SourceHook.set_operation_config). To zapytanie omija ORM (raw SQL +
+        JOIN, celowo, dla wydajnosci — jedno zapytanie zamiast N+1), wiec
+        MUSI recznie deszyfrowac operation_config po stronie Pythona. Bez
+        tego _execute_hook() dostalby ciphertext, json.loads() rzucilby
+        JSONDecodeError (zlapany cicho wyzej w _execute_hook), i KAZDY
+        hook zaczalby dzialac na pustym operation_config={} bez zadnego
+        widocznego bledu — dokladnie ten sam wzorzec cichej awarii co
+        wczesniejszy bug z worker_redis vs ArqRedis w source_sync_task.py.
+
+        Blad deszyfrowania pojedynczego hooka NIE przerywa calej listy —
+        ten hook dostaje operation_config="{}" (traktowany jak pusta
+        konfiguracja przez _execute_hook, ktory i tak sprawdza wymagane
+        pola i rzuci czytelny ValueError przy probie uzycia), a pozostale
+        hooki dla tej samej instancji nadal sa przetwarzane normalnie.
+        """
         result = await db.execute(
             text(f"""
                 SELECT
@@ -547,7 +589,25 @@ class HookService:
             {"inst": id_instance, "action": action},
         )
         cols = list(result.keys())
-        return [dict(zip(cols, r)) for r in result.fetchall()]
+        rows = [dict(zip(cols, r)) for r in result.fetchall()]
+
+        from app.core.encryption import decrypt_value
+
+        for row in rows:
+            encrypted = row.get("operation_config")
+            if not encrypted:
+                row["operation_config"] = "{}"
+                continue
+            try:
+                row["operation_config"] = decrypt_value(encrypted)
+            except Exception as exc:
+                logger.error(
+                    "_get_hooks: blad deszyfrowania operation_config dla hook_id=%s: %s",
+                    row.get("id_hook"), type(exc).__name__,
+                )
+                row["operation_config"] = "{}"
+
+        return rows
 
     @classmethod
     async def _get_document_data(

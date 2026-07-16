@@ -921,3 +921,83 @@ async def _audit_log(
         )
     except Exception as exc:
         logger.error("_audit_log: blad zapisu dla action=%s: %s", action, exc)
+
+
+async def get_line_items(
+    db: AsyncSession,
+    id_instance: int,
+    *,
+    actor_id: int,
+    can_view_all: bool,
+) -> dict[str, Any]:
+    """
+    Pozycje dokumentu — dispatch po source_type zrodla.
+
+    Kontrakt odpowiedzi (2026-07-15, ustalone w rozmowie roboczej,
+    NIEUDOKUMENTOWANE w Etap2_Instrukcja_Techniczna — wymaga formalnego
+    spisania po wdrozeniu):
+        {"format": "structured", "items": [...]}   — database, api
+        {"format": "ksef_xml", "raw": "<xml>"}      — ksef20
+        {"format": "not_applicable"}                — ftp, email, manual
+                                                        (zwrocone z HTTP 409,
+                                                        spojnie z field-preview)
+    """
+    instance = await _get_instance_or_404(db, id_instance)
+    await _ensure_visibility(db, instance, actor_id=actor_id, can_view_all=can_view_all)
+
+    if not await _check_user_permission(db, actor_id, "documents.view_line_items"):
+        raise HTTPException(
+            status_code=403,
+            detail="Brak uprawnienia do podgladu pozycji dokumentu.",
+        )
+
+    id_source   = instance["id_source"]
+    id_document = instance["id_document"]
+
+    src_result = await db.execute(
+        text(f"SELECT [source_type] FROM [{_SCHEMA}].[skw_document_sources] WHERE [id_source] = :s"),
+        {"s": id_source},
+    )
+    src_row = src_result.fetchone()
+    source_type = src_row[0] if src_row else None
+
+    if source_type in ("ftp", "email", "manual"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "line_items.not_applicable",
+                "message": f"Zrodlo typu '{source_type}' nie obsluguje pozycji dokumentu.",
+            },
+        )
+
+    if source_type == "ksef20":
+        extra = json.loads(instance.get("extra_data") or "{}")
+        xml_raw = extra.get("xml")
+        if not xml_raw:
+            raise HTTPException(status_code=404, detail="Brak surowego XML dla tego dokumentu KSeF.")
+        return {"format": "ksef_xml", "raw": xml_raw}
+
+    if source_type in ("database", "api"):
+        # Cache Redis TTL 60s — patrz uzasadnienie w rozmowie roboczej
+        # (wielu userow otwierajacych ten sam dokument w krotkim czasie).
+        cache_key = f"line_items:{id_source}:{id_document}"
+        # UWAGA: redis nie jest dzis parametrem tej funkcji — wymaga
+        # dopisania do sygnatury i przekazania z routera, jesli cache
+        # ma byc uzyty. Poki co pomijam cache w tym szkielecie, zaznaczam
+        # jako TODO jawnie, nie ukrywam.
+        from app.schemas.unified_document import get_adapter_by_source_id
+        adapter = await get_adapter_by_source_id(db, id_source)
+        if adapter is None or not hasattr(adapter, "get_line_items"):
+            raise HTTPException(status_code=409, detail={
+                "code": "line_items.not_applicable",
+                "message": "Adapter tego zrodla nie obsluguje pozycji.",
+            })
+        items = await adapter.get_line_items(id_document)
+        if items is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "line_items.not_configured",
+                "message": "To zrodlo nie ma skonfigurowanych pozycji (pole opcjonalne, puste).",
+            })
+        return {"format": "structured", "items": items}
+
+    raise HTTPException(status_code=409, detail={"code": "line_items.not_applicable", "message": f"Nieznany source_type '{source_type}'."})

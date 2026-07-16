@@ -583,3 +583,24 @@ async def get_document_pdf(
             "Cache-Control": "no-store",
         },
     )
+
+@router.get(
+    "/{id_instance}/line-items",
+    summary="Pozycje (linie) dokumentu",
+    description=(
+        "Zwraca pozycje faktury — format zalezny od source_type (structured/ksef_xml). "
+        "409 jesli zrodlo nie obsluguje pozycji. **Wymaga:** `documents.view` + `documents.view_line_items`."
+    ),
+    responses={
+        403: {"description": "Brak uprawnienia documents.view_line_items"},
+        404: {"description": "Dokument nie istnieje"},
+        409: {"description": "Zrodlo nie obsluguje pozycji"},
+    },
+    dependencies=[require_permission("documents.view")],
+)
+async def get_line_items_endpoint(id_instance: int, current_user: CurrentUser, db: DB):
+    can_view_all = await _can_view_all(current_user, db)
+    result = await svc.get_line_items(
+        db, id_instance, actor_id=current_user.id_user, can_view_all=can_view_all,
+    )
+    return BaseResponse.ok(data=result, app_code="documents.line_items")
