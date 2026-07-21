@@ -1,42 +1,61 @@
 ================================================================ 
  WINDYKACJA GPGK -- RAPORT STRUKTURY PROJEKTU 
- Data: 10.07.2026  Czas:  8:37:43,61 
+ Data: 21.07.2026  Czas: 11:39:00,15 
  Katalog bazowy: C:\python\Windykacja-gpgk-backend 
 ================================================================ 
  
 ===== GIT STATUS ===== 
  
 On branch master
-Your branch is up to date with 'origin/master'.
+Your branch is ahead of 'origin/master' by 2 commits.
+  (use "git push" to publish your local commits)
 
 Changes not staged for commit:
-  (use "git add <file>..." to update what will be committed)
+  (use "git add/rm <file>..." to update what will be committed)
   (use "git restore <file>..." to discard changes in working directory)
+	deleted:    diag_adapter.b64
+	deleted:    diag_adapter.py
+	deleted:    diag_config_v2.b64
+	deleted:    diag_config_v2.py
+	deleted:    diag_logging.b64
+	deleted:    diag_logging.py
+	deleted:    diag_source1.b64
+	deleted:    diag_source1.py
+	deleted:    diag_source1_v2.b64
+	deleted:    diag_source1_v2.py
+	deleted:    diag_test192.b64
+	deleted:    diag_test192.py
+	deleted:    projekt_raport_2026-07-10_08-37.txt
+	deleted:    projekt_raport_2026-07-17_11-16.txt
 	modified:   worker/core/db.py
 	modified:   worker/services/ocr_service.py
+	modified:   worker/tasks/auto_dispatch_task.py
 	modified:   worker/tasks/email_task.py
+	modified:   worker/tasks/notification_task.py
 	modified:   worker/tasks/ocr_task.py
 	modified:   worker/tasks/otp_pdf_task.py
+	modified:   worker/tasks/snapshot_task.py
+	modified:   worker/tasks/source_sync_task.py
 
 Untracked files:
   (use "git add <file>..." to include in what will be committed)
 	backend/tmp/
-	projekt_raport_2026-07-10_08-37.txt
+	projekt_raport_2026-07-21_11-38.txt
 
 no changes added to commit (use "git add" and/or "git commit -a")
  
 ===== GIT LOG (ostatnie 10 commitow) ===== 
  
-bb1485d Etap 2.1
-35ab8f5 Etap 2.1
-aca8f5c Etap 2.1
-987ef06 Etap 2.1
-a7f190b Etap 2.1
-da2dc87 Etap 2.1
-0676b28 Etap 2.1
-10af7af Etap 2
-48a1c53 Etap 2
-6553554 Etap 2
+efcfebc Etap 2.1
+72771fd Etap 2.1
+4ff43a3 Etap 2.1
+5d962be Etap 2.1
+ab72a9a Etap 2.1
+5207e7f Etap 2.1
+a2a56f8 Etap 2.1
+5e1a76c Etap 2.1
+e301f02 Etap 2.1
+5f28e6f Etap 2.1
  
 ===== GIT BRANCH ===== 
  
@@ -96,7 +115,16 @@ da2dc87 Etap 2.1
 0050_template_layout_engine.py
 0051_monit_kwoty_zbiorcze.py
 0052_watchdog_kolekcje.py
+0053_manual_upload_ocr_review.py
+0054_widen_id_document.py
+0055_encrypt_hook_operation_config.py
+0056_add_line_items_permission.py
+0057_document_push_items.py
+0058_auto_dispatch_error_threshold.py
+0059_notification_type_check_constraint.py
+0060_source_type_add_ksef20.py
+0061_instance_detail_ksef_columns.py
+0062_instance_detail_unified_fields.py
 f124fa9b58eb_initial_schema.py
  
  -- alembic current przez docker: 
-^C

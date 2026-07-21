@@ -39,6 +39,67 @@ from app.schemas.unified_document import UnifiedDocument
 logger = logging.getLogger(__name__)
 
 _SCHEMA = "dbo"
+
+# =============================================================================
+# NAPRAWA (self-review "czy nie zapomnielismy jakichs mechanizmow z
+# podstawowego projektu"): kazdy wiekszy modul w tym projekcie ma
+# administracyjny wylacznik awaryjny w SystemConfig, sprawdzany jako
+# PIERWSZY krok kazdej funkcji serwisowej — wzorzec udokumentowany wprost
+# w MASTER_DOKUMENTACJA.md ("Warstwa 2: APPROVAL_MODULE_ENABLED — 503
+# jesli false"), zastosowany konsekwentnie w approval_service.py,
+# faktura_akceptacja_service.py, itd. webhook_service.py NIGDY go nie
+# mial — ten sam mechanizm, skopiowany 1:1 ze wzorca approval_service.py
+# (_check_feature_flag), zeby administrator mogl pilnie zatrzymac WSZYSTKIE
+# zrodla push naraz (atak, naduzycie, awaria integratora), bez potrzeby
+# dezaktywowania kazdego zrodla osobno.
+# =============================================================================
+
+async def _check_feature_flag(
+    db: AsyncSession,
+    redis: Any,
+    key: str,
+    expected: str = "true",
+    error_msg: str = "Funkcja jest wylaczona.",
+) -> None:
+    """
+    Sprawdza wartosc klucza w SystemConfig przez Redis cache (TTL 5 min).
+    Rzuca HTTP 503 jesli wartosc rozna od expected.
+    Identyczny wzorzec co approval_service.py::_check_feature_flag —
+    scelowo zduplikowany (kazdy plik serwisu ma wlasna kopie, zgodnie
+    z konwencja tego projektu), nie zaimportowany, zeby unikac
+    miedzymodulowej zaleznosci webhook_service <-> approval_service.
+    """
+    cache_key = f"syscfg:{key}"
+    cached = await redis.get(cache_key)
+
+    if cached is None:
+        row = await db.execute(
+            text(
+                f"SELECT [ConfigValue] FROM [{_SCHEMA}].[skw_SystemConfig] "
+                f"WHERE [ConfigKey] = :k AND [IsActive] = 1"
+            ),
+            {"k": key},
+        )
+        result = row.fetchone()
+        value = result[0] if result else "false"
+        await redis.set(cache_key, value, ex=300)
+    else:
+        value = cached.decode() if isinstance(cached, bytes) else cached
+
+    if value.lower() != expected.lower():
+        raise HTTPException(status_code=503, detail=error_msg)
+
+
+async def _check_webhook_module_enabled(db: AsyncSession, redis: Any) -> None:
+    """Weryfikuje flage WEBHOOK_MODULE_ENABLED — wylacznik awaryjny calego mechanizmu push."""
+    await _check_feature_flag(
+        db, redis,
+        key="WEBHOOK_MODULE_ENABLED",
+        expected="true",
+        error_msg=(
+            "Mechanizm webhook push jest tymczasowo wylaczony przez administratora."
+        ),
+    )
 _DEFAULT_RATE_LIMIT_PER_MINUTE = 100
 
 # NAPRAWA 2026-07-16 (Tier 1a — idempotencja retry, Recenzja Krytyczna Tier1/Tier2):
@@ -84,13 +145,22 @@ async def receive_document(
         HTTPException(429): przekroczono rate limit.
         HTTPException(422): payload nie da sie zmapowac na UnifiedDocument,
                             lub pole 'items' ma nieprawidlowy ksztalt/przekracza limit.
+        HTTPException(503): WEBHOOK_MODULE_ENABLED=false (wylacznik awaryjny).
 
     NAPRAWA 2026-07-16 (Tier 1a/1b, Recenzja Krytyczna Tier1/Tier2 +
     Rozstrzygniecia Koncowe): dodano idempotencje retry (ten sam
     id_source+id_document z aktywna instancja -> zwroc istniejacy
     id_instance, IGNORUJ nowy payload calkowicie) oraz zapis pozycji
     (items) do skw_document_push_items.
+
+    NAPRAWA 2026-07-16 (self-review "brakujace mechanizmy z podstawowego
+    projektu"): dodano WEBHOOK_MODULE_ENABLED — wylacznik awaryjny calego
+    mechanizmu, wzorem APPROVAL_MODULE_ENABLED. Sprawdzany JAKO PIERWSZY
+    krok, przed weryfikacja tokenu — jesli modul jest wylaczony, nie ma
+    sensu nawet probowac dopasowac tokenu.
     """
+    await _check_webhook_module_enabled(db, redis)
+
     # ── Krok 1: Zweryfikuj token, znajdz zrodlo ──────────────────────────────
     from app.services.source_admin_service import verify_webhook_token
 
@@ -107,7 +177,38 @@ async def receive_document(
     # ── Rate limiting (PRZED jakimkolwiek przetwarzaniem) ────────────────────
     await _check_rate_limit(db, redis, source.id_source, token)
 
-    # ── Krok 2+3: Sparsuj body, zbuduj UnifiedDocument + zwaliduj items ──────
+    # ── Krok 2a: Wyodrebnij WYLACZNIE id_document (lekko, bez pelnej
+    #    walidacji) — potrzebne do sprawdzenia idempotencji PRZED
+    #    zaangazowaniem sie w pelna walidacje payloadu. ─────────────────────
+    try:
+        id_document_probe = _extract_id_document_only(payload)
+    except WebhookPayloadError as exc:
+        await _log_webhook_attempt(
+            db, id_source=source.id_source, success=False,
+            error_message=str(exc), client_ip=client_ip,
+        )
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # ── Tier 1a: Idempotencja — SPRAWDZANA PRZED pelna walidacja payloadu.
+    #    NAPRAWA (self-review): jesli retry ma lekko wadliwy 'items' (zly
+    #    ksztalt, przekroczony limit), a walidacja happens PRZED tym
+    #    sprawdzeniem, retry dostalby 422 zamiast 200 — co lamie
+    #    zatwierdzona zasade "IGNORUJ nowy payload calkowicie". Dlatego
+    #    pelna walidacja (ponizej) uruchamia sie DOPIERO gdy wiemy, ze to
+    #    NIE jest retry. ─────────────────────────────────────────────────
+    existing = await _find_active_instance(db, source.id_source, id_document_probe)
+    if existing is not None:
+        existing_id_instance, existing_status = existing
+        return await _handle_idempotent_hit(
+            db, id_source=source.id_source, id_instance=existing_id_instance,
+            status_value=existing_status, client_ip=client_ip,
+        )
+
+    # ── Krok 2b+3: DOPIERO TERAZ pelna walidacja — zbuduj UnifiedDocument
+    #    (field_mappings, typy) + zwaliduj items (ksztalt, limit). Ten krok
+    #    swiadomie powtarza ekstrakcje id_document (przez
+    #    _build_unified_document) — drobny narzut, ale unika utrzymywania
+    #    dwoch niezaleznych zrodel prawdy o parsowaniu payloadu. ──────────
     try:
         unified_doc = await _build_unified_document(db, source, payload)
         items_raw = await _validate_items_payload(db, payload)
@@ -117,16 +218,6 @@ async def receive_document(
             error_message=str(exc), client_ip=client_ip,
         )
         raise HTTPException(status_code=422, detail=str(exc))
-
-    # ── Tier 1a: Idempotencja — czy juz istnieje AKTYWNA instancja tego
-    #    samego id_document dla tego samego zrodla? ─────────────────────────
-    existing = await _find_active_instance(db, source.id_source, unified_doc.id_document)
-    if existing is not None:
-        existing_id_instance, existing_status = existing
-        return await _handle_idempotent_hit(
-            db, id_source=source.id_source, id_instance=existing_id_instance,
-            status_value=existing_status, client_ip=client_ip,
-        )
 
     # ── Krok 5: Zapis instancji — z siatka bezpieczenstwa na race condition.
     #    SELECT powyzej obsluzy wiekszosc przypadkow; ponizszy try/except
@@ -371,6 +462,36 @@ async def _insert_push_items(
 # =============================================================================
 # Krok 2+3: Parsowanie i mapowanie
 # =============================================================================
+
+def _extract_id_document_only(payload: dict[str, Any]) -> str:
+    """
+    Wyodrebnia WYLACZNIE id_document (lub alias ksef_id) z payloadu —
+    NIE buduje pelnego UnifiedDocument, NIE odpytuje field_mappings.
+
+    NAPRAWA (self-review "Chodzi o funkcjonalnosc"): idempotencja retry
+    (Tier 1a) musi byc sprawdzona PRZED pelna walidacja payloadu
+    (_build_unified_document + _validate_items_payload), inaczej retry
+    z lekko wadliwym 'items' (limit, zly ksztalt) dostawalby 422 zamiast
+    200 — co lamie zatwierdzona zasade "IGNORUJ nowy payload calkowicie"
+    dla idempotentnych trafien. id_document jest jedynym polem
+    NIEZBEDNYM do sprawdzenia idempotencji, wiec tylko ono jest
+    walidowane na tym wczesnym etapie — reszta payloadu (w tym items)
+    jest w ogole nietykana, dopoki nie wiemy, ze to NIE jest retry.
+
+    Raises:
+        WebhookPayloadError: brak id_document/ksef_id, lub payload nie
+                              jest obiektem JSON.
+    """
+    if not isinstance(payload, dict):
+        raise WebhookPayloadError("Body webhooka musi byc obiektem JSON.")
+
+    id_document = _extract_str(payload, "id_document") or _extract_str(payload, "ksef_id")
+    if not id_document:
+        raise WebhookPayloadError(
+            "Payload nie zawiera 'id_document' (lub 'ksef_id') — wymagany identyfikator dokumentu."
+        )
+    return id_document
+
 
 async def _build_unified_document(
     db: AsyncSession,

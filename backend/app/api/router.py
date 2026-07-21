@@ -230,11 +230,19 @@ _register_router(
 )
 
 # 19. WEBHOOKS — przyjmowanie dokumentow push (PUBLICZNY)
+# NAPRAWA 2026-07-17: prefix="" (nie "/webhooks") — app.api.webhooks.router
+# JUZ MA wbudowany prefix="/webhooks" we wlasnej definicji
+# (router = APIRouter(prefix="/webhooks")). Podanie go DRUGI RAZ tutaj
+# sumowaloby sie (FastAPI/Starlette kumuluje prefiksy zagniezdzonych
+# routerow), dajac realna sciezke /api/v1/webhooks/webhooks/sources/{token}
+# zamiast udokumentowanej /api/v1/webhooks/sources/{token} — dokladnie
+# ten sam mechanizm, ktorego swiadomie unika sekcja 18 (admin, patrz
+# komentarz ponizej "podsciezki maja juz swoj prefix").
 _register_router(
     api_router,
     module_path="app.api.webhooks",
     attr="router",
-    prefix="/webhooks",
+    prefix="",
     tags=["Webhooks — Integracje zewnetrzne"],
 )
 

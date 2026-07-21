@@ -96,14 +96,37 @@ def upgrade() -> None:
             N'WEBHOOK_MAX_ITEMS_PER_DOCUMENT' AS ConfigKey,
             N'500' AS ConfigValue,
             N'Maksymalna liczba pozycji (items) w jednym payloadzie webhooka push. '
-            N'Przekroczenie = HTTP 422.' AS Description
+            + N'Przekroczenie = HTTP 422.' AS Description
         ) AS source
         ON target.[ConfigKey] = source.ConfigKey
         WHEN NOT MATCHED THEN
             INSERT ([ConfigKey], [ConfigValue], [Description], [IsActive])
             VALUES (source.ConfigKey, source.ConfigValue, source.Description, 1);
     """))
-    _log("03", "OK — migracja 0057 zakonczona")
+    _log("03", "OK")
+
+    # ── KROK 04: Seed SystemConfig WEBHOOK_MODULE_ENABLED ────────────────────
+    # NAPRAWA (self-review "brakujace mechanizmy z podstawowego projektu"):
+    # kazdy wiekszy modul projektu ma administracyjny wylacznik awaryjny
+    # (wzorzec: APPROVAL_MODULE_ENABLED, faktury.force_status_enabled,
+    # maintenance_mode.enabled) — webhook_service.py nigdy go nie mial.
+    _log("04", "MERGE skw_SystemConfig WEBHOOK_MODULE_ENABLED")
+    bind.execute(text(f"""
+        MERGE [{SCHEMA}].[skw_SystemConfig] AS target
+        USING (SELECT
+            N'WEBHOOK_MODULE_ENABLED' AS ConfigKey,
+            N'true' AS ConfigValue,
+            N'Wylacznik awaryjny calego mechanizmu webhook push. false = '
+            + N'kazde POST /webhooks/sources/{{token}} zwraca HTTP 503, '
+            + N'niezaleznie od tokenu/zrodla. Uzyj przy ataku/naduzyciu/awarii '
+            + N'integratora zewnetrznego zamiast dezaktywowac kazde zrodlo osobno.' AS Description
+        ) AS source
+        ON target.[ConfigKey] = source.ConfigKey
+        WHEN NOT MATCHED THEN
+            INSERT ([ConfigKey], [ConfigValue], [Description], [IsActive])
+            VALUES (source.ConfigKey, source.ConfigValue, source.Description, 1);
+    """))
+    _log("04", "OK — migracja 0057 zakonczona")
 
     # UWAGA: swiadomie BRAK rejestracji w skw_SchemaChecksums dla tej tabeli.
     # Ten mechanizm liczy CHECKSUM() z sys.sql_modules — definicji SQL
@@ -123,4 +146,8 @@ def downgrade() -> None:
     bind.execute(text(f"""
         DELETE FROM [{SCHEMA}].[skw_SystemConfig]
         WHERE [ConfigKey] = N'WEBHOOK_MAX_ITEMS_PER_DOCUMENT'
+    """))
+    bind.execute(text(f"""
+        DELETE FROM [{SCHEMA}].[skw_SystemConfig]
+        WHERE [ConfigKey] = N'WEBHOOK_MODULE_ENABLED'
     """))

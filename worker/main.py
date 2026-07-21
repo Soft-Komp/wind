@@ -38,6 +38,8 @@ from worker.tasks.auto_dispatch_task import auto_dispatch_task as _auto_dispatch
 from worker.tasks.ksef_sync_task import ksef_sync_task as _ksef_sync_task
 # F7 — OCR
 from worker.tasks.ocr_task import ocr_task as _ocr_task
+# Konfiguracja zrodel — okresowy log (2026-07-16)
+from worker.tasks.source_config_snapshot_task import source_config_snapshot_task as _source_config_snapshot_task
 
 # Owijamy kazdy task dekoratorem track_job — rejestr w skw_ArqJobRegistry
 send_bulk_emails           = track_job("send_bulk_emails")(_send_bulk_emails)
@@ -53,6 +55,7 @@ source_sync_task           = track_job("source_sync_task")(_source_sync_task)
 ksef_sync_task              = track_job("ksef_sync_task")(_ksef_sync_task)
 auto_dispatch_task         = track_job("auto_dispatch_task")(_auto_dispatch_task)
 ocr_task = track_job("ocr_task")(_ocr_task)
+source_config_snapshot_task = track_job("source_config_snapshot_task")(_source_config_snapshot_task)
 
 
 
@@ -124,7 +127,7 @@ async def on_startup(ctx: dict[str, Any]) -> None:
                 "send_bulk_emails", "send_bulk_sms", "generate_pdf_task",
                 "send_otp", "daily_snapshot",
                 "send_approval_notification", "send_approval_email",
-                "deadline_check_task",
+                "deadline_check_task", "source_config_snapshot_task",
             ],
         },
     )
@@ -196,6 +199,7 @@ class WorkerSettings:
         ksef_sync_task,
         auto_dispatch_task,
         ocr_task,
+        source_config_snapshot_task,
     ]
 
 
@@ -229,6 +233,10 @@ class WorkerSettings:
         cron(ksef_sync_task, minute=0, timeout=2700, unique=True, run_at_startup=False),
         # Etap 2 — auto-dispatch co 1 minutę
         cron(auto_dispatch_task, minute={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59}, timeout=120, unique=True, run_at_startup=False),
+        # Konfiguracja zrodel — okresowy log co 20 min (lapie zmiany
+        # omijajace panel/API, np. reczna edycja connection_config w SSMS —
+        # patrz worker/tasks/source_config_snapshot_task.py)
+        cron(source_config_snapshot_task, minute={0, 20, 40}, timeout=300, unique=True, run_at_startup=False),
     
     ]
 

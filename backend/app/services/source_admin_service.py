@@ -46,6 +46,80 @@ from app.db.models.approval.document_source import (
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Logowanie snapshotow konfiguracji zrodel (2026-07-16)
+# =============================================================================
+# NAPRAWA: skw_AuditLog zapisuje tylko "<zmieniono>" (placeholder) dla
+# connection_config — brak realnej wartosci uniemozliwial szybkie ustalenie
+# "co dokladnie sie zmienilo" bez recznego skryptu diagnostycznego za kazdym
+# razem (patrz incydenty z tej sesji: host.docker.internal vs 192.168.0.50,
+# zgubione haslo przy PUT, brakujacy endpoint_line_items). Ten log daje
+# pelny (zredagowany z sekretow) stan konfiguracji przy KAZDEJ zmianie,
+# z data — bez potrzeby deszyfrowania niczego recznie nastepnym razem.
+#
+# Osobny strumien JSONL, zgodny z istniejacym wzorcem projektu (jeden plik
+# na dzien, per domena — audit_*.jsonl, events_*.jsonl, schema_integrity_*.jsonl).
+_config_snapshot_logger = logging.getLogger("app.services.source_config_snapshot")
+
+# Klucze traktowane jako wrazliwe — maskowane bez wzgledu na source_type.
+# auth_config maskowany w calosci (moze zawierac dowolne zagniezdzone sekrety
+# zaleznie od auth_type — bezpieczniej zamaskowac caly obiekt niz zgadywac
+# ktore jego pola sa wrazliwe).
+_SENSITIVE_CONFIG_KEYS = frozenset({
+    "password", "pwd", "secret", "token", "api_key", "apikey",
+    "auth_config", "webhook_token", "private_key", "certificate",
+})
+
+
+def _redact_config(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Maskuje wrazliwe pola przed zapisem do logu — rekurencyjnie dla
+    zagniezdzonych slownikow, oraz osobno dla connection_string zawierajacego
+    PWD=... (wzorzec MSSQL) w jednym stringu.
+    """
+    redacted: dict[str, Any] = {}
+    for k, v in config.items():
+        if k.lower() in _SENSITIVE_CONFIG_KEYS:
+            redacted[k] = "***"
+        elif isinstance(v, dict):
+            redacted[k] = _redact_config(v)
+        elif isinstance(v, str) and "PWD=" in v.upper():
+            import re
+            redacted[k] = re.sub(r"(PWD=)[^;]*", r"\1***", v, flags=re.IGNORECASE)
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _log_config_snapshot(source: DocumentSource, changed_by_user_id: int | None, reason: str) -> None:
+    """
+    Zapisuje pelny (zredagowany) stan konfiguracji zrodla do dedykowanego
+    strumienia logow — wywolywane po kazdym udanym create_source()/
+    update_source(). Bledy logowania NIGDY nie blokuja glownej operacji
+    (best-effort, zgodnie z wzorcem _log_webhook_attempt w webhook_service.py).
+    """
+    try:
+        raw_config = source.get_config() or {}
+        entry = {
+            "ts_utc":                datetime.now(timezone.utc).isoformat(),
+            "event":                 "source_config_snapshot",
+            "reason":                reason,  # "created" | "updated" | "periodic"
+            "id_source":             source.id_source,
+            "source_name":           source.source_name,
+            "source_type":           source.source_type,
+            "connection_mode":       source.connection_mode,
+            "is_active":             source.is_active,
+            "sync_interval_minutes": source.sync_interval_minutes,
+            "connection_config":     _redact_config(raw_config),
+            "changed_by_user_id":    changed_by_user_id,
+        }
+        _config_snapshot_logger.info(json.dumps(entry, ensure_ascii=False, default=str))
+    except Exception as exc:
+        logger.error(
+            "_log_config_snapshot: blad zapisu snapshotu configu dla id_source=%s: %s",
+            getattr(source, "id_source", "?"), exc,
+        )
+
 _SCHEMA = "dbo"
 
 # Dlugosc tokenu webhooka — 48 bajtow losowych -> ~64 znaki base64url
@@ -260,6 +334,19 @@ async def create_source(
     )
     await db.commit()
 
+    _log_config_snapshot(source, changed_by_user_id=actor_id, reason="created")
+
+    # NAPRAWA 2026-07-17: webhook_token juz NIE jest wymagany przy tworzeniu
+    # (patrz document_source.py::validate()) — czysto diagnostyczny log,
+    # zeby bylo widac w logach, ze zrodlo push zostalo utworzone bez tokenu
+    # (oczekiwany stan przejsciowy w przeplywie dwuetapowym, nie blad).
+    if connection_mode == "push" and not source.webhook_token:
+        logger.info(
+            "Zrodlo push utworzone BEZ webhook_token (has_webhook_token=false) | "
+            "id=%s name=%r — oczekuje POST /admin/sources/%s/webhook-token",
+            source.id_source, source_name, source.id_source,
+        )
+
     logger.info(
         "Zrodlo utworzone | id=%s name=%r type=%r mode=%r actor=%s",
         source.id_source, source_name, source_type, connection_mode, actor_id,
@@ -336,6 +423,8 @@ async def update_source(
         raise SourceNameConflictError(
             f"Zrodlo o nazwie '{source_name}' juz istnieje."
         ) from exc
+
+    _log_config_snapshot(source, changed_by_user_id=actor_id, reason="updated")
 
     logger.info("Zrodlo zaktualizowane | id=%s changes=%s actor=%s", id_source, list(changes), actor_id)
     return source

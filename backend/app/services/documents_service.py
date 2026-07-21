@@ -98,6 +98,9 @@ async def list_documents(
     date_from: date | None = None,
     date_to: date | None = None,
     priority: int | None = None,
+    id_path: list[int] | None = None,
+    path_name: str | None = None,
+    filter_mode: str = "AND",
     order_by: str = "created_at",
     order_dir: str = "desc",
 ) -> dict[str, Any]:
@@ -112,46 +115,74 @@ async def list_documents(
     order_by/order_dir: sortowanie przez whitelist _DOCUMENTS_SORT_MAP — wartosc
         spoza listy cicho spada na domyslne 'created_at' (bez bledu, zgodnie
         z istniejacym wzorcem w projekcie).
+
+    id_path: filtr po ID sciezki decyzyjnej — wiele wartosci = IN (...).
+    path_name: filtr tekstowy LIKE po nazwie sciezki (np. 'firanki'), realizowany
+        przez subquery na skw_approval_paths (a NIE przez JOIN w glownym query),
+        zeby nie modyfikowac zapytania COUNT(*) i uniknac ryzyka duplikacji
+        wierszy przy ewentualnej przyszlej zmianie kardynalnosci relacji.
+
+    filter_mode: 'AND' (domyslnie, pelna wsteczna kompatybilnosc) lub 'OR'.
+        Dotyczy WYLACZNIE grupy filtrow standardowych: id_source, id_category,
+        status, priority, id_folder, id_path, path_name.
+
+        BEZPIECZENSTWO — KRYTYCZNE: filtry poziomu 1 (dostep do zrodel) i
+        poziomu 2 (widocznosc restricted) sa budowane w OSOBNEJ liscie
+        (`mandatory_where`) i ZAWSZE laczone przez AND, niezaleznie od
+        filter_mode. Rowniez search/date_from/date_to zostaja w AND — OR
+        na wyszukiwaniu pelnotekstowym wzglendem filtrow rownosciowych
+        prowadzi do zapytan zwracajacych nieoczekiwanie szeroki zakres
+        wynikow. NIE przenosic tych warunkow do grupy OR bez swiadomej,
+        oddzielnej decyzji projektowej.
     """
-    where: list[str] = []
+    filter_mode_clean = filter_mode.strip().upper()
+    if filter_mode_clean not in ("AND", "OR"):
+        # Redundantna walidacja — Query(pattern=...) w routerze juz to lapie,
+        # ale funkcja serwisowa moze byc wywolana i z innych miejsc (np. eksport,
+        # zadania w tle) — nigdy nie ufamy samemu warstwy API.
+        logger.warning(
+            "list_documents: niedozwolone filter_mode=%r — fallback na 'AND'",
+            filter_mode,
+        )
+        filter_mode_clean = "AND"
+
+    mandatory_where: list[str] = []
+    group_where: list[str] = []
     params: dict[str, Any] = {}
 
     # Poziom 1 — filtr dostępu do źródeł (skw_source_role_access)
+    # ZAWSZE w mandatory_where — nigdy nie wchodzi do grupy OR.
     if not can_view_all and accessible_source_ids is not None:
         if len(accessible_source_ids) == 0:
             # Brak dostępu do żadnego źródła — zwróć pustą listę
             return {"items": [], "total": 0, "page": page, "per_page": per_page}
         ph = ",".join(f":src_{j}" for j in range(len(accessible_source_ids)))
-        where.append(f"i.[id_source] IN ({ph})")
+        mandatory_where.append(f"i.[id_source] IN ({ph})")
         for j, sid in enumerate(accessible_source_ids):
             params[f"src_{j}"] = sid
 
     # Poziom 2 — filtr widoczności (skw_approval_filter_visibility)
+    # ZAWSZE w mandatory_where — nigdy nie wchodzi do grupy OR.
     if not can_view_all:
         visibility_clause = await _build_visibility_clause(db, actor_id)
-        where.append(visibility_clause)
+        mandatory_where.append(visibility_clause)
 
+    # --- Grupa filtrow standardowych — podlega filter_mode (AND/OR) ---
     if id_source is not None:
-        where.append("i.[id_source] = :id_source")
+        group_where.append("i.[id_source] = :id_source")
         params["id_source"] = id_source
     if id_category is not None:
-        where.append("i.[id_category] = :id_category")
+        group_where.append("i.[id_category] = :id_category")
         params["id_category"] = id_category
     if status is not None:
-        where.append("i.[status] = :status")
+        group_where.append("i.[status] = :status")
         params["status"] = status
     if priority is not None:
-        where.append("i.[priority] = :priority")
+        group_where.append("i.[priority] = :priority")
         params["priority"] = priority
-    if date_from is not None:
-        where.append("i.[created_at] >= :date_from")
-        params["date_from"] = date_from
-    if date_to is not None:
-        where.append("i.[created_at] <= :date_to_end")
-        params["date_to_end"] = f"{date_to} 23:59:59"
     if id_folder:
         ph = ",".join(f":folder_{j}" for j in range(len(id_folder)))
-        where.append(
+        group_where.append(
             f"i.[id_instance] IN ("
             f"  SELECT [id_instance] FROM [{_SCHEMA}].[skw_document_folder_items] "
             f"  WHERE [id_folder] IN ({ph})"
@@ -159,17 +190,81 @@ async def list_documents(
         )
         for j, fid in enumerate(id_folder):
             params[f"folder_{j}"] = fid
+    if id_path:
+        ph = ",".join(f":path_id_{j}" for j in range(len(id_path)))
+        group_where.append(f"i.[id_path] IN ({ph})")
+        for j, pid in enumerate(id_path):
+            params[f"path_id_{j}"] = pid
+    if path_name:
+        # Sanityzacja analogiczna do 'search' ponizej + escapowanie wildcardow
+        # LIKE (redundancja celowa — obrona w glab, wzorzec z schemas/users.py).
+        safe_path_name = path_name.replace("'", "''")[:100]
+        safe_path_name = (
+            safe_path_name.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]")
+        )
+        group_where.append(
+            f"i.[id_path] IN ("
+            f"  SELECT [id_path] FROM [{_SCHEMA}].[skw_approval_paths] "
+            f"  WHERE [path_name] LIKE :path_name"
+            f")"
+        )
+        params["path_name"] = f"%{safe_path_name}%"
+
+    # --- Refinement — ZAWSZE w mandatory_where, niezaleznie od filter_mode ---
+    if date_from is not None:
+        mandatory_where.append("i.[created_at] >= :date_from")
+        params["date_from"] = date_from
+    if date_to is not None:
+        mandatory_where.append("i.[created_at] <= :date_to_end")
+        params["date_to_end"] = f"{date_to} 23:59:59"
     if search:
         safe_search = search.replace("'", "''")[:100]
         # Wyszukiwanie po tytule, numerze dokumentu ORAZ po tekście OCR (F7)
-        where.append(
+        mandatory_where.append(
             "(i.[document_title] LIKE :search "
             " OR i.[id_document] LIKE :search"
             " OR JSON_VALUE(i.[extra_data], '$.ocr_text') LIKE :search)"
         )
         params["search"] = f"%{safe_search}%"
 
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    where_parts: list[str] = []
+    if mandatory_where:
+        where_parts.append(" AND ".join(mandatory_where))
+    if group_where:
+        joiner = " OR " if filter_mode_clean == "OR" else " AND "
+        where_parts.append(f"({joiner.join(group_where)})")
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    # Absurdalnie szczegolowe logowanie zastosowanych filtrow — traceability
+    # przy jakimkolwiek zgloszeniu "zle dane / zla lista" (JSONL-friendly).
+    logger.info(
+        "list_documents | audit=%s",
+        json.dumps(
+            {
+                "actor_id": actor_id,
+                "can_view_all": can_view_all,
+                "filter_mode": filter_mode_clean,
+                "id_source": id_source,
+                "id_category": id_category,
+                "status": status,
+                "priority": priority,
+                "id_folder": id_folder,
+                "id_path": id_path,
+                "path_name": path_name,
+                "search_present": bool(search),
+                "date_from": str(date_from) if date_from else None,
+                "date_to": str(date_to) if date_to else None,
+                "order_by": order_by,
+                "order_dir": order_dir,
+                "page": page,
+                "per_page": per_page,
+                "group_conditions_count": len(group_where),
+                "mandatory_conditions_count": len(mandatory_where),
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
 
     count_result = await db.execute(
         text(f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_document_approval_instances] i {where_sql}"),
@@ -203,7 +298,7 @@ async def list_documents(
             LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g
               ON g.[id_group] = ss.[id_group]
             {where_sql}
-            ORDER BY i.[is_urgent] DESC, i.[created_at] DESC
+            ORDER BY {sort_col} {sort_dir_sql}, i.[id_instance] DESC
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
         """),
         params,

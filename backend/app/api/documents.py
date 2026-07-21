@@ -99,6 +99,9 @@ async def _can_view_all(current_user: CurrentUser, db: DB) -> bool:
         "widza wszystko. "
         "\n\nid_folder dopuszcza wiele wartosci jednoczesnie (wielowymiarowosc teczek) "
         "— dokument widoczny jesli jest w KTOREJKOLWIEK z podanych teczek. "
+        "\n\nid_source rowniez dopuszcza wiele wartosci jednoczesnie (2026-07-21) "
+        "— dokument widoczny jesli pochodzi z KTOREGOKOLWIEK z podanych zrodel "
+        "(np. ?id_source=1&id_source=6). "
         "**Wymaga:** `documents.view`."
     ),
     dependencies=[require_permission("documents.view")],
@@ -116,6 +119,22 @@ async def list_documents_endpoint(
     date_from: Optional[date] = Query(None, description="Filtr: created_at >= date_from"),
     date_to: Optional[date] = Query(None, description="Filtr: created_at <= date_to (cały dzień)"),
     priority: Optional[int] = Query(None, description="Filtr po priorytecie dokumentu"),
+    id_path: Optional[list[int]] = Query(
+        None, description="Filtr po ID sciezki decyzyjnej. Wiele wartosci = dopasowanie IN (...)."
+    ),
+    path_name: Optional[str] = Query(
+        None, max_length=100,
+        description="Filtr tekstowy po nazwie sciezki decyzyjnej (LIKE '%fragment%'), np. 'firanki'.",
+    ),
+    filter_mode: str = Query(
+        "AND", pattern="^(AND|OR|and|or)$",
+        description=(
+            "AND (domyslnie) lub OR — sposob laczenia filtrow standardowych "
+            "(id_source, id_category, status, priority, id_folder, id_path, path_name). "
+            "Filtry bezpieczenstwa (dostep do zrodel, widocznosc restricted) oraz "
+            "search/date_from/date_to ZAWSZE pozostaja w AND, niezaleznie od tego parametru."
+        ),
+    ),
     order_by: str = Query(
         "created_at",
         description="Dozwolone: created_at | updated_at | document_title | document_amount | status | priority",
@@ -130,6 +149,7 @@ async def list_documents_endpoint(
         id_source=id_source, id_folder=id_folder, id_category=id_category,
         status=status, search=search,
         date_from=date_from, date_to=date_to, priority=priority,
+        id_path=id_path, path_name=path_name, filter_mode=filter_mode,
         order_by=order_by, order_dir=order_dir,
     )
     return BaseResponse.ok(data=result, app_code="documents.list")

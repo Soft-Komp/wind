@@ -30,6 +30,19 @@ jinja2==3.1.4
 # ── HTTP client (SMS gateway) ────────────────────────────────────────────────
 httpx==0.28.1
 
+# ── HTTP client synchroniczny — TYMCZASOWA NAPRAWA 2026-07-17 ────────────────
+# worker/services/ksef20_adapter.py uzywa requests.Session() (nie httpx) —
+# fragment przeniesiony z zewnetrznego pliku referencyjnego (projekt
+# SAMARYTANIN, worker_ksef20_export.py) bez przepisania na httpx zgodnie
+# z konwencja reszty projektu. Brakujaca zaleznosc powodowala
+# ModuleNotFoundError przy kazdej synchronizacji zrodel source_type='ksef20'.
+# SWIADOMA DECYZJA: nie przepisywac na httpx w tym momencie — kod dotyczy
+# kryptografii i protokolu autoryzacji z systemem KSeF (XAdES, AES/RSA),
+# nie da sie dzis zweryfikowac integracyjnie bez certyfikatu testowego MF.
+# Docelowo do przepisania na httpx.Client(), gdy dostepny bedzie certyfikat
+# testowy pozwalajacy zweryfikowac zachowanie na zywo.
+requests==2.32.3
+
 # ── Serialization ────────────────────────────────────────────────────────────
 orjson==3.10.12
 

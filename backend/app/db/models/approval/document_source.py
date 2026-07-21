@@ -326,10 +326,22 @@ class DocumentSource(Base):
                 f"Dozwolone: {sorted(CONNECTION_MODES)}"
             )
 
-        if self.connection_mode == "push" and not self.webhook_token:
-            errors.append(
-                "webhook_token jest wymagany gdy connection_mode='push'"
-            )
+        # NAPRAWA 2026-07-17 (zgloszenie: "webhook_token jest wymagany gdy
+        # connection_mode='push' tworzy niemozliwa zaleznosc"): USUNIETO
+        # wymog webhook_token przy connection_mode='push'. Byl SPRZECZNY
+        # z jawnie udokumentowanym w source_admin_service.py::create_source()
+        # przeplywem dwuetapowym: zrodlo push jest tworzone NAJPIERW (bez
+        # tokenu, has_webhook_token=false), token generowany OSOBNO przez
+        # dedykowany endpoint POST /admin/sources/{id}/webhook-token (wymaga
+        # juz istniejacego id_source). Wymog tokenu przy validate() czynil
+        # ten udokumentowany przeplyw NIEMOZLIWYM — validate() jest wolane
+        # zarowno w create_source() JAK I w update_source(), wiec bug
+        # blokowal rowniez zwykla edycje (np. is_active) istniejacych
+        # zrodel push bez tokenu, nie tylko tworzenie.
+        #
+        # Poprzedni kod (usuniety):
+        #   if self.connection_mode == "push" and not self.webhook_token:
+        #       errors.append("webhook_token jest wymagany gdy connection_mode='push'")
 
         if self.connection_mode == "pull" and self.webhook_token:
             errors.append(
