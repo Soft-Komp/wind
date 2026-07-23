@@ -103,6 +103,7 @@ async def list_documents(
     filter_mode: str = "AND",
     order_by: str = "created_at",
     order_dir: str = "desc",
+    include_superseded: bool = False,
 ) -> dict[str, Any]:
     """
     Lista dokumentow z filtrem widocznosci (poziom 2) i filtrem dostepu do zrodla (poziom 1).
@@ -149,6 +150,13 @@ async def list_documents(
     mandatory_where: list[str] = []
     group_where: list[str] = []
     params: dict[str, Any] = {}
+
+    # WARIANT A (2026-07-22) — domyslnie ukrywamy instancje zastapione
+    # (superseded_by_instance_id NOT NULL), np. stara cancelled instancja
+    # po procedurze cancel+redispatch dla unassigned. ZAWSZE w mandatory_where
+    # — nigdy nie wchodzi do grupy OR, analogicznie do filtrow bezpieczenstwa.
+    if not include_superseded:
+        mandatory_where.append("i.[superseded_by_instance_id] IS NULL")
 
     # Poziom 1 — filtr dostępu do źródeł (skw_source_role_access)
     # ZAWSZE w mandatory_where — nigdy nie wchodzi do grupy OR.
@@ -219,11 +227,24 @@ async def list_documents(
         params["date_to_end"] = f"{date_to} 23:59:59"
     if search:
         safe_search = search.replace("'", "''")[:100]
-        # Wyszukiwanie po tytule, numerze dokumentu ORAZ po tekście OCR (F7)
+        # NAPRAWA (2026-07-23): usunieto JSON_VALUE(...'$.ocr_text'...) —
+        # surowy tekst OCR nie jest juz przeszukiwany w zwyklym widoku
+        # (decyzja produktowa: ocr_* to dane niezweryfikowane, przeszukiwanie
+        # po nich stwarzalo posredni wyciek tresci sekcji technicznej dla
+        # userow bez documents.view_extra_data). Dodano wyszukiwanie po
+        # kanonicznych polach (doc_number, contractor, nip) ORAZ po polach
+        # verified_* (zweryfikowanych przez operatora przy confirm OCR) —
+        # oba zestawy traktowane jak dane pewne, zgodnie z ta sama zasada
+        # co w widoku skw_v_approval_instance_detail.
         mandatory_where.append(
             "(i.[document_title] LIKE :search "
             " OR i.[id_document] LIKE :search"
-            " OR JSON_VALUE(i.[extra_data], '$.ocr_text') LIKE :search)"
+            " OR JSON_VALUE(i.[extra_data], '$.doc_number') LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.contractor') LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.nip') LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.verified_doc_number') LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.verified_contractor') LIKE :search"
+            " OR JSON_VALUE(i.[extra_data], '$.verified_nip') LIKE :search)"
         )
         params["search"] = f"%{safe_search}%"
 
@@ -284,6 +305,7 @@ async def list_documents(
                 i.[id_instance], i.[id_source], i.[id_document], i.[status],
                 i.[document_title], i.[document_amount], i.[is_urgent],
                 i.[created_at], i.[updated_at],
+                i.[superseded_by_instance_id],
                 s.[source_name],
                 p.[path_name],
                 g.[group_name] AS current_group_name
@@ -908,6 +930,10 @@ async def resolve_ocr_review(
     decision: str,
     document_title: str | None,
     document_amount: float | None,
+    verified_doc_number: str | None = None,
+    verified_contractor: str | None = None,
+    verified_nip: str | None = None,
+    verified_doc_date: date | None = None,
     comment: str | None,
     actor_id: int,
     can_view_all: bool,
@@ -917,8 +943,20 @@ async def resolve_ocr_review(
     Rozstrzyga dokument oczekujacy na reczna weryfikacje OCR.
 
     decision='confirm': operator potwierdza/poprawia pola -> status=pending_dispatch
-                          (wchodzi w normalny automatyczny obieg przez auto_dispatch_task)
-    decision='reject':   dokument odrzucony -> status=cancelled
+                          (wchodzi w normalny automatyczny obieg przez auto_dispatch_task).
+                          Dodatkowo (2026-07-23) zapisuje verified_doc_number/
+                          verified_contractor/verified_nip/verified_doc_date/
+                          verified_by/verified_at do extra_data — oddzielne od
+                          surowych ocr_* (ktore pozostaja bez zmian jako slad
+                          techniczny). Widoki/wyszukiwanie czytaja WYLACZNIE
+                          verified_*, nigdy ocr_* bezposrednio (decyzja
+                          produktowa 2026-07-23 — patrz rozmowa robocza:
+                          "surowe ocr_* nie sa fallbackiem w zwyklym widoku").
+                          Pola moga zostac puste (null) mimo confirm — brak
+                          wymogu niepustosci, sam zapis verified_by/verified_at
+                          oznacza swiadome sprawdzenie przez operatora.
+    decision='reject':   dokument odrzucony -> status=cancelled, ZERO zapisu
+                          verified_* (odrzucenie to nie weryfikacja).
     """
     instance = await _get_instance_or_404(db, id_instance)
     await _ensure_visibility(db, instance, actor_id=actor_id, can_view_all=can_view_all)
@@ -930,6 +968,7 @@ async def resolve_ocr_review(
         )
 
     now = datetime.now(timezone.utc)
+    verified_payload: dict[str, Any] = {}
 
     if decision == "confirm":
         set_clauses = ["[status]=N'pending_dispatch'", "[updated_at]=:now"]
@@ -940,6 +979,26 @@ async def resolve_ocr_review(
         if document_amount is not None:
             set_clauses.append("[document_amount]=:amount")
             params["amount"] = document_amount
+
+        # NOWE (2026-07-23): zapis verified_* do extra_data — merge nad
+        # istniejaca zawartoscia (zachowuje ocr_* i inne klucze bez zmian).
+        try:
+            current_extra = json.loads(instance.get("extra_data") or "{}")
+        except Exception:
+            current_extra = {}
+
+        verified_payload = {
+            "verified_doc_number": verified_doc_number,
+            "verified_contractor": verified_contractor,
+            "verified_nip":        verified_nip,
+            "verified_doc_date":   verified_doc_date.isoformat() if verified_doc_date else None,
+            "verified_by":         actor_id,
+            "verified_at":         now.isoformat(),
+        }
+        current_extra.update(verified_payload)
+        set_clauses.append("[extra_data]=:extra")
+        params["extra"] = json.dumps(current_extra, ensure_ascii=False, default=str)
+
         await db.execute(
             text(f"""
                 UPDATE [{_SCHEMA}].[skw_document_approval_instances]
@@ -960,10 +1019,20 @@ async def resolve_ocr_review(
         )
         new_status = "cancelled"
 
+    # NOWE (2026-07-23): audyt rozszerzony o pelny payload weryfikacji —
+    # wczesniej zapisywano tylko {decision, comment}, co uniemozliwialo
+    # rekonstrukcje co operator faktycznie zatwierdzil (zgloszenie: instancja 787).
+    audit_details: dict[str, Any] = {"decision": decision, "comment": comment}
+    if decision == "confirm":
+        audit_details.update({
+            "document_amount": document_amount,
+            **verified_payload,
+        })
+
     await _audit_log(
         db, actor_id=actor_id, action="document.ocr_review_resolved",
         entity_id=id_instance,
-        details={"decision": decision, "comment": comment},
+        details=audit_details,
     )
     await db.commit()
 

@@ -102,9 +102,10 @@ async def _can_view_all(current_user: CurrentUser, db: DB) -> bool:
         "\n\nid_source rowniez dopuszcza wiele wartosci jednoczesnie (2026-07-21) "
         "— dokument widoczny jesli pochodzi z KTOREGOKOLWIEK z podanych zrodel "
         "(np. ?id_source=1&id_source=6). "
-        "**Wymaga:** `documents.view`."
+        "**Wymaga:** `documents.view_list` (od 2026-07-22 — wczesniej `documents.view`, "
+        "rozdzielone na wniosek frontu, patrz migracja 0063)."
     ),
-    dependencies=[require_permission("documents.view")],
+    dependencies=[require_permission("documents.view_list")],
 )
 async def list_documents_endpoint(
     current_user: CurrentUser,
@@ -140,6 +141,15 @@ async def list_documents_endpoint(
         description="Dozwolone: created_at | updated_at | document_title | document_amount | status | priority",
     ),
     order_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    include_superseded: bool = Query(
+        False,
+        description=(
+            "Domyslnie False — ukrywa instancje zastapione przez nowsza "
+            "(np. stara 'cancelled' instancja po procedurze cancel+redispatch "
+            "dla statusu unassigned, patrz migracja 0064). True = pokazuje "
+            "rowniez zastapione, do celow audytowych/historii."
+        ),
+    ),
 ):
     can_view_all = await _can_view_all(current_user, db)
     result = await svc.list_documents(
@@ -151,6 +161,7 @@ async def list_documents_endpoint(
         date_from=date_from, date_to=date_to, priority=priority,
         id_path=id_path, path_name=path_name, filter_mode=filter_mode,
         order_by=order_by, order_dir=order_dir,
+        include_superseded=include_superseded,
     )
     return BaseResponse.ok(data=result, app_code="documents.list")
 
@@ -166,9 +177,9 @@ async def list_documents_endpoint(
         "status='unassigned' — auto_dispatch_task nie znalazl odpowiedniej "
         "sciezki po przekroczeniu progu prob (AUTO_DISPATCH_MAX_ATTEMPTS). "
         "Uzywane jako badge w nawigacji. "
-        "**Wymaga:** `documents.view`."
+        "**Wymaga:** `documents.view_list` (od 2026-07-22, patrz migracja 0063)."
     ),
-    dependencies=[require_permission("documents.view")],
+    dependencies=[require_permission("documents.view_list")],
 )
 async def list_unassigned_endpoint(
     current_user: CurrentUser,
@@ -275,6 +286,15 @@ class OcrReviewResolveBody(BaseModel):
     document_title: Optional[str] = Field(None, max_length=500)
     document_amount: Optional[float] = Field(None, ge=0)
     comment: Optional[str] = Field(None, max_length=1000)
+    # NOWE (2026-07-23) — pola weryfikacji operatora, zapisywane do
+    # extra_data jako verified_* wylacznie przy decision='confirm'.
+    # Celowo BEZ wymogu niepustosci — operator moze potwierdzic dokument
+    # zostawiajac czesc pol pustych (decyzja produktowa, patrz rozmowa
+    # robocza 2026-07-23: "nie kazdy dokument musi je posiadac").
+    verified_doc_number: Optional[str] = Field(None, max_length=100)
+    verified_contractor: Optional[str] = Field(None, max_length=200)
+    verified_nip: Optional[str] = Field(None, max_length=20)
+    verified_doc_date: Optional[date] = Field(None)
 
 
 @router.post(
@@ -306,6 +326,10 @@ async def resolve_ocr_review_endpoint(
             decision=body.decision,
             document_title=body.document_title,
             document_amount=body.document_amount,
+            verified_doc_number=body.verified_doc_number,
+            verified_contractor=body.verified_contractor,
+            verified_nip=body.verified_nip,
+            verified_doc_date=body.verified_doc_date,
             comment=body.comment,
             actor_id=current_user.id_user, can_view_all=can_view_all,
             redis=redis,

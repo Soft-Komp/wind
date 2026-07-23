@@ -20,6 +20,7 @@ Endpointy glownego obiegu dokumentow.
 UWAGA: from __future__ import annotations NIGDY w tym pliku.
 """
 import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -698,16 +699,90 @@ async def dispatch_document(
     await _check_module_enabled(db, redis)
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
 
+    # POPRAWKA (2026-07-22): dokument jest pobierany ZAWSZE, nie tylko gdy
+    # id_path nie zostal podany recznie. Wczesniej dispatch z jawnym id_path
+    # (np. procedura cancel+dispatch dla instancji unassigned) tworzyl nowa
+    # instancje z pustymi document_title/document_amount/extra_data, bo
+    # adapter.get_document() bylo wolane wylacznie w galezi auto-filter.
+    # Zgloszone przez front: dokument 717 (dane wypelnione) -> po
+    # cancel+dispatch instancja 719 bez danych.
     resolved_path = body.id_path
-    if resolved_path is None:
+    document_title  = None
+    document_amount = None
+    extra_data      = None
+
+    # NAPRAWA (2026-07-22, druga iteracja): zrodla push (np. qa_b_api_push)
+    # nie maja mechanizmu "dociagniecia" dokumentu na zadanie — dane
+    # naglowkowe (kontrahent, kwota, NIP) przychodza WYLACZNIE przez webhook,
+    # raz, i zyja w instancji ktora je pierwotnie odebrala. RestApiAdapter.
+    # get_document() zaklada polaczenie wychodzace (pull) — dla push zawsze
+    # zwraca None, cicho, niezaleznie od poprawnosci configu. Analogiczny
+    # przypadek juz raz rozwiazany dla pozycji dokumentu (documents_service.
+    # get_line_items, naprawa 2026-07-16, Tier 1c) — ta sama zasada: dla
+    # source_type='api' + connection_mode='push' OMIJAMY adapter calkowicie.
+    src_row = (await db.execute(
+        text(
+            f"SELECT [source_type], [connection_mode] "
+            f"FROM [{_SCHEMA}].[skw_document_sources] WHERE [id_source] = :s"
+        ),
+        {"s": body.id_source},
+    )).fetchone()
+    is_push_source = bool(src_row and src_row[1] == "push")
+
+    if is_push_source:
+        prior = (await db.execute(
+            text(
+                f"SELECT TOP 1 [document_title], [document_amount], [extra_data] "
+                f"FROM [{_SCHEMA}].[skw_document_approval_instances] "
+                f"WHERE [id_document] = :d AND [id_source] = :s "
+                f"  AND [document_title] IS NOT NULL "
+                f"ORDER BY [created_at] DESC"
+            ),
+            {"d": body.id_document, "s": body.id_source},
+        )).fetchone()
+        if prior:
+            document_title  = prior[0]
+            document_amount = float(prior[1]) if prior[1] is not None else None
+            extra_data      = json.loads(prior[2]) if prior[2] else None
+            logger.info(
+                "dispatch_document: zrodlo push (id_source=%s) — skopiowano dane "
+                "z poprzedniej instancji dla id_document=%s (adapter pominiety, "
+                "push nie wspiera live-fetch)",
+                body.id_source, body.id_document,
+            )
+        else:
+            logger.warning(
+                "dispatch_document: zrodlo push (id_source=%s) bez zadnej "
+                "wczesniejszej instancji z danymi dla id_document=%s — "
+                "instancja powstanie bez danych zrodlowych (pierwsze wystapienie "
+                "tego dokumentu, nic do skopiowania)",
+                body.id_source, body.id_document,
+            )
+        # UWAGA: dla push, jesli id_path nie podano recznie, NIE probujemy
+        # auto-resolve przez filter_engine — resolve_path() oczekuje swiezego
+        # UnifiedDocument.to_filter_dict(), ktorego dla push nie mamy (tylko
+        # skopiowane extra_data o innym ksztalcie kluczy). Front dla push
+        # bez recznego id_path dostanie pending_dispatch, tak jak dzis.
+    else:
         adapter = await get_adapter_by_source_id(db, body.id_source)
         if adapter:
             doc = await adapter.get_document(db, body.id_document)
             if doc:
-                flag = await redis.get("syscfg:APPROVAL_AUTO_FILTERS_ENABLED")
-                auto_ok = (flag.decode() if isinstance(flag, bytes) else flag) if flag else "true"
-                if auto_ok.lower() == "true":
-                    resolved_path = await resolve_path(db, body.id_source, doc.to_filter_dict())
+                document_title  = adapter.get_document_title(doc)
+                document_amount = float(doc.amount_gross) if doc.amount_gross else None
+                extra_data      = doc.to_extra_data_json()
+
+                if resolved_path is None:
+                    flag = await redis.get("syscfg:APPROVAL_AUTO_FILTERS_ENABLED")
+                    auto_ok = (flag.decode() if isinstance(flag, bytes) else flag) if flag else "true"
+                    if auto_ok.lower() == "true":
+                        resolved_path = await resolve_path(db, body.id_source, doc.to_filter_dict())
+            else:
+                logger.warning(
+                    "dispatch_document: adapter.get_document() nie znalazl dokumentu "
+                    "id_document=%s id_source=%s — instancja powstanie bez danych zrodlowych",
+                    body.id_document, body.id_source,
+                )
 
     instance = await dispatch(
         db, redis,
@@ -718,7 +793,35 @@ async def dispatch_document(
         dispatched_by_user_id=current_user.id_user,
         dispatched_by_username=current_user.username,
         ip_address=ip,
+        document_title=document_title,
+        document_amount=document_amount,
+        extra_data=extra_data,
     )
+
+    # WARIANT A (2026-07-22): linkowanie instancji zastapionych. Jesli dla
+    # tego samego (id_document, id_source) istnieje starsza instancja
+    # cancelled bez ustawionego superseded_by_instance_id — laczymy ja z
+    # nowo utworzona instancja. Wykonywane w ROUTERZE, nie wewnatrz
+    # approval_service.dispatch()/cancel() — te funkcje sa chronione przez
+    # sekcje 7.1 specyfikacji ("ZOSTAJE BEZ ZMIAN", jedyny wyjatek: hooki).
+    link_result = await db.execute(
+        text(
+            f"UPDATE [dbo].[skw_document_approval_instances] "
+            f"SET [superseded_by_instance_id] = :new_id, [updated_at] = SYSUTCDATETIME() "
+            f"WHERE [id_document] = :doc AND [id_source] = :src "
+            f"  AND [status] = N'cancelled' "
+            f"  AND [superseded_by_instance_id] IS NULL "
+            f"  AND [id_instance] <> :new_id"
+        ),
+        {"new_id": instance.id_instance, "doc": body.id_document, "src": body.id_source},
+    )
+    await db.commit()
+    if link_result.rowcount:
+        logger.info(
+            "dispatch_document: powiazano %s wczesniejszych instancji (cancelled) "
+            "z nowa instancja id=%s (doc=%s, src=%s)",
+            link_result.rowcount, instance.id_instance, body.id_document, body.id_source,
+        )
     audit_service.log(
         db,
         action="approval_dispatched",
