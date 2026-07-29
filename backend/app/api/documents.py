@@ -65,22 +65,37 @@ def _raise_doc_error(exc: Exception) -> None:
 
 
 async def _can_view_all(current_user: CurrentUser, db: DB) -> bool:
-    """Sprawdza czy user ma documents.view_all lub approval.supervise (override widocznosci)."""
+    """
+    Sprawdza czy user ma documents.view_all lub approval.supervise (override widocznosci).
+
+    NAPRAWA (2026-07-29): pierwotna wersja odpytywala nieistniejaca tabele
+    posredniczaca dbo.skw_UserRoles — dokladnie ten sam blad, juz raz
+    zdiagnozowany i naprawiony w documents_service.py::_check_user_permission()
+    (incydent 2026-07-16). Realna architektura: skw_Users.RoleID (FK
+    bezposredni). Zapytanie do nieistniejacej tabeli rzucalo wyjatek, lapany
+    przez `except: return False` — KAZDY uzytkownik dostawal can_view_all=False,
+    calkowicie cicho, niezaleznie od faktycznych uprawnien. Dotyczylo to
+    GET /documents, GET /documents/{id}/pdf i GET /documents/{id}/line-items.
+    """
     try:
         from sqlalchemy import text as _text
         result = await db.execute(
             _text(
-                "SELECT COUNT(*) FROM dbo.skw_UserRoles ur "
-                "JOIN dbo.skw_RolePermissions rp ON rp.ID_ROLE = ur.ID_ROLE "
+                "SELECT COUNT(*) FROM dbo.skw_Users u "
+                "JOIN dbo.skw_RolePermissions rp ON rp.ID_ROLE = u.RoleID "
                 "JOIN dbo.skw_Permissions p ON p.ID_PERMISSION = rp.ID_PERMISSION "
-                "WHERE ur.ID_USER = :uid "
+                "WHERE u.ID_USER = :uid "
                 "  AND p.PermissionName IN ('documents.view_all', 'approval.supervise') "
                 "  AND p.IsActive = 1"
             ),
             {"uid": current_user.id_user},
         )
         return (result.scalar() or 0) > 0
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "_can_view_all: blad zapytania — domyslnie restrykcyjnie (False) | "
+            "id_user=%s: %s", current_user.id_user, exc,
+        )
         return False
 
 
@@ -150,6 +165,16 @@ async def list_documents_endpoint(
             "rowniez zastapione, do celow audytowych/historii."
         ),
     ),
+    include_resolved_duplicates: bool = Query(
+        False,
+        description=(
+            "Domyslnie False — ukrywa dokumenty cancelled, ktore byly "
+            "rozstrzygnietymi duplikatami (matched_instance_id IS NOT NULL). "
+            "Dane nie sa usuwane, wylacznie filtr widocznosci (2026-07-28, "
+            "na wniosek frontu). True = pokazuje rowniez je, do celow "
+            "audytowych/historii — dokladnie jak include_superseded."
+        ),
+    ),
 ):
     can_view_all = await _can_view_all(current_user, db)
     result = await svc.list_documents(
@@ -162,6 +187,7 @@ async def list_documents_endpoint(
         id_path=id_path, path_name=path_name, filter_mode=filter_mode,
         order_by=order_by, order_dir=order_dir,
         include_superseded=include_superseded,
+        include_resolved_duplicates=include_resolved_duplicates,
     )
     return BaseResponse.ok(data=result, app_code="documents.list")
 
@@ -575,8 +601,16 @@ async def get_document_pdf(
             filename=Path(file_path).name,
         )
 
+    
+    # NAPRAWA (2026-07-28): import przeniesiony PONAD gałąź ksef20/ksef_fakir —
+    # ta gałąź wywołuje fak_svc PRZED linią, w której wcześniej był import,
+    # co dawało UnboundLocalError przy KAŻDYM wywołaniu dla tych dwóch źródeł
+    # (nie tylko przy błędzie — zawsze, bo Python wiąże nazwę lokalną w całej
+    # funkcji już na etapie kompilacji, niezależnie od tego, która gałąź if
+    # faktycznie wykona się pierwsza).
+    from app.services import faktura_akceptacja_service as fak_svc
 
-    if source_name == "ksef20":
+    if source_name in ("ksef20", "ksef_fakir"):
         # Brak wiernego renderera FA(3)->PDF (stary mechanizm z Etapu 1 nieznaleziony).
         # Reuzywamy ta sama sciezke co manual_upload — PDF z danych instancji,
         # nie z surowego XML. XML pozostaje w extra_data.xml na przyszlosc.
@@ -599,7 +633,6 @@ async def get_document_pdf(
     # istniejaca funkcja get_faktura_pdf().
     from sqlalchemy import select as _select
     from app.db.models.faktura_akceptacja import FakturaAkceptacja
-    from app.services import faktura_akceptacja_service as fak_svc
 
     result = await db.execute(
         _select(FakturaAkceptacja.id).where(

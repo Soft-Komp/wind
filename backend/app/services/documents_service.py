@@ -29,6 +29,7 @@ Logika widocznosci (sekcja 4.14):
 UWAGA: from __future__ import annotations — NIGDY w tym pliku (SQLAlchemy ORM).
 """
 
+import hashlib
 import json
 import logging
 from datetime import date, datetime, timezone
@@ -40,6 +41,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.duplicate_detection_service import DuplicateDetectionService
 from app.services.event_service import _build_event_envelope, _append_event_to_log, _publish_to_channel
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,8 @@ async def list_documents(
     order_by: str = "created_at",
     order_dir: str = "desc",
     include_superseded: bool = False,
+    include_resolved_duplicates: bool = False,
+    include_duplicate_pending: bool = False,
 ) -> dict[str, Any]:
     """
     Lista dokumentow z filtrem widocznosci (poziom 2) i filtrem dostepu do zrodla (poziom 1).
@@ -157,6 +161,30 @@ async def list_documents(
     # — nigdy nie wchodzi do grupy OR, analogicznie do filtrow bezpieczenstwa.
     if not include_superseded:
         mandatory_where.append("i.[superseded_by_instance_id] IS NULL")
+
+    # NOWE (2026-07-28, na wniosek frontu) — domyslnie ukrywamy dokumenty
+    # cancelled, ktore byly rozstrzygnietymi duplikatami (matched_instance_id
+    # IS NOT NULL). SWIADOMIE nie wszystkie 'cancelled' — dokument mogl
+    # zostac anulowany z zupelnie innego powodu, niezwiazanego z duplikatami,
+    # i taki NIE powinien znikac z listy. Zero zmian w schemacie: obie
+    # kolumny (status, matched_instance_id) istnieja od migracji 0068.
+    # Dane fizycznie NIE sa usuwane — to wylacznie filtr widocznosci,
+    # analogiczny do include_superseded powyzej. ZAWSZE w mandatory_where.
+    if not include_resolved_duplicates:
+        mandatory_where.append(
+            "NOT (i.[status] = N'cancelled' AND i.[matched_instance_id] IS NOT NULL)"
+        )
+
+    # NOWE (2026-07-28, na wniosek frontu) — domyslnie ukrywamy TAKZE
+    # dokumenty jeszcze NIEROZSTRZYGNIETE (status='duplicate_pending'),
+    # nie tylko juz anulowane duplikaty. Dane pozostaja w systemie
+    # (wymog: musza tam byc), znika wylacznie z listy ogolnej. Ekran
+    # rozstrzygania duplikatow (list_duplicate_pending ponizej) MUSI
+    # przekazywac include_duplicate_pending=True, inaczej wlasny filtr
+    # status='duplicate_pending' zderzy sie z tym wykluczeniem i zwroci
+    # zero wynikow — nie przeoczyc tego przy jakiejkolwiek dalszej zmianie.
+    if not include_duplicate_pending:
+        mandatory_where.append("i.[status] <> N'duplicate_pending'")
 
     # Poziom 1 — filtr dostępu do źródeł (skw_source_role_access)
     # ZAWSZE w mandatory_where — nigdy nie wchodzi do grupy OR.
@@ -306,9 +334,20 @@ async def list_documents(
                 i.[document_title], i.[document_amount], i.[is_urgent],
                 i.[created_at], i.[updated_at],
                 i.[superseded_by_instance_id],
+                i.[matched_instance_id], i.[match_type], i.[match_reason],
                 s.[source_name],
                 p.[path_name],
-                g.[group_name] AS current_group_name
+                g.[group_name] AS current_group_name,
+                -- NOWE (2026-07-29, na wniosek frontu): data wystawienia dokumentu
+                -- (NIE data wpiecia do obiegu — ta pozostaje w created_at bez zmian).
+                -- Ten sam 3-poziomowy fallback co w skw_v_approval_instance_detail
+                -- (migracja 0066) i skw_v_approval_my_queue (migracja 0067):
+                -- fakir -> extra_data.doc_date -> extra_data.verified_doc_date.
+                COALESCE(
+                    fah.[DataWystawienia],
+                    TRY_CONVERT(DATE, JSON_VALUE(i.[extra_data], '$.doc_date')),
+                    TRY_CONVERT(DATE, JSON_VALUE(i.[extra_data], '$.verified_doc_date'))
+                ) AS document_date
             FROM [{_SCHEMA}].[skw_document_approval_instances] i
             JOIN [{_SCHEMA}].[skw_document_sources] s
               ON s.[id_source] = i.[id_source]
@@ -319,8 +358,16 @@ async def list_documents(
              AND ss.[step_order]  = i.[current_step]
             LEFT JOIN [{_SCHEMA}].[skw_approval_groups] g
               ON g.[id_group] = ss.[id_group]
+            -- NOWE — ten sam warunek JOIN co w migracjach 0066/0067 (tylko
+            -- zrodlo 'fakir'; 'ksef_fakir' i pozostale maja doc_date juz
+            -- bezposrednio w extra_data, nie potrzebuja tego JOIN-a).
+            LEFT JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah
+              ON s.[source_name] = N'fakir' AND fah.[KSEF_ID] = i.[id_document]
             {where_sql}
-            ORDER BY {sort_col} {sort_dir_sql}, i.[id_instance] DESC
+            ORDER BY
+                CASE WHEN i.[status] = N'unassigned' THEN 0 ELSE 1 END ASC,
+                {sort_col} {sort_dir_sql},
+                i.[id_instance] DESC
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
         """),
         params,
@@ -332,6 +379,10 @@ async def list_documents(
         r["status_display"] = _STATUS_DISPLAY.get(r["status"], r["status"])
         if r.get("document_amount") is not None:
             r["document_amount"] = float(r["document_amount"])
+        # NOWE — date -> ISO string, spojnie z reszta API (front nie dostaje
+        # surowego obiektu date z pyodbc).
+        if r.get("document_date") is not None:
+            r["document_date"] = r["document_date"].isoformat()
         items.append(r)
 
     return {"items": items, "total": total, "page": page, "per_page": per_page}
@@ -455,6 +506,49 @@ async def get_status_summary(
             "raw_text":        extra.get("ocr_text"),
         }
 
+    # ── NOWE — pod-obiekt kontrahenta ("kontrahent": {"nazwa", "nip"}) ───────
+    # Wyrownane z GET /approval/my-queue (widok skw_v_approval_my_queue,
+    # migracja 0067) oraz z widokiem skw_v_approval_instance_detail
+    # (migracja 0066): identyczny 3-poziomowy fallback
+    #   fah.NazwaKontrahenta -> extra_data.contractor -> extra_data.verified_contractor
+    #   extra_data.nip -> extra_data.verified_nip
+    # Ten endpoint czyta instancje bezposrednio z tabeli (nie z widoku),
+    # wiec fallback jest wykonany w osobnym, celowo minimalnym zapytaniu SQL
+    # (COALESCE po stronie bazy — nie duplikujemy logiki JSON w Pythonie).
+    kontrahent_result = await db.execute(
+        text(f"""
+            SELECT
+                COALESCE(
+                    fah.[NazwaKontrahenta],
+                    JSON_VALUE(dai.[extra_data], '$.contractor'),
+                    JSON_VALUE(dai.[extra_data], '$.verified_contractor')
+                ) AS kontrahent_nazwa,
+                COALESCE(
+                    JSON_VALUE(dai.[extra_data], '$.nip'),
+                    JSON_VALUE(dai.[extra_data], '$.verified_nip')
+                ) AS kontrahent_nip
+            FROM [{_SCHEMA}].[skw_document_approval_instances] dai
+            JOIN [{_SCHEMA}].[skw_document_sources] ds
+              ON ds.[id_source] = dai.[id_source]
+            LEFT JOIN [{_SCHEMA}].[skw_faktury_akceptacja_naglowek] fah
+                   ON  ds.[source_name] = N'fakir'
+                   AND fah.[KSEF_ID]    = dai.[id_document]
+            WHERE dai.[id_instance] = :i
+        """),
+        {"i": id_instance},
+    )
+    kontrahent_row = kontrahent_result.fetchone()
+    kontrahent = {
+        "nazwa": kontrahent_row[0] if kontrahent_row else None,
+        "nip":   kontrahent_row[1] if kontrahent_row else None,
+    }
+    if kontrahent["nazwa"] is None:
+        logger.info(
+            "get_status_summary: kontrahent=null dla id_instance=%s — "
+            "brak danych zarowno w fah.NazwaKontrahenta jak i extra_data.contractor/verified_contractor",
+            id_instance,
+        )
+
     return {
         "id_instance":             id_instance,
         "id_document":             instance["id_document"],
@@ -462,6 +556,7 @@ async def get_status_summary(
         "status_display":          _STATUS_DISPLAY.get(instance["status"], instance["status"]),
         "document_title":          instance["document_title"],
         "document_amount":         instance["document_amount"],
+        "kontrahent":              kontrahent,
         "is_urgent":               instance["is_urgent"],
         "current_step":            current_step_info,
         "available_actions_count": available_actions_count,
@@ -542,17 +637,15 @@ async def list_unassigned(
 # =============================================================================
 
 async def list_duplicate_pending(
-    db: AsyncSession,
-    *,
-    actor_id: int,
-    can_view_all: bool,
-    page: int = 1,
-    per_page: int = 50,
+    db: AsyncSession, *, actor_id: int, can_view_all: bool, page: int = 1, per_page: int = 25,
 ) -> dict[str, Any]:
-    """Lista potencjalnych duplikatow czekajacych na potwierdzenie referenta."""
+    # include_duplicate_pending=True WYMAGANE — bez tego wlaczylby sie
+    # nowy domyslny filtr wykluczajacy 'duplicate_pending' z listy_documents
+    # i ten ekran zawsze zwracalby pusta liste.
     return await list_documents(
         db, actor_id=actor_id, can_view_all=can_view_all,
         page=page, per_page=per_page, status="duplicate_pending",
+        include_duplicate_pending=True,
     )
 
 
@@ -567,8 +660,20 @@ async def resolve_duplicate(
     """
     Rozstrzyga duplikat.
 
-    decision='confirm': to faktycznie duplikat -> status=cancelled + adnotacja w extra_data
-    decision='dismiss': to NIE duplikat -> status=pending_dispatch, wpuszcza normalnie do obiegu
+    PRZEBUDOWA (2026-07-28) — porzuca model D-09 (adnotacja w extra_data):
+    matched_instance_id/match_type/match_reason (migracja 0068) sa juz
+    ustawione przez DuplicateDetectionService w momencie wykrycia — ta
+    funkcja ich NIE nadpisuje przy confirm (to fakt historyczny "kto
+    wskazal na kogo"), tylko CZYSCI je przy dismiss (skoro to jednak NIE
+    duplikat, trzymanie martwego wskazania myliloby przy dalszej analizie).
+
+    decision='confirm': to faktycznie duplikat -> nowy=cancelled (matched_*
+        zostaje jako slad), STARA (wskazana) instancja dostaje adnotacje
+        w SWOIM extra_data (has_duplicate_attempt) — jedyne miejsce, gdzie
+        extra_data jest tu nadal uzywane: to jednorazowy fakt historyczny
+        na oryginale, nie stan operacyjny nowej instancji.
+    decision='dismiss': to NIE duplikat -> pending_dispatch, matched_instance_id/
+        match_type/match_reason wyzerowane.
 
     Raises:
         DuplicateResolveError: instancja nie jest w stanie duplicate_pending.
@@ -582,40 +687,77 @@ async def resolve_duplicate(
             f"oczekiwano 'duplicate_pending'."
         )
 
-    extra: dict = {}
-    if instance.get("extra_data"):
-        try:
-            extra = json.loads(instance["extra_data"])
-        except Exception:
-            pass
+    if decision not in ("confirm", "dismiss"):
+        raise DuplicateResolveError(f"decision='{decision}' nieprawidlowa. Dozwolone: confirm, dismiss.")
 
+    matched_instance_id = instance.get("matched_instance_id")
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     if decision == "confirm":
-        extra["duplicate_resolution"] = "confirmed"
-        extra["duplicate_resolved_by"] = actor_id
-        extra["duplicate_resolved_at"] = now.isoformat()
         new_status = "cancelled"
-    elif decision == "dismiss":
-        extra["duplicate_resolution"] = "dismissed"
-        extra["duplicate_resolved_by"] = actor_id
-        extra["duplicate_resolved_at"] = now.isoformat()
-        new_status = "pending_dispatch"
-    else:
-        raise DuplicateResolveError(f"decision='{decision}' nieprawidlowa. Dozwolone: confirm, dismiss.")
+        await db.execute(
+            text(f"""
+                UPDATE [{_SCHEMA}].[skw_document_approval_instances]
+                SET [status] = N'cancelled', [updated_at] = :now
+                WHERE [id_instance] = :i
+            """),
+            {"now": now, "i": id_instance},
+        )
 
-    await db.execute(
-        text(f"""
-            UPDATE [{_SCHEMA}].[skw_document_approval_instances]
-            SET [status] = :status, [extra_data] = :extra, [updated_at] = SYSUTCDATETIME()
-            WHERE [id_instance] = :i
-        """),
-        {
-            "status": new_status,
-            "extra":  json.dumps(extra, ensure_ascii=False, default=str),
-            "i":      id_instance,
-        },
-    )
+        # NOWE (2026-07-28): adnotacja na STAREJ (oryginalnej) instancji —
+        # jednorazowy zapis faktu historycznego, nie stan operacyjny.
+        # Best-effort: blad tutaj NIE przerywa rozstrzygniecia duplikatu.
+        if matched_instance_id:
+            try:
+                orig_row = (await db.execute(
+                    text(f"""
+                        SELECT [extra_data] FROM [{_SCHEMA}].[skw_document_approval_instances]
+                        WHERE [id_instance] = :m
+                    """),
+                    {"m": matched_instance_id},
+                )).fetchone()
+                orig_extra: dict = {}
+                if orig_row and orig_row[0]:
+                    try:
+                        orig_extra = json.loads(orig_row[0])
+                    except Exception:
+                        orig_extra = {}
+                flagged_by = orig_extra.get("has_duplicate_attempt_from") or []
+                if id_instance not in flagged_by:
+                    flagged_by.append(id_instance)
+                orig_extra["has_duplicate_attempt_from"] = flagged_by
+                await db.execute(
+                    text(f"""
+                        UPDATE [{_SCHEMA}].[skw_document_approval_instances]
+                        SET [extra_data] = :extra, [updated_at] = :now
+                        WHERE [id_instance] = :m
+                    """),
+                    {
+                        "extra": json.dumps(orig_extra, ensure_ascii=False, default=str),
+                        "now": now, "m": matched_instance_id,
+                    },
+                )
+            except Exception as exc:
+                logger.error(
+                    "resolve_duplicate: blad adnotacji na oryginalnej instancji "
+                    "#%s (nieblokujacy) | id_instance=%s: %s",
+                    matched_instance_id, id_instance, exc,
+                )
+
+    else:  # dismiss
+        new_status = "pending_dispatch"
+        await db.execute(
+            text(f"""
+                UPDATE [{_SCHEMA}].[skw_document_approval_instances]
+                SET [status] = N'pending_dispatch',
+                    [matched_instance_id] = NULL,
+                    [match_type] = NULL,
+                    [match_reason] = NULL,
+                    [updated_at] = :now
+                WHERE [id_instance] = :i
+            """),
+            {"now": now, "i": id_instance},
+        )
 
     try:
         await db.execute(
@@ -627,7 +769,10 @@ async def resolve_duplicate(
             {
                 "uid":     actor_id,
                 "eid":     str(id_instance),
-                "details": json.dumps({"decision": decision, "new_status": new_status}, ensure_ascii=False),
+                "details": json.dumps({
+                    "decision": decision, "new_status": new_status,
+                    "matched_instance_id": matched_instance_id,
+                }, ensure_ascii=False),
             },
         )
     except Exception as exc:
@@ -636,8 +781,9 @@ async def resolve_duplicate(
     await db.commit()
 
     logger.info(
-        "Duplikat rozstrzygniety | id_instance=%s decision=%s new_status=%s actor=%s",
-        id_instance, decision, new_status, actor_id,
+        "Duplikat rozstrzygniety | id_instance=%s decision=%s new_status=%s "
+        "matched_instance_id=%s actor=%s",
+        id_instance, decision, new_status, matched_instance_id, actor_id,
     )
 
     return {"id_instance": id_instance, "decision": decision, "status": new_status}
@@ -718,7 +864,8 @@ async def _get_instance_or_404(db: AsyncSession, id_instance: int) -> dict[str, 
         text(f"""
             SELECT [id_instance], [id_source], [id_document], [id_category],
                    [status], [current_step], [document_title], [document_amount],
-                   [extra_data], [is_urgent], [created_at], [updated_at]
+                   [extra_data], [is_urgent], [created_at], [updated_at],
+                   [matched_instance_id], [match_type], [match_reason]
             FROM [{_SCHEMA}].[skw_document_approval_instances]
             WHERE [id_instance] = :i
         """),
@@ -822,6 +969,11 @@ async def upload_document(
     if len(content) == 0:
         raise HTTPException(status_code=422, detail="Plik jest pusty.")
 
+    # NOWE (2026-07-28): SHA-256 CALEGO pliku, PRZED czymkolwiek innym —
+    # zgodnie z pkt. 3 specyfikacji ("przy recznym uploadzie — najpierw po
+    # hash pliku"). Liczone raz, z bajtow juz w pamieci.
+    file_sha256 = hashlib.sha256(content).hexdigest()
+
     max_mb_raw = await redis.get("syscfg:APPROVAL_MAX_ATTACHMENT_MB")
     max_mb = int(max_mb_raw.decode() if isinstance(max_mb_raw, bytes) else max_mb_raw) if max_mb_raw else 20
     if len(content) > max_mb * 1024 * 1024:
@@ -875,27 +1027,53 @@ async def upload_document(
         text(f"""
             INSERT INTO [{_SCHEMA}].[skw_document_approval_instances]
                 ([id_source],[id_document],[status],[document_title],[document_amount],
-                 [extra_data],[dispatch_attempts],[created_at],[updated_at])
+                 [extra_data],[dispatch_attempts],[file_sha256],[created_at],[updated_at])
             OUTPUT INSERTED.[id_instance]
-            VALUES (:src,:doc,N'ocr_review_pending',:title,NULL,:extra,0,:now,:now)
+            VALUES (:src,:doc,N'ocr_review_pending',:title,NULL,:extra,0,:hash,:now,:now)
         """),
         {
             "src": id_source, "doc": id_document,
             "title": safe_name, "extra": json.dumps(extra_data, ensure_ascii=False),
+            "hash": file_sha256,
             "now": now,
         },
     )
     id_instance = insert_result.scalar_one()
     await db.commit()
 
-    ocr_queued = False
+    # NOWE (2026-07-28): sprawdzenie duplikatu PO hashu, PRZED OCR — pkt. 3
+    # specyfikacji. Na tym etapie numer/NIP/kwota jeszcze nieznane (przed OCR),
+    # wiec kaskada zadziala tu WYLACZNIE metoda file_sha256 (identyczny plik
+    # juz kiedys wgrany/pobrany) — pozostale metody zadzialaja PONOWNIE po OCR
+    # (patrz worker/tasks/ocr_task.py) i po recznej korekcie (patrz
+    # resolve_ocr_review nizej), kiedy te dane juz beda dostepne.
     try:
-        from app.core.arq_pool import get_arq_pool
-        arq_pool = get_arq_pool()
-        await arq_pool.enqueue_job("ocr_task", id_instance=id_instance, file_path=str(file_path))
-        ocr_queued = True
+        is_duplicate = await DuplicateDetectionService.check_and_mark(
+            db, id_instance=id_instance, id_source=id_source, id_document=id_document,
+        )
+        await db.commit()
     except Exception as exc:
-        logger.error("upload_document: blad enqueue ocr_task dla id_instance=%s: %s", id_instance, exc)
+        logger.error(
+            "upload_document: blad sprawdzania duplikatow (fail-safe, dokument "
+            "mimo to zostaje przyjety) | id_instance=%s: %s", id_instance, exc, exc_info=True,
+        )
+        is_duplicate = False
+
+    ocr_queued = False
+    if not is_duplicate:
+        try:
+            from app.core.arq_pool import get_arq_pool
+            arq_pool = get_arq_pool()
+            await arq_pool.enqueue_job("ocr_task", id_instance=id_instance, file_path=str(file_path))
+            ocr_queued = True
+        except Exception as exc:
+            logger.error("upload_document: blad enqueue ocr_task dla id_instance=%s: %s", id_instance, exc)
+    else:
+        logger.info(
+            "upload_document: dokument oznaczony jako duplicate_pending (SHA-256) "
+            "PRZED OCR — OCR pominiety, referent rozstrzygnie najpierw duplikat | "
+            "id_instance=%s", id_instance,
+        )
 
     await _audit_log(
         db, actor_id=actor_id, action="document.manual_upload",
@@ -912,9 +1090,13 @@ async def upload_document(
     return {
         "id_instance":  id_instance,
         "id_document":  id_document,
-        "status":       "ocr_review_pending",
+        "status":       "duplicate_pending" if is_duplicate else "ocr_review_pending",
         "ocr_queued":   ocr_queued,
+        "is_duplicate": is_duplicate,
         "message": (
+            "Wykryto mozliwy duplikat (identyczny plik) — sprawdz "
+            "GET /documents/duplicate-pending."
+            if is_duplicate else
             "Dokument przyjety. Trwa automatyczne rozpoznawanie danych (OCR) w tle. "
             "Sprawdz status przez GET /documents/{id}/status-summary za chwile."
             if ocr_queued else
@@ -1008,6 +1190,35 @@ async def resolve_ocr_review(
             params,
         )
         new_status = "pending_dispatch"
+
+        # NOWE (2026-07-28): ponowne sprawdzenie duplikatu — pkt. 3 specyfikacji
+        # ("ponownie po recznej korekcie"). Dopiero teraz numer/NIP/data/kwota
+        # sa znane z pewnoscia (operator je zatwierdzil/poprawil). Jesli
+        # kaskada znajdzie duplikat, PRZESLANIA new_status na duplicate_pending
+        # — dokument NIE moze wejsc do auto-dispatchu mimo confirm.
+        #
+        # NAPRAWA (2026-07-28, self-review): is_dup zainicjalizowane PRZED
+        # try — jest teraz uzywane rowniez nizej, w bramce bloku SSE. Bez
+        # tego drugi UPDATE w check_and_mark() poprawnie nadpisuje status
+        # w bazie na duplicate_pending, ALE blok SSE ponizej i tak wysylal
+        # "document_ocr_verified" bezwarunkowo przy kazdym confirm — referent
+        # dostawal falszywe powiadomienie "zweryfikowano" dla dokumentu,
+        # ktory w rzeczywistosci czeka teraz na rozstrzygniecie duplikatu.
+        is_dup = False
+        try:
+            is_dup = await DuplicateDetectionService.check_and_mark(
+                db,
+                id_instance=id_instance,
+                id_source=instance["id_source"],
+                id_document=instance["id_document"],
+            )
+            if is_dup:
+                new_status = "duplicate_pending"
+        except Exception as exc:
+            logger.error(
+                "resolve_ocr_review: blad sprawdzania duplikatow po weryfikacji "
+                "(fail-safe) | id_instance=%s: %s", id_instance, exc, exc_info=True,
+            )
     else:
         await db.execute(
             text(f"""
@@ -1026,6 +1237,7 @@ async def resolve_ocr_review(
     if decision == "confirm":
         audit_details.update({
             "document_amount": document_amount,
+            "duplicate_detected": is_dup,
             **verified_payload,
         })
 
@@ -1041,8 +1253,11 @@ async def resolve_ocr_review(
         id_instance, decision, new_status, actor_id,
     )
 
-    # SSE — tylko przy potwierdzeniu (odrzucenie to nie "weryfikacja").
-    if decision == "confirm" and redis is not None:
+    # SSE — tylko przy potwierdzeniu (odrzucenie to nie "weryfikacja") ORAZ
+    # tylko gdy dokument FAKTYCZNIE wszedl do pending_dispatch, nie gdy
+    # ponowne sprawdzenie po korekcie oznaczylo go jako duplicate_pending
+    # (NAPRAWA 2026-07-28 — patrz komentarz przy is_dup powyzej).
+    if decision == "confirm" and not is_dup and redis is not None:
         try:
             uploaded_by = None
             try:

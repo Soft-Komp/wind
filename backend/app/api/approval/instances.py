@@ -212,7 +212,8 @@ async def get_my_queue(
             f"  v.[votes_cast], v.[votes_required], v.[step_deadline], "
             f"  v.[via_delegation], v.[id_delegation], v.[delegated_from_id], "
             f"  v.[member_id_user], "
-            f"  v.[fakir_numer], v.[fakir_wartosc_brutto], v.[fakir_kontrahent] "
+            f"  v.[fakir_numer], v.[fakir_wartosc_brutto], v.[fakir_kontrahent], "
+            f"  v.[kontrahent_nazwa], v.[kontrahent_nip] "
             f"FROM [{_SCHEMA}].[skw_v_approval_my_queue] v "
             f"WHERE v.[authorized_id_user] = :uid "
             f"ORDER BY v.[is_urgent] DESC, v.[instance_created_at] ASC"
@@ -220,6 +221,7 @@ async def get_my_queue(
         {"uid": user_id},
     )
     own, delegated = [], []
+    kontrahent_brakujacy = 0  # licznik do logu diagnostycznego — patrz nizej
     for r in rows.fetchall():
         item = {
             "id_instance":     r[0],  "id_document":     r[1],
@@ -236,13 +238,27 @@ async def get_my_queue(
             "fakir_numer":     r[22],
             "fakir_brutto":    float(r[23]) if r[23] is not None else None,
             "fakir_kontrahent": r[24],
+            # NOWE — pod-obiekt kontrahenta, wyrownany z formatem
+            # GET /documents/{id}/status-summary. Rozwiazany po stronie
+            # SQL (widok skw_v_approval_my_queue, migracja 0067):
+            # fakir -> extra_data.contractor -> extra_data.verified_contractor.
+            "kontrahent": {"nazwa": r[25], "nip": r[26]},
         }
+        if r[25] is None:
+            kontrahent_brakujacy += 1
         if bool(r[18]):
             item["delegated_for_id"] = r[20]
             item["id_delegation"]    = r[19]
             delegated.append(item)
         else:
             own.append(item)
+
+    if kontrahent_brakujacy:
+        logger.info(
+            "get_my_queue: kontrahent=null dla %d/%d pozycji (user_id=%s) — "
+            "brak danych zarowno w fah.NazwaKontrahenta jak i extra_data.contractor/verified_contractor",
+            kontrahent_brakujacy, len(own) + len(delegated), user_id,
+        )
     return {
         "own_queue":       own,
         "delegated_queue": delegated,
@@ -727,9 +743,31 @@ async def dispatch_document(
         ),
         {"s": body.id_source},
     )).fetchone()
+    # NAPRAWA (2026-07-23, druga iteracja): pierwotnie ten fallback dotyczyl
+    # wylacznie connection_mode='push'. Okazalo sie, ze backend.
+    # unified_document._build_adapter() dla source_type IN ('ftp','email')
+    # ZAWSZE zwraca None ("jeszcze nie zaimplementowany") — mimo ze realny
+    # FtpAdapter istnieje i dziala po stronie workera (worker/services/
+    # ftp_adapter.py). To dwie ODREBNE fabryki adapterow w dwoch roznych
+    # procesach — backend nigdy nie dostal analogicznej implementacji.
+    # Zamiast czekac na synchronizacje tych dwoch fabryk, rozszerzamy
+    # fallback na KAZDY przypadek gdy adapter==None, nie tylko push.
+    #
+    # NAPRAWA (2026-07-24, trzecia iteracja): dolaczono "manual". Ta sama
+    # kategoria problemu — _build_adapter() zwraca None rowniez dla
+    # source_type='manual' ("manual nie ma adaptera synchronizacji"),
+    # z dobrego powodu: dokument recznie wgrany nie ma zadnego zewnetrznego
+    # systemu do ponownego odpytania, dane zyja WYLACZNIE w instancji ktora
+    # go pierwotnie przyjela (upload_document() + ocr-review/resolve).
+    # Zgloszenie: dokument 797 (dane kompletne po confirm) -> po
+    # cancel + POST /approval/dispatch z jawnym id_document/id_source ->
+    # instancja 798/802 z document_title/document_amount/extra_data = NULL.
+    # Potwierdzone zywym testem reprodukcji (upload 801 -> confirm, dane
+    # kompletne -> cancel -> dispatch -> instancja 802, wszystkie pola puste).
     is_push_source = bool(src_row and src_row[1] == "push")
+    source_type_val = src_row[0] if src_row else None
 
-    if is_push_source:
+    if is_push_source or source_type_val in ("ftp", "email", "manual"):
         prior = (await db.execute(
             text(
                 f"SELECT TOP 1 [document_title], [document_amount], [extra_data] "
@@ -745,24 +783,25 @@ async def dispatch_document(
             document_amount = float(prior[1]) if prior[1] is not None else None
             extra_data      = json.loads(prior[2]) if prior[2] else None
             logger.info(
-                "dispatch_document: zrodlo push (id_source=%s) — skopiowano dane "
-                "z poprzedniej instancji dla id_document=%s (adapter pominiety, "
-                "push nie wspiera live-fetch)",
-                body.id_source, body.id_document,
+                "dispatch_document: zrodlo bez live-fetch (id_source=%s, "
+                "type=%s) — skopiowano dane z poprzedniej instancji dla "
+                "id_document=%s (adapter pominiety/niedostepny)",
+                body.id_source, source_type_val, body.id_document,
             )
         else:
             logger.warning(
-                "dispatch_document: zrodlo push (id_source=%s) bez zadnej "
-                "wczesniejszej instancji z danymi dla id_document=%s — "
-                "instancja powstanie bez danych zrodlowych (pierwsze wystapienie "
-                "tego dokumentu, nic do skopiowania)",
-                body.id_source, body.id_document,
+                "dispatch_document: zrodlo bez live-fetch (id_source=%s, "
+                "type=%s) bez zadnej wczesniejszej instancji z danymi dla "
+                "id_document=%s — instancja powstanie bez danych zrodlowych "
+                "(pierwsze wystapienie tego dokumentu, nic do skopiowania)",
+                body.id_source, source_type_val, body.id_document,
             )
-        # UWAGA: dla push, jesli id_path nie podano recznie, NIE probujemy
-        # auto-resolve przez filter_engine — resolve_path() oczekuje swiezego
-        # UnifiedDocument.to_filter_dict(), ktorego dla push nie mamy (tylko
-        # skopiowane extra_data o innym ksztalcie kluczy). Front dla push
-        # bez recznego id_path dostanie pending_dispatch, tak jak dzis.
+        # UWAGA: dla push/ftp/email/manual, jesli id_path nie podano recznie,
+        # NIE probujemy auto-resolve przez filter_engine — resolve_path()
+        # oczekuje swiezego UnifiedDocument.to_filter_dict(), ktorego dla
+        # tych zrodel nie mamy (tylko skopiowane extra_data o innym ksztalcie
+        # kluczy). Front bez recznego id_path dostanie pending_dispatch,
+        # tak jak dzis dla push/ftp/email.
     else:
         adapter = await get_adapter_by_source_id(db, body.id_source)
         if adapter:

@@ -1288,7 +1288,24 @@ async def cancel(
             raise HTTPException(status_code=404, detail=f"Instancja {id_instance} nie istnieje.")
 
         current_status = inst[0]
+        dispatched_by  = inst[1]
         id_document    = inst[2]
+
+        # NAPRAWA (2026-07-29): parametr has_supervise byl przyjmowany, ale
+        # NIGDY nie byl sprawdzany — docstring obiecywal "dostepne dla
+        # dyspozytora i approval.supervise", kod pozwalal anulowac KAZDEMU
+        # z golym uprawnieniem approval.dispatch, niezaleznie kto dispatchowal
+        # dokument. Zgloszenie Kierownik/Ksiegowy okazalo sie z tym niezwiazane,
+        # ale luka logiki biznesowej istniala niezaleznie — naprawiona przy okazji.
+        if not has_supervise and id_user != dispatched_by:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Tylko dyspozytor, ktory przekazal dokument {id_instance} do obiegu, "
+                    "lub uzytkownik z uprawnieniem approval.supervise, moze go anulowac."
+                ),
+            )
+
         if current_status in ("approved", "cancelled"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

@@ -257,10 +257,18 @@ async def _fetch_user_names(
         unique_ids  = list(set(user_ids))
         placeholders = ",".join(str(uid) for uid in unique_ids)
 
+        # NAPRAWA (2026-07-28): dbo_ext.skw_Users — schemat sprzed migracji
+        # 0026 (schema_transfer), ktora przeniosla wszystkie tabele skw_* do
+        # dbo. Standing rule projektu: dbo_ext -> dbo wszedzie, gdzie
+        # wystapi. Ta funkcja zawsze zwracala pusty users_map (zapytanie do
+        # nieistniejacego/pustego schematu -> wyjatek -> except Exception ->
+        # {}), stad KAZDY pracownik w Historii Akceptacji pokazywal sie jako
+        # "User #<id>" zamiast FullName, niezaleznie od tego ze dane w
+        # dbo.skw_Users byly kompletne.
         result = await db.execute(
             text(
                 f"SELECT ID_USER, FullName, Username "
-                f"FROM dbo_ext.skw_Users "
+                f"FROM dbo.skw_Users "
                 f"WHERE ID_USER IN ({placeholders})"
             )
         )

@@ -72,6 +72,13 @@ class UnifiedDocument(BaseModel):
     payment_term:     date | None    = Field(default=None, description="Termin platnosci")
     payment_method:   str | None     = Field(default=None, description="Forma platnosci")
     external_id:      str | None     = Field(default=None, description="ID w zrodle zewnetrznym")
+    # NOWE (2026-07-28): hash SHA-256 pliku — wypelniany WYLACZNIE przez
+    # adaptery majace dostep do surowego pliku (manual upload, FTP, email).
+    # Dla database/api/ksef20 zawsze None — brak pliku do zahashowania.
+    # UWAGA: obliczenie samego hasha NIE jest w zakresie tego pliku — to
+    # zadanie adapterow FTP/email i endpointu manual upload (poza zakresem
+    # plikow dostarczonych w tej sesji, patrz podsumowanie na koncu).
+    file_sha256:      str | None     = Field(default=None, description="SHA-256 pliku (manual/ftp/email)")
 
     raw_data:         dict[str, Any] = Field(
         default_factory=dict,
@@ -108,8 +115,24 @@ class UnifiedDocument(BaseModel):
             "nip":           self.nip,
             "document_type": self.document_type,
             "source_name":   self.source_name,
-            "amount_gross":  float(self.amount_gross) if self.amount_gross else None,
-            "amount_net":    float(self.amount_net) if self.amount_net else None,
+            # NAPRAWA (2026-07-28): 'currency' brakowalo tutaj calkowicie —
+            # DuplicateDetectionService.invoice_fingerprint wymaga tego pola
+            # (NIP+numer+data+kwota+WALUTA), a bez jawnego zapisu ponizej
+            # walutowe pole bylo dostepne tylko przypadkowo, jesli surowy
+            # widok zrodla mial kolumne o dokladnie tej samej nazwie w
+            # raw_data — nie mozna na to liczyc dla wszystkich zrodel.
+            # Uzywamy truthiness `or "PLN"` tak jak juz robimy to nizej dla
+            # amount_gross/amount_net (is not None), ale explicite: brak
+            # walidacji na tym poziomie, ze self.currency jest kodem ISO —
+            # to zadanie dla warstwy mapowania pol zrodla, nie tego modelu.
+            "currency":      self.currency or "PLN",
+            # NAPRAWA (2026-07-28, ta sama sesja co wyzej): `if self.amount_gross`
+            # bylo prawdziwym bugiem w source_sync_task.py (kwota 0,00 -> NULL),
+            # ale TUTAJ juz bylo poprawnie — `if self.amount_gross else None`
+            # rowniez zamienia 0.00 na None. Naprawiamy przy okazji, w tym
+            # samym miejscu co zrodlo problemu bylo zdiagnozowane.
+            "amount_gross":  float(self.amount_gross) if self.amount_gross is not None else None,
+            "amount_net":    float(self.amount_net) if self.amount_net is not None else None,
             **self.raw_data,
         }
 
@@ -237,6 +260,29 @@ class DatabaseAdapter(BaseDocumentAdapter):
         self._id_col      = config.get("id_column", "KSEF_ID")
         self._date_col    = config.get("date_column")  # None = brak filtrowania dat
 
+        # NOWE (2026-07-28) — kursor zlozony (data + id), niezalezny od
+        # date_column/last_sync_at. Rozwiazuje zgloszenie: zrodlo z
+        # date_column=None pobiera wciaz te same TOP N rekordow, bo
+        # last_sync_at pelnil DWIE role (kiedy worker ostatnio probowal
+        # syncowac + gdzie w danych doszedl) i przy braku date_column druga
+        # rola nigdy nie byla realizowana.
+        #
+        # OPCJONALNE — brak tych dwoch kluczy w config = zachowanie
+        # DOKLADNIE jak dotychczas (date_column/since albo brak filtra).
+        # Gdy oba obecne — te dwa pola CALKOWICIE zastepuja date_column
+        # w fetch_new_documents(), niezaleznie od tego czy date_column
+        # jest tez ustawiony.
+        self._cursor_date_col = config.get("cursor_date_column")
+        self._cursor_id_col   = config.get("cursor_id_column")
+        # NOWE (2026-07-28) — opcjonalny punkt startowy dla PIERWSZEJ
+        # synchronizacji w trybie kursora zlozonego. Bez tego pierwsza
+        # synchronizacja zaczynala od najstarszego rekordu w widoku
+        # (potencjalnie lata historii) zamiast od ustalonej daty startowej
+        # zrodla. Format: string 'YYYY-MM-DD' lub 'YYYY-MM-DDTHH:MM:SS'.
+        # Brak tego klucza = stare zachowanie (od poczatku widoku),
+        # zachowane dla zrodel, ktore juz dzialaja bez niego.
+        self._initial_cursor_date = config.get("initial_cursor_date")
+
         # POPRAWKA (pozycje faktur, 2026-07-15): opcjonalny widok pozycji.
         # line_items_id_column domyslnie = id_column (ta sama kolumna klucza
         # w widoku pozycji co w widoku naglowka) — decyzja swiadoma (KSEF_ID
@@ -322,6 +368,28 @@ class DatabaseAdapter(BaseDocumentAdapter):
             raise ValueError(
                 f"DatabaseAdapter [{self.source_name}]: "
                 f"id_column '{self._id_col}' zawiera niedozwolone znaki"
+            )
+        # Walidacja opcjonalnego kursora zlozonego (2026-07-28) — jesli
+        # PODANO jedno z dwoch pol, WYMAGAMY obu (kursor zlozony ma sens
+        # tylko jako para; samo cursor_date_column bez cursor_id_column
+        # nie rozstrzyga kolejnosci rekordow z tego samego dnia).
+        cursor_fields_present = bool(self._cursor_date_col) or bool(self._cursor_id_col)
+        if cursor_fields_present and not (self._cursor_date_col and self._cursor_id_col):
+            raise ValueError(
+                f"DatabaseAdapter [{self.source_name}]: kursor zlozony wymaga "
+                f"OBU pol jednoczesnie — podano tylko jedno "
+                f"(cursor_date_column={self._cursor_date_col!r}, "
+                f"cursor_id_column={self._cursor_id_col!r})"
+            )
+        if self._cursor_date_col and not re.match(r'^[a-zA-Z0-9_]+$', self._cursor_date_col):
+            raise ValueError(
+                f"DatabaseAdapter [{self.source_name}]: "
+                f"cursor_date_column '{self._cursor_date_col}' zawiera niedozwolone znaki"
+            )
+        if self._cursor_id_col and not re.match(r'^[a-zA-Z0-9_]+$', self._cursor_id_col):
+            raise ValueError(
+                f"DatabaseAdapter [{self.source_name}]: "
+                f"cursor_id_column '{self._cursor_id_col}' zawiera niedozwolone znaki"
             )
         # Walidacja opcjonalnego widoku pozycji — tylko jesli podany.
         # Pozycje sa OPCJONALNE (decyzja 2026-07-15) — brak tego pola
@@ -621,18 +689,41 @@ class DatabaseAdapter(BaseDocumentAdapter):
             )
             raise
 
+    def supports_compound_cursor(self) -> bool:
+        """
+        NOWE (2026-07-28). True gdy skonfigurowano cursor_date_column +
+        cursor_id_column — w tym trybie 'since'/'date_column' sa
+        CALKOWICIE ignorowane w fetch_new_documents(), a worker
+        (source_sync_task.py) MUSI przekazywac parametr 'cursor'
+        i zapisac nowa wartosc kursora po pomyslnym przetworzeniu
+        calej partii (nie od razu po samym SELECT).
+        """
+        return bool(self._cursor_date_col and self._cursor_id_col)
+
     async def fetch_new_documents(
         self,
         db: AsyncSession,
         since: datetime | None,
         limit: int = 500,
+        cursor: dict[str, Any] | None = None,
     ) -> list[UnifiedDocument]:
         """
-        Pobiera dokumenty z widoku — nowe lub zmienione od 'since'.
+        Pobiera dokumenty z widoku.
 
-        Paginacja: ORDER BY id_column ASC, max 'limit' rekordow.
-        Jesli date_column jest skonfigurowany — filtruje od since.
-        Jesli nie — pobiera wszystkie (worker sprawdzi duplikaty przez MERGE).
+        TRZY tryby, w tej kolejnosci priorytetu:
+          1. Kursor zlozony (supports_compound_cursor()==True) — 'cursor'
+             to {"date": <str ISO>, "id": <str>}. Ignoruje 'since' i
+             'date_column' calkowicie. Dokladny mechanizm zwalczajacy
+             wielokrotne pobieranie tych samych rekordow: warunek
+             (data > ostatnia) OR (data = ostatnia AND id > ostatnie_id).
+          2. date_column skonfigurowany + since podane — stare zachowanie
+             (filtr >= since, brak tie-breaka po id — MOZE nadal
+             wielokrotnie pobierac rekordy z tej samej sekundy/minuty,
+             ale to jest znany, juz zaakceptowany kompromis dla zrodel
+             BEZ kursora zlozonego).
+          3. Brak obu — pobiera zawsze TOP N po id_column (worker
+             deduplikuje przez MERGE) — DOKLADNIE stare zachowanie,
+             zachowane dla zrodel, ktore go dzis uzywaja.
         """
         results: list[UnifiedDocument] = []
         errors = 0
@@ -640,11 +731,63 @@ class DatabaseAdapter(BaseDocumentAdapter):
         try:
             with self._get_pyodbc_conn() as conn:
                 cur = conn.cursor()
-
                 qualified_view = self._bracket_qualify(self._view_name)
-                if self._date_col and since:
+
+                if self.supports_compound_cursor():
+                    last_date = cursor.get("date") if cursor else None
+                    last_id   = cursor.get("id") if cursor else None
+                    if last_date and last_id is not None:
+                        sql = (
+                            f"SELECT TOP {int(limit)} * FROM {qualified_view} "
+                            f"WHERE ([{self._cursor_date_col}] > ?) "
+                            f"   OR ([{self._cursor_date_col}] = ? AND [{self._cursor_id_col}] > ?) "
+                            f"ORDER BY [{self._cursor_date_col}] ASC, [{self._cursor_id_col}] ASC"
+                        )
+                        cur.execute(sql, (last_date, last_date, last_id))
+                        logger.debug(
+                            "DatabaseAdapter.fetch_new_documents [kursor zlozony] | "
+                            "source=%s last_date=%s last_id=%s",
+                            self.source_name, last_date, last_id,
+                        )
+                    elif self._initial_cursor_date:
+                        # NOWE (2026-07-28) — pierwsza synchronizacja, ALE
+                        # skonfigurowano punkt startowy. Zamiast od poczatku
+                        # widoku, zaczynamy od tej daty wlacznie — dokladnie
+                        # to samo zachowanie, co poprzednio osiagane recznym
+                        # UPDATE sync_cursor, teraz jako jawna, dokumentowana
+                        # konfiguracja zrodla zamiast operacyjnego obejscia.
+                        sql = (
+                            f"SELECT TOP {int(limit)} * FROM {qualified_view} "
+                            f"WHERE [{self._cursor_date_col}] >= ? "
+                            f"ORDER BY [{self._cursor_date_col}] ASC, [{self._cursor_id_col}] ASC"
+                        )
+                        cur.execute(sql, (self._initial_cursor_date,))
+                        logger.info(
+                            "DatabaseAdapter.fetch_new_documents [kursor zlozony, "
+                            "PIERWSZA synchronizacja od skonfigurowanej daty "
+                            "initial_cursor_date=%s] | source=%s",
+                            self._initial_cursor_date, self.source_name,
+                        )
+                    else:
+                        # Brak zapisanego kursora I brak initial_cursor_date —
+                        # pobieramy od poczatku widoku (stare zachowanie,
+                        # zachowane dla zrodel bez tej konfiguracji).
+                        sql = (
+                            f"SELECT TOP {int(limit)} * FROM {qualified_view} "
+                            f"ORDER BY [{self._cursor_date_col}] ASC, [{self._cursor_id_col}] ASC"
+                        )
+                        cur.execute(sql)
+                        logger.warning(
+                            "DatabaseAdapter.fetch_new_documents [kursor zlozony, "
+                            "PIERWSZA synchronizacja — BRAK initial_cursor_date, "
+                            "pobieram od poczatku CALEJ historii widoku] | source=%s. "
+                            "Jesli to nie bylo zamierzone, ustaw 'initial_cursor_date' "
+                            "w konfiguracji zrodla PRZED aktywacja.",
+                            self.source_name,
+                        )
+
+                elif self._date_col and since:
                     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-                    # date_col jest zwalidowany w __init__
                     sql = (
                         f"SELECT TOP {int(limit)} * FROM {qualified_view} "
                         f"WHERE [{self._date_col}] >= ? "
@@ -674,17 +817,40 @@ class DatabaseAdapter(BaseDocumentAdapter):
 
         except Exception as exc:
             logger.error(
-                "DatabaseAdapter.fetch_new_documents blad | source=%s since=%s: %s",
-                self.source_name, since, exc,
+                "DatabaseAdapter.fetch_new_documents blad | source=%s since=%s cursor=%s: %s",
+                self.source_name, since, cursor, exc,
             )
             raise
 
         logger.info(
-            "DatabaseAdapter.fetch_new_documents | source=%s since=%s "
+            "DatabaseAdapter.fetch_new_documents | source=%s since=%s cursor=%s "
             "ok=%d errors=%d",
-            self.source_name, since, len(results), errors,
+            self.source_name, since, cursor, len(results), errors,
         )
         return results
+
+    def extract_cursor(self, docs: list[UnifiedDocument]) -> dict[str, Any] | None:
+        """
+        NOWE (2026-07-28). Wylicza nastepna wartosc kursora zlozonego na
+        podstawie OSTATNIEGO dokumentu w partii — dziala tylko jesli
+        fetch_new_documents() sortowal ORDER BY (cursor_date_col, cursor_id_col)
+        ASC, co jest zapewnione wylacznie w trybie supports_compound_cursor().
+
+        Zwraca None jesli ten adapter nie uzywa kursora zlozonego, albo
+        partia byla pusta (nic sie nie zmienilo — kursor zostaje bez zmian,
+        worker NIE nadpisuje starej wartosci).
+
+        WYWOLYWAC WYLACZNIE po pomyslnym przetworzeniu CALEJ partii
+        (errors == 0) — patrz wymog 'kursor zapisywac dopiero po prawidlowym
+        przetworzeniu calej partii'.
+        """
+        if not self.supports_compound_cursor() or not docs:
+            return None
+        last = docs[-1]
+        return {
+            "date": last.raw_data.get(self._cursor_date_col),
+            "id":   last.raw_data.get(self._cursor_id_col),
+        }
 
     def get_document_title(self, doc: UnifiedDocument) -> str:
         parts = []
@@ -1130,7 +1296,11 @@ class FakirDocumentAdapter(BaseDocumentAdapter):
             amount_net=_to_decimal(raw.get("WARTOSC_NETTO")),
             amount_vat=_to_decimal(raw.get("KWOTA_VAT")),
             contractor_name=raw.get("NazwaKontrahenta"),
-            nip=None,  # NIP nie istnieje w aktualnym widoku
+            # NAPRAWA (2026-07-29, migracja 0071): widok skw_faktury_akceptacja_naglowek
+            # dostal kolumne Nip — wczesniej jej nie bylo, stad ten hardkodowany None.
+            # SELECT * w tej metodzie automatycznie dociaga nowa kolumne do `raw`
+            # bez zadnej dodatkowej zmiany zapytania.
+            nip=raw.get("Nip"),
             document_type=raw.get("StatusOpis") or raw.get("KOD_STATUSU"),
             payment_method=raw.get("FORMA_PLATNOSCI"),
             payment_term=_clarion_date(raw.get("TerminPlatnosci")),

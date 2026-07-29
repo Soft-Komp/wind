@@ -625,7 +625,12 @@ async def _insert_instance(
             "id_source":       source.id_source,
             "id_document":     unified_doc.id_document,
             "document_title":  unified_doc.doc_number or f"Dokument {unified_doc.id_document}",
-            "document_amount": float(unified_doc.amount_gross) if unified_doc.amount_gross else None,
+            # NAPRAWA (2026-07-28): Decimal("0.00") jest falsy — `if
+            # unified_doc.amount_gross` zamienialo kwote 0,00 na NULL.
+            # Ten sam bug juz naprawiony w source_sync_task.py i
+            # unified_document.py::to_extra_data_json — czwarte miejsce
+            # tego samego wzorca w kodzie.
+            "document_amount": float(unified_doc.amount_gross) if unified_doc.amount_gross is not None else None,
             "extra_data":      json.dumps(extra_data, ensure_ascii=False, default=str),
             "now":             now,
         },

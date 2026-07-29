@@ -1,0 +1,167 @@
+================================================================ 
+ WINDYKACJA GPGK -- RAPORT STRUKTURY PROJEKTU 
+ Data: 28.07.2026  Czas:  8:09:44,70 
+ Katalog bazowy: C:\python\Windykacja-gpgk-backend 
+================================================================ 
+ 
+===== GIT STATUS ===== 
+ 
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   backend/app/api/documents.py
+	deleted:    projekt_raport_2026-07-23_09-00.txt
+	modified:   worker/core/db.py
+	modified:   worker/services/ocr_service.py
+	modified:   worker/tasks/auto_dispatch_task.py
+	modified:   worker/tasks/email_task.py
+	modified:   worker/tasks/notification_task.py
+	modified:   worker/tasks/ocr_task.py
+	modified:   worker/tasks/otp_pdf_task.py
+	modified:   worker/tasks/snapshot_task.py
+	modified:   worker/tasks/source_sync_task.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	backend/tmp/
+	projekt_raport_2026-07-28_08-09.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+ 
+===== GIT LOG (ostatnie 10 commitow) ===== 
+ 
+f555bcb Etap 2.1
+06bb720 Etap 2.1
+a13b964 Etap 2.1
+a08a62a Etap 2.1
+efcfebc Etap 2.1
+72771fd Etap 2.1
+4ff43a3 Etap 2.1
+5d962be Etap 2.1
+ab72a9a Etap 2.1
+5207e7f Etap 2.1
+ 
+===== GIT BRANCH ===== 
+ 
+* master
+  remotes/origin/master
+ 
+===== MIGRACJE ALEMBIC (backend\alembic\versions\) ===== 
+ 
+0002_update_view_skw_rozrachunki_faktur.py
+0003_add_monit_history_invoices.py
+0004_update_views_dniPo.py
+0005_add_templates_permissions.py
+0006_faktura_akceptacja.py
+0007_add_faktury_category.py
+0008_skw_alert_log.py
+0009_faktury_system_config_seed.py
+0010_faktury_widoki_dbo.py
+0011_kontrahenci_widok_dbo.py
+0012_cache_bypass_config.py
+0013_schema_checksums_brakujace_widoki.py
+0014_update_view_faktury_akceptacja_naglowek.py
+0015_faktura_pole_permissions.py
+0016_dashboard_views.py
+0017_dashboard_permissions.py
+0018_update_widoki_faktury_akceptacja.py
+0019_add_orphaned_status.py
+0020_update_views_rodzaj_typ_dok.py
+0021_koszty_dodatkowe.py
+0022_func_odsetki_rozrachunku.py
+0023_func_odsetki_rozrachunku_v2.py
+0024_func_odsetki_rozrachunku_v2.py
+0025_filtered_unique_numer_ksef.py
+0026_schema_transfer.py
+0027_fix_skw_users_transfer.py
+0028_approval_module.py
+0029_approval_views_and_fixes.py
+0030_add_consensus_type_to_snapshot_steps.py
+0031_fix_approval_log_trigger.py
+0032_fix_approval_views_join_ksef.py
+0033_stomil_catchup.py
+0034_fix_skw_kontrahenci_column_names.py
+0035_approval_instance_detail_category.py
+0036_mask_view_faktury_akceptacja_naglowek.py
+0037_mask_views_kontrahenci_rozrachunki.py
+0038_unmask_views.py
+0039_etap2_ddl_infrastructure.py
+0040_hook_service_procedure.py
+0041_sources_view_health_permission.py
+0042_deadline_sms_phone_number.py
+0043_arq_job_registry.py
+0044_maintenance_mode_config.py
+0045_endpoint_registry.py
+0046_source_role_access.py
+0047_func_odsetki_od_daty.py
+0048_koszty_jednorazowe_monitu.py
+0049_monit_data_wydruku_recznie.py
+0050_template_layout_engine.py
+0051_monit_kwoty_zbiorcze.py
+0052_watchdog_kolekcje.py
+0053_manual_upload_ocr_review.py
+0054_widen_id_document.py
+0055_encrypt_hook_operation_config.py
+0056_add_line_items_permission.py
+0057_document_push_items.py
+0058_auto_dispatch_error_threshold.py
+0059_notification_type_check_constraint.py
+0060_source_type_add_ksef20.py
+0061_instance_detail_ksef_columns.py
+0062_instance_detail_unified_fields.py
+0063_documents_view_list_permission.py
+0064_superseded_by_instance_id.py
+0065_ocr_task_timeout_config.py
+0066_instance_detail_verified_fields.py
+0067_my_queue_kontrahent_object.py
+f124fa9b58eb_initial_schema.py
+ 
+ -- alembic current przez docker: 
+Error response from daemon: container abbf5dc520595bf23f19bc798c16d62064950b0052c2a5a95083958e704fb5aa is not running
+ 
+===== PLIKI DDL (database\ddl\) ===== 
+ 
+000_create_schema.sql
+001_roles.sql
+002_permissions.sql
+003_users.sql
+004_role_permissions.sql
+005_refresh_tokens.sql
+006_otp_codes.sql
+007_audit_log.sql
+008_templates.sql
+009_monit_history.sql
+010_system_config.sql
+011_schema_checksums.sql
+012_master_access_log.sql
+013_comments.sql
+014_triggers_updated_at.sql
+015_faktura_akceptacja.sql
+016_faktura_przypisanie.sql
+017_faktura_log.sql
+018_faktura_widoki_dbo.sql
+019_faktura_checksums.sql
+020_faktura_triggers_updated_at.sql
+021_fakir_write_user.sql
+022_skw_alert_log.sql
+FIX_CHK_orphaned.sql
+ 
+===== PLIKI SEED (database\seeds\) ===== 
+ 
+01_roles.sql
+02_permissions.sql
+03_role_permissions.sql
+04_admin_user.sql
+05_system_config.sql
+06_templates_permissions.sql
+07_default_templates.sql
+08_faktura_permissions.sql
+09_faktura_role_permissions.sql
+10_system_config_faktura.sql
+11_alert_config.sql
+12_cache_bypass_seed.sql
+13_faktura_pole_permissions.sql
+14_faktura_pole_role_permissions.sql
