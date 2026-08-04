@@ -86,6 +86,21 @@ _NOTIFICATION_TEMPLATES: dict[str, dict] = {
         "title": "Dokument przekazany do Twojej grupy",
         "msg":   "Dokument '{title}' zostal przekazany do Twojej grupy akceptacyjnej.",
     },
+    # NAPRAWA (sesja 2026-07-16, "dokoncz symetrie unassigned"): auto_dispatch_task
+    # (worker) wysylal wczesniej WYLACZNIE SSE (channel:admins) gdy nie udalo sie
+    # znalezc sciezki obiegu dla dokumentu — brak trwalego powiadomienia/emaila
+    # oznaczal ze admin offline w tym momencie nigdy sie o tym nie dowiadywal.
+    # notif_type='approval_unassigned' wymaga migracji 0059 (pierwszy realny
+    # CHECK constraint na tej kolumnie — wczesniej nie istnial mimo dokumentacji).
+    # Odbiorcy: WYLACZNIE administratorzy (recipient_user_ids budowane w
+    # auto_dispatch_task.py::_get_admin_user_ids()), nie zwykli uzytkownicy.
+    "unassigned": {
+        "type":  "approval_unassigned",
+        "title": "Dokument bez przypisanej sciezki obiegu",
+        "msg":   "Dokument '{title}' nie mogl zostac automatycznie przypisany do "
+                 "zadnej sciezki obiegu po wyczerpaniu prob. Wymaga recznej interwencji "
+                 "administratora (przypisanie sciezki lub konfiguracja filtrow).",
+    },
 }
 
 

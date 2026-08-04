@@ -1,0 +1,453 @@
+================================================================ 
+ WINDYKACJA GPGK -- RAPORT STRUKTURY PROJEKTU 
+ Data: 31.07.2026  Czas: 11:39:49,23 
+ Katalog bazowy: C:\python\Windykacja-gpgk-backend 
+================================================================ 
+ 
+===== GIT STATUS ===== 
+ 
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    projekt_raport_2026-07-28_08-09.txt
+	modified:   worker/core/db.py
+	modified:   worker/services/ocr_service.py
+	modified:   worker/tasks/auto_dispatch_task.py
+	modified:   worker/tasks/email_task.py
+	modified:   worker/tasks/notification_task.py
+	modified:   worker/tasks/ocr_task.py
+	modified:   worker/tasks/otp_pdf_task.py
+	modified:   worker/tasks/snapshot_task.py
+	modified:   worker/tasks/source_sync_task.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	backend/tmp/
+	projekt_raport_2026-07-31_11-38.txt
+	projekt_raport_2026-07-31_11-39.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+ 
+===== GIT LOG (ostatnie 10 commitow) ===== 
+ 
+ce9dc6e Etap 2.1
+dfc2158 Etap 2.1
+8349205 Etap 2.1
+f555bcb Etap 2.1
+06bb720 Etap 2.1
+a13b964 Etap 2.1
+a08a62a Etap 2.1
+efcfebc Etap 2.1
+72771fd Etap 2.1
+4ff43a3 Etap 2.1
+ 
+===== GIT BRANCH ===== 
+ 
+* master
+  remotes/origin/master
+ 
+===== MIGRACJE ALEMBIC (backend\alembic\versions\) ===== 
+ 
+0002_update_view_skw_rozrachunki_faktur.py
+0003_add_monit_history_invoices.py
+0004_update_views_dniPo.py
+0005_add_templates_permissions.py
+0006_faktura_akceptacja.py
+0007_add_faktury_category.py
+0008_skw_alert_log.py
+0009_faktury_system_config_seed.py
+0010_faktury_widoki_dbo.py
+0011_kontrahenci_widok_dbo.py
+0012_cache_bypass_config.py
+0013_schema_checksums_brakujace_widoki.py
+0014_update_view_faktury_akceptacja_naglowek.py
+0015_faktura_pole_permissions.py
+0016_dashboard_views.py
+0017_dashboard_permissions.py
+0018_update_widoki_faktury_akceptacja.py
+0019_add_orphaned_status.py
+0020_update_views_rodzaj_typ_dok.py
+0021_koszty_dodatkowe.py
+0022_func_odsetki_rozrachunku.py
+0023_func_odsetki_rozrachunku_v2.py
+0024_func_odsetki_rozrachunku_v2.py
+0025_filtered_unique_numer_ksef.py
+0026_schema_transfer.py
+0027_fix_skw_users_transfer.py
+0028_approval_module.py
+0029_approval_views_and_fixes.py
+0030_add_consensus_type_to_snapshot_steps.py
+0031_fix_approval_log_trigger.py
+0032_fix_approval_views_join_ksef.py
+0033_stomil_catchup.py
+0034_fix_skw_kontrahenci_column_names.py
+0035_approval_instance_detail_category.py
+0036_mask_view_faktury_akceptacja_naglowek.py
+0037_mask_views_kontrahenci_rozrachunki.py
+0038_unmask_views.py
+0039_etap2_ddl_infrastructure.py
+0040_hook_service_procedure.py
+0041_sources_view_health_permission.py
+0042_deadline_sms_phone_number.py
+0043_arq_job_registry.py
+0044_maintenance_mode_config.py
+0045_endpoint_registry.py
+0046_source_role_access.py
+0047_func_odsetki_od_daty.py
+0048_koszty_jednorazowe_monitu.py
+0049_monit_data_wydruku_recznie.py
+0050_template_layout_engine.py
+0051_monit_kwoty_zbiorcze.py
+0052_watchdog_kolekcje.py
+0053_manual_upload_ocr_review.py
+0054_widen_id_document.py
+0055_encrypt_hook_operation_config.py
+0056_add_line_items_permission.py
+0057_document_push_items.py
+0058_auto_dispatch_error_threshold.py
+0059_notification_type_check_constraint.py
+0060_source_type_add_ksef20.py
+0061_instance_detail_ksef_columns.py
+0062_instance_detail_unified_fields.py
+0063_documents_view_list_permission.py
+0064_superseded_by_instance_id.py
+0065_ocr_task_timeout_config.py
+0066_instance_detail_verified_fields.py
+0067_my_queue_kontrahent_object.py
+0068_duplicate_match_columns_and_source_cursor.py
+0069_backfill_fakir_extra_data.py
+0070_reconcile_missed_duplicates.py
+0071_faktury_naglowek_nip_email.py
+0072_fix_naglowek_regression_and_nip.py
+f124fa9b58eb_initial_schema.py
+ 
+ -- alembic current przez docker: 
+Error response from daemon: No such container: windykacja_api
+ 
+===== PLIKI DDL (database\ddl\) ===== 
+ 
+000_create_schema.sql
+001_roles.sql
+002_permissions.sql
+003_users.sql
+004_role_permissions.sql
+005_refresh_tokens.sql
+006_otp_codes.sql
+007_audit_log.sql
+008_templates.sql
+009_monit_history.sql
+010_system_config.sql
+011_schema_checksums.sql
+012_master_access_log.sql
+013_comments.sql
+014_triggers_updated_at.sql
+015_faktura_akceptacja.sql
+016_faktura_przypisanie.sql
+017_faktura_log.sql
+018_faktura_widoki_dbo.sql
+019_faktura_checksums.sql
+020_faktura_triggers_updated_at.sql
+021_fakir_write_user.sql
+022_skw_alert_log.sql
+FIX_CHK_orphaned.sql
+ 
+===== PLIKI SEED (database\seeds\) ===== 
+ 
+01_roles.sql
+02_permissions.sql
+03_role_permissions.sql
+04_admin_user.sql
+05_system_config.sql
+06_templates_permissions.sql
+07_default_templates.sql
+08_faktura_permissions.sql
+09_faktura_role_permissions.sql
+10_system_config_faktura.sql
+11_alert_config.sql
+12_cache_bypass_seed.sql
+13_faktura_pole_permissions.sql
+14_faktura_pole_role_permissions.sql
+ 
+===== MODELE ORM (app\db\models\) ===== 
+ 
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\audit_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\base.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\comment.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\fakir_write.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\faktura_akceptacja.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\faktura_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\faktura_przypisanie.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\koszt_dodatkowy.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\master_access_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\monit_history.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\monit_history_invoices.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\otp_code.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\permission.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\refresh_token.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\role.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\role_permission.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\schema_checksums.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\system_config.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\template.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\user.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\__init__.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_attachment.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_comment.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_delegation.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_filter.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_filter_condition.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_filter_visibility.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_group.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_group_member.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path_change_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\approval_path_step.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_approval_instance.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_approval_snapshot_step.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_category.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_folder.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_folder_item.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_source.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\document_source_field_mapping.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\source_action.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\source_action_log.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\source_hook.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\user_notification.py
+C:\python\Windykacja-gpgk-backend\backend\app\db\models\approval\__init__.py
+ 
+===== SERWISY (app\services\) ===== 
+ 
+C:\python\Windykacja-gpgk-backend\backend\app\services\approval_history_pdf_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\approval_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\approval_service_ext.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\approval_sse_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\archive_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\audit_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\auth_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\comment_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\config_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\dashboard_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\debtor_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\documents_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\document_folder_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\duplicate_detection_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\endpoint_registry_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\event_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\fakir_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\faktura_akceptacja_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\faktura_pdf_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\field_mapping_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\filter_engine.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\hook_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\impersonation_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\job_registry_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\koszt_jednorazowy_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\koszt_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\maintenance_data_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\moje_faktury_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\monit_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\otp_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\permission_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\role_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\snapshot_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\source_admin_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\source_hook_action_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\source_role_access_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\template_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\user_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\webhook_service.py
+C:\python\Windykacja-gpgk-backend\backend\app\services\__init__.py
+ 
+===== API ROUTERY (app\api\) ===== 
+ 
+C:\python\Windykacja-gpgk-backend\backend\app\api\auth.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\comments.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\dashboard.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\debtors.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\documents.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\documents_folders.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\events.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\faktury_akceptacja.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\koszty.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\koszty_jednorazowe.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\moje_faktury.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\monits.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\permissions.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\roles.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\roles_permissions.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\router.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\snapshots.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\source_field_mappings.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\system.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\templates.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\users.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\webhooks.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\__init__.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\endpoints.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\job_queue.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\sources.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\source_field_mappings.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\source_hooks_actions.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\source_role_access.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\admin\__init__.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\admin.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\attachments.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\categories.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\comments.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\delegations.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\filters.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\groups.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\instances.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\notifications.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\paths.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\sources.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\stats.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\_delete_helpers.py
+C:\python\Windykacja-gpgk-backend\backend\app\api\approval\__init__.py
+ 
+===== WORKER TASKS (worker\) ===== 
+ 
+[BRAK] 
+ 
+===== NGINX (nginx\) ===== 
+ 
+C:\python\Windykacja-gpgk-backend\nginx\conf.d
+C:\python\Windykacja-gpgk-backend\nginx\default.conf
+ 
+===== TEMPLATES (app\templates\) ===== 
+ 
+[BRAK] 
+ 
+===== DOCKER PS ===== 
+ 
+NAMES     STATUS    PORTS
+ 
+----- requirements.txt ----- 
+# =============================================================================
+# requirements.txt — System Windykacja / Backend
+# =============================================================================
+#
+# ZASADY:
+#   - Wersje pinowane (==) dla pełnej reprodukowalności build w Docker
+#   - Żadne >= / ~= — środowisko produkcyjne musi być deterministyczne
+#   - Aktualizacje wersji TYLKO przez świadomą decyzję + re-test
+#   - Pakiety pogrupowane wg funkcji — nie mieszać
+#
+# =============================================================================
+
+
+# ─── Framework ────────────────────────────────────────────────────────────────
+
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+
+# ─── Baza danych ──────────────────────────────────────────────────────────────
+
+sqlalchemy[asyncio]==2.0.36
+aioodbc==0.5.0
+alembic==1.14.0
+pyodbc==5.2.0
+
+
+# ─── Walidacja i konfiguracja ─────────────────────────────────────────────────
+# UWAGA: pydantic[email] zawiera w sobie email-validator — nie dublować
+# W PLAN_PRAC.md były dwie osobne linie (pydantic + pydantic[email]);
+# pip i tak instaluje to samo — tutaj jedna linia z extras dla przejrzystości.
+
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+
+
+# ─── Auth / Security ──────────────────────────────────────────────────────────
+# argon2-cffi  → hasła użytkowników (USTALENIA §security)
+# bcrypt       → master_key.pin_hash (AUDIT_ZGODNOSCI R6 + USTALENIA §impersonacja)
+#               CELOWE użycie dwóch algorytmów: argon2 dla userów, bcrypt dla PIN
+#               PIN jest przechowywany w SystemConfig (DB), nie w .env
+
+python-jose[cryptography]==3.3.0
+argon2-cffi==23.1.0
+bcrypt==4.2.1
+
+
+# ─── Rate limiting ────────────────────────────────────────────────────────────
+# slowapi = Redis-backed rate limiter dla FastAPI (oparty na limits)
+# Użycie: endpointy auth (login, OTP) — PLAN_PRAC.md §"Rate limiting — do dodania"
+
+slowapi==0.1.9
+
+
+# ─── Redis / kolejka zadań ────────────────────────────────────────────────────
+# redis    → async client (SSE Pub/Sub + cache uprawnień + delete tokeny)
+# arq      → task queue (send_bulk_emails, send_bulk_sms, generate_pdf, snapshot cron)
+
+redis==5.2.1
+arq==0.26.1
+
+
+# ─── Email ────────────────────────────────────────────────────────────────────
+# aiosmtplib → async SMTP client (wysyłka monitów)
+# jinja2     → renderowanie szablonów email / SMS
+
+aiosmtplib==3.0.2
+jinja2==3.1.4
+
+
+# ─── PDF ──────────────────────────────────────────────────────────────────────
+# reportlab → generowanie PDF in-memory (StreamingResponse, bez zapisu na dysk)
+
+reportlab==4.2.5
+
+
+# ─── HTTP klient ──────────────────────────────────────────────────────────────
+# httpx → async HTTP (integracja SMSAPI + zewnętrzne API)
+
+httpx==0.28.1
+
+
+# ─── SSE (Server-Sent Events) ─────────────────────────────────────────────────
+# sse-starlette → endpoint /events — powiadomienia real-time
+
+sse-starlette==2.1.3
+
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+# orjson          → szybszy JSON encoder/decoder (zastępuje stdlib json)
+#                   Ważne: używać wsędzie zamiast import json
+# python-dateutil → parsowanie i manipulacja datami
+
+orjson==3.10.12
+python-dateutil==2.9.0
+
+
+# =============================================================================
+# [DEV / TEST] — tylko środowisko deweloperskie
+# W Dockerfile produkcyjnym: pip install --no-deps -r requirements.txt
+#   (NIE instalować poniższych w obrazie produkcyjnym)
+# =============================================================================
+# Odkomentować lokalnie lub w osobnym requirements-dev.txt:
+#
+# pytest==8.3.4
+# pytest-asyncio==0.24.0
+# pytest-mock==3.14.0
+# httpx==0.28.1          # już powyżej — AsyncClient do testów endpointów
+# respx==0.21.1          # mock dla httpx (zewnętrzne API w testach)
+# coverage==7.6.10
+# =============================================================================
+
+arq==0.26.1
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-timeout>=2.3.0
+
+# ─── SFTP (test_connection dla zrodel ftp z protocol='sftp') ──────────────────
+# UWAGA: rozstrzygniecie wlasne — backend potrzebuje tej samej biblioteki co
+# worker, bo test_connection() jest wywolywany z kontenera api, nie workera.
+# Wersja identyczna z worker/requirements.txt (paramiko==5.0.0) — swiadomie,
+# zeby uniknac rozjazdu zachowania testu vs. realnej synchronizacji.
+paramiko==5.0.0

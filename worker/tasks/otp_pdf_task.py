@@ -10,16 +10,23 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 
 from worker.core.db import AuditLog, MonitHistory, get_session
 from worker.core.redis_client import publish_task_completed
-from worker.services.pdf_service import generate_pdf, save_pdf_to_disk
+from worker.services.pdf_service import (
+    generate_pdf,
+    generate_pdf_structured_statement,   # ← BRAKUJĄCY IMPORT — druga przyczyna crasha (patrz niżej)
+    save_pdf_to_disk,
+)
 from worker.settings import get_settings
 from worker.core.logging_setup import get_event_logger
 
 logger = logging.getLogger("worker.tasks.pdf")
+
+_WARSAW = ZoneInfo("Europe/Warsaw")   #
 
 
 async def generate_pdf_task(
@@ -141,24 +148,51 @@ async def generate_pdf_task(
                             extra={"monit_id": monit_id, "template_id": monit_row.template_id},
                         )
 
-        _layout_engine = getattr(tmpl, "layout_engine", "jinja_text") if 'tmpl' in dir() else "jinja_text"
-
         if template_body and _layout_engine == "structured_statement":
-            kwoty = await oblicz_kwoty_zbiorcze_monitu(
-                wapro=None,  # patrz uwaga niżej — potrzebny realny wapro pool w tej funkcji
-                invoice_ids=monit_row.invoice_numbers,  # WYMAGA konwersji — patrz pytanie niżej
-                do_daty=None, od_daty=None,
+            # Kwoty zbiorcze ODCZYTUJEMY z monit_row — policzone raz w
+            # monit_service.send_bulk(), gdzie WAPRO connection pool jest
+            # dostępny. Worker NIGDY ich nie przelicza (brak dostępu do WAPRO).
+            if monit_row is None or monit_row.kwota_wplaty_suma is None:
+                logger.warning(
+                    "generate_pdf_task: structured_statement bez kwot zbiorczych "
+                    "w MonitHistory — używam wartości zastępczych",
+                    extra={
+                        "event": "pdf_task.structured_statement.brak_kwot_zbiorczych",
+                        "monit_id": monit_id,
+                        "job_id": effective_job_id,
+                    },
+                )
+
+            _kwota_wplaty_suma_w = float(monit_row.kwota_wplaty_suma) if monit_row and monit_row.kwota_wplaty_suma is not None else 0.0
+            _saldo_suma_w        = float(monit_row.saldo_suma) if monit_row and monit_row.saldo_suma is not None else effective_total
+            _odsetki_suma_w      = float(monit_row.odsetki_total) if monit_row and monit_row.odsetki_total is not None else 0.0
+            _koszt_upomnienia_w  = float(monit_row.koszty_dodatkowe_total) if monit_row and monit_row.koszty_dodatkowe_total is not None else 0.0
+            _id_kontrahenta_w    = monit_row.id_kontrahenta if monit_row else 0
+
+            logger.info(
+                "generate_pdf_task: renderuję structured_statement",
+                extra={
+                    "event": "pdf_task.structured_statement.start",
+                    "monit_id": monit_id,
+                    "id_kontrahenta": _id_kontrahenta_w,
+                    "kwota_wplaty_suma": _kwota_wplaty_suma_w,
+                    "saldo_suma": _saldo_suma_w,
+                    "odsetki_suma": _odsetki_suma_w,
+                    "koszt_upomnienia": _koszt_upomnienia_w,
+                    "job_id": effective_job_id,
+                },
             )
+
             pdf_bytes = await generate_pdf_structured_statement(
                 monit_id=monit_id,
                 debtor_name=debtor_name,
-                debtor_id_kontrahenta=monit_row.id_kontrahenta,
+                debtor_id_kontrahenta=_id_kontrahenta_w,
                 debtor_nip=debtor_nip, debtor_address=debtor_address,
                 invoices=invoices or [],
-                kwota_wplaty_suma=float(kwoty["kwota_wplaty_suma"]),
-                saldo_suma=float(kwoty["saldo_suma"]),
-                odsetki_suma=float(kwoty["odsetki_suma"]),
-                koszt_upomnienia=0.0,  # patrz pytanie niżej
+                kwota_wplaty_suma=_kwota_wplaty_suma_w,
+                saldo_suma=_saldo_suma_w,
+                odsetki_suma=_odsetki_suma_w,
+                koszt_upomnienia=_koszt_upomnienia_w,
                 template_body=template_body,
                 payment_account=payment_account,
                 issue_date=_issue_date_str,
@@ -173,7 +207,7 @@ async def generate_pdf_task(
                 total_debt=effective_total,
                 payment_deadline=payment_deadline or _calc_deadline(),
                 payment_account=payment_account,
-                issue_date=_issue_date_str,   # ← NOWE — None = zachowanie dotychczasowe
+                issue_date=_issue_date_str,
             )
 
         pdf_path = save_pdf_to_disk(pdf_bytes, monit_id, "print")

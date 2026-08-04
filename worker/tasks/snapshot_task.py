@@ -75,6 +75,14 @@ _SKW_TABLES = [
     "skw_ArqJobRegistry",
     "skw_EndpointRegistry",
     "skw_source_role_access",
+    # NAPRAWA 2026-07-16 (self-review "Czy podpadaja pod automatyczne
+    # snapshoty?"): brakowalo tej tabeli od razu przy jej utworzeniu w
+    # migracji 0057 — dokladnie ten blad, ktory Etap2_Instrukcja_Techniczna
+    # (sekcja 9.3) wprost ostrzega, ze trzeba dodac tabele TU w TYM SAMYM
+    # commicie co migracja DDL. Bez tego wpisu skw_document_push_items
+    # nigdy nie trafialaby do codziennego backupu (02:00 Warsaw) — w razie
+    # awarii pozycje dokumentow push bylyby nieodwracalnie utracone.
+    "skw_document_push_items",
 ]
 
 

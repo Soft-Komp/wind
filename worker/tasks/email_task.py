@@ -20,13 +20,17 @@ from arq import Retry
 from sqlalchemy import select, update
 
 from worker.core import db
-from worker.core.db import AuditLog, MonitHistory, MonitHistoryInvoice, get_session
+from worker.core.db import AuditLog, MonitHistory, MonitHistoryInvoice, Template, get_session
 from worker.core.redis_client import publish_task_completed
 from worker.services.dlq_service import add_to_dlq
 from worker.services.smtp_service import EmailMessage, send_email
 from worker.services.test_recipient_service import get_test_recipient_config
 from worker.services.bcc_service import get_bcc_config
-from worker.services.pdf_service import generate_pdf, save_pdf_to_disk
+from worker.services.pdf_service import (
+    generate_pdf,
+    generate_pdf_structured_statement,
+    save_pdf_to_disk,
+)
 from worker.settings import get_settings
 from worker.core.logging_setup import get_event_logger
 
@@ -191,25 +195,112 @@ async def send_bulk_emails(
 
         if include_pdf:
             try:
-                pdf_bytes = await generate_pdf(
-                    monit_id=monit.id_monit,
-                    debtor_name=monit.recipient,  # W tym kontekście recipient = email, ale mamy też inne dane
-                    debtor_nip=None,
-                    debtor_address=None,
-                    invoices=_parse_invoice_numbers(monit.invoice_numbers),
-                    total_debt=float(monit.total_debt or 0),
-                    payment_deadline=_calc_payment_deadline(),
-                )
+                # ── NOWE — sprawdzenie szablonu, którego dotąd tu BRAKOWAŁO ─
+                # Kanał email dotąd ignorował monit.template_id i zawsze wołał
+                # najprostszy generate_pdf() — niespójnie z kanałem 'print',
+                # który już poprawnie wybiera renderer na podstawie szablonu.
+                _email_layout_engine: str = "jinja_text"
+                _email_template_body: Optional[str] = None
+
+                if monit.template_id:
+                    async with get_session() as _tmpl_db:
+                        _tmpl_result = await _tmpl_db.execute(
+                            select(Template).where(
+                                Template.id_template == monit.template_id,
+                                Template.is_active == True,  # noqa: E712
+                            )
+                        )
+                        _tmpl_row = _tmpl_result.scalar_one_or_none()
+
+                    if _tmpl_row and _tmpl_row.body:
+                        _email_template_body = _tmpl_row.body
+                        _email_layout_engine = getattr(_tmpl_row, "layout_engine", "jinja_text")
+                        logger.info(
+                            "send_bulk_emails: szablon PDF ustalony",
+                            extra={
+                                "event": "email_task.pdf_template_resolved",
+                                "monit_id": monit.id_monit,
+                                "template_id": monit.template_id,
+                                "layout_engine": _email_layout_engine,
+                                "job_id": effective_job_id,
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            "send_bulk_emails: template_id ustawiony, ale szablon nieznaleziony/nieaktywny "
+                            "— fallback na generate_pdf() domyślny",
+                            extra={
+                                "event": "email_task.pdf_template_not_found",
+                                "monit_id": monit.id_monit,
+                                "template_id": monit.template_id,
+                                "job_id": effective_job_id,
+                            },
+                        )
+
+                if _email_layout_engine == "structured_statement" and _email_template_body:
+                    # Kwoty zbiorcze odczytane z MonitHistory — policzone raz
+                    # w monit_service.send_bulk(), worker tylko odczytuje.
+                    if monit.kwota_wplaty_suma is None:
+                        logger.warning(
+                            "send_bulk_emails: structured_statement bez kwot zbiorczych "
+                            "w MonitHistory — używam wartości zastępczych",
+                            extra={
+                                "event": "email_task.structured_statement.brak_kwot_zbiorczych",
+                                "monit_id": monit.id_monit,
+                                "job_id": effective_job_id,
+                            },
+                        )
+                    pdf_bytes = await generate_pdf_structured_statement(
+                        monit_id=monit.id_monit,
+                        debtor_name=monit.recipient,
+                        debtor_id_kontrahenta=monit.id_kontrahenta,
+                        debtor_nip=None,
+                        debtor_address=None,
+                        invoices=_parse_invoice_numbers(monit.invoice_numbers),
+                        kwota_wplaty_suma=float(monit.kwota_wplaty_suma or 0),
+                        saldo_suma=float(monit.saldo_suma or monit.total_debt or 0),
+                        odsetki_suma=float(monit.odsetki_total or 0),
+                        koszt_upomnienia=float(monit.koszty_dodatkowe_total or 0),
+                        template_body=_email_template_body,
+                        payment_account=None,
+                        issue_date=None,  # e-mail: zawsze dzisiejsza data (decyzja: tylko print ma ręczną datę)
+                    )
+                else:
+                    pdf_bytes = await generate_pdf(
+                        monit_id=monit.id_monit,
+                        debtor_name=monit.recipient,
+                        debtor_nip=None,
+                        debtor_address=None,
+                        invoices=_parse_invoice_numbers(monit.invoice_numbers),
+                        total_debt=float(monit.total_debt or 0),
+                        payment_deadline=_calc_payment_deadline(),
+                    )
+
                 pdf_path_saved = save_pdf_to_disk(pdf_bytes, monit.id_monit, "email")
                 pdf_attachment = {
                     "filename": f"wezwanie_do_zaplaty_{monit.id_monit}.pdf",
                     "data": pdf_bytes,
                     "mime_type": "application/pdf",
                 }
+                logger.info(
+                    "send_bulk_emails: PDF wygenerowany do załącznika",
+                    extra={
+                        "event": "email_task.pdf_attachment_generated",
+                        "monit_id": monit.id_monit,
+                        "layout_engine_used": _email_layout_engine,
+                        "pdf_size_kb": round(len(pdf_bytes) / 1024, 1),
+                        "job_id": effective_job_id,
+                    },
+                )
             except Exception as exc:
                 logger.warning(
                     "Błąd generowania PDF — wysyłam email bez załącznika",
-                    extra={"monit_id": monit.id_monit, "error": str(exc)},
+                    extra={
+                        "event": "email_task.pdf_attachment_error",
+                        "monit_id": monit.id_monit,
+                        "error": str(exc),
+                        "job_id": effective_job_id,
+                    },
                 )
 
         # ── Buduj i wyślij email ───────────────────────────────────────────

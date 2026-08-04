@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Integer, Numeric,
+    BigInteger, Boolean, Date, DateTime, Integer, Numeric,
     String, Text, func, text,
 )
 from sqlalchemy.ext.asyncio import (
@@ -120,9 +120,14 @@ class Template(Base):
 
 
 class AuditLog(Base):
-    """skw_AuditLog — zapis akcji workera do audit trail."""
+    """
+    skw_AuditLog — zapis akcji workera do audit trail.
+    POPRAWKA: schemat 'dbo_ext' → 'dbo' (migracja 0026 przeniosła wszystkie
+    tabele skw_* do dbo — ta definicja ORM w workerze nie została wtedy
+    zaktualizowana, analogicznie do MonitHistory/MonitHistoryInvoice powyżej).
+    """
     __tablename__ = "skw_AuditLog"
-    __table_args__ = {"schema": "dbo_ext"}
+    __table_args__ = {"schema": "dbo"}
 
     id_log: Mapped[int] = mapped_column("ID_LOG", BigInteger, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(

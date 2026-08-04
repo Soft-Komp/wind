@@ -833,17 +833,31 @@ async def accept(
                     ip_address=ip_address,
                 )
 
-        # ── Krok 9.5: Hooki po akcji obiegowej ────────────────────────────────
-        # Odpala sie na KAZDE pojedyncze accept() (decyzja z 2026-07-15) —
-        # nie tylko przy approved_terminal. PRZED db.commit() (F0.1) —
-        # HookError = brak commit() = rollback calego accept().
-        hook_results = await HookService.run_after(
-            action="accepted",
-            id_instance=id_instance,
-            db=db,
-            redis=redis,
-            id_user=id_user,
-        )
+        # ── Krok 9.5: Hook po akcji obiegowej ─────────────────────────────────
+        # KOREKTA 2026-07-30: hook 'accepted' odpala sie WYLACZNIE gdy obieg
+        # faktycznie sie konczy (approved_terminal=True) — NIE przy kazdym
+        # pojedynczym glosie na wieloetapowym obiegu AND/OR.
+        #
+        # Powod: hook zastepuje usunieta funkcje _sync_faktura_akceptacja_status,
+        # ktora historycznie wywolywala sie wylacznie dla statusu terminalnego
+        # 'approved' (Etap2_Instrukcja_Techniczna_FINAL.pdf, sek. 4.4,
+        # "Stan obecny"). Decyzja z 2026-07-15 (patrz historia commitow) na
+        # "kazde accept()" byla bledna interpretacja specyfikacji — front
+        # potwierdzil 2026-07-30, ze konfiguracja hooka (np. procedura
+        # skw_AktualizujStatusFaktury, seed w migracji 0040) zaklada wywolanie
+        # jednorazowe, po zamknieciu calego obiegu, nie po kazdym etapie.
+        #
+        # PRZED db.commit() (F0.1) — HookError = brak commit() = rollback
+        # calego accept(), zgodnie z kontraktem hooka krytycznego.
+        hook_results: list = []
+        if approved_terminal:
+            hook_results = await HookService.run_after(
+                action="accepted",
+                id_instance=id_instance,
+                db=db,
+                redis=redis,
+                id_user=id_user,
+            )
 
         # ── Krok 10: Commit ──────────────────────────────────────────────────
         await db.commit()
