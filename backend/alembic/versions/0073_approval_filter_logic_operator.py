@@ -25,28 +25,15 @@ dopasowan, wiec dodanie trybu AND/OR wewnatrz jednego filtra nie wymaga zadnej
 zmiany w samej petli, wylacznie w _evaluate_standard_filter().
 
 --------------------------------------------------------------------------
-DEFAULT KOLUMNY - UWAGA, PUNKT WYMAGAJACY POTWIERDZENIA:
+DEFAULT KOLUMNY — DECYZJA POTWIERDZONA:
 --------------------------------------------------------------------------
-Wartosc ponizej (_DEFAULT_VALUE = "AND") to REKOMENDACJA INZYNIERSKA, nie
-ostatecznie potwierdzona przez wlasciciela projektu decyzja. W toku ustalen
-(2026-07-31) pojawila sie tez propozycja DEFAULT='OR', ktora nastepnie
-zostala okreslona przez wlasciciela projektu jako "wstawka z frontu"
-(nieautoryzowana, niebedaca jego faktyczna decyzja).
+Wartosc domyslna to AND. Decyzja zachowuje dzialanie wszystkich istniejacych
+filtrow po wykonaniu migracji; administrator musi swiadomie przelaczyc
+konkretny filtr na OR. API i frontend powinny uzywac tej samej wartosci
+poczatkowej.
 
-Uzasadnienie rekomendacji 'AND': zero zmiany zachowania dzisiaj dzialajacych
-filtrow na produkcji (GPGKJASLO) w momencie wykonania ALTER - administrator
-musi SWIADOMIE przelaczyc konkretny filtr na OR, zeby zmienic jego dzialanie.
-Formularz tworzenia NOWEGO filtra po stronie API/frontu moze niezaleznie
-podpowiadac 'OR' jako wartosc poczatkowa w UI - to decyzja UX na poziomie
-Pydantic/frontu, BEZ zwiazku z DEFAULT tej kolumny SQL, i nie jest tu
-implementowana.
-
-JESLI wlasciciel projektu jawnie potwierdzi INNA wartosc DEFAULT niz 'AND':
-  - jesli migracja NIE byla jeszcze zastosowana na zadnej instancji -
-    wystarczy zmienic literal _DEFAULT_VALUE ponizej i wdrozyc ponownie.
-  - jesli migracja JUZ byla zastosowana (STOMIL i/lub GPGKJASLO) - wymagana
-    jest NOWA migracja korygujaca (analogicznie do wzorca 0071 -> 0072),
-    NIE recznie edytowany plik 0073 po fakcie.
+Jesli migracja 0073 zostala juz zastosowana, nie wolno edytowac jej po fakcie.
+Kazda przyszla zmiana wartosci domyslnej wymaga nowej migracji korygujacej.
 
 --------------------------------------------------------------------------
 PUSTY FILTR (0 warunkow) - zachowanie docelowe w filter_engine.py:
@@ -84,9 +71,7 @@ COLUMN = "logic_operator"
 CHECK_NAME = "CHK_saf_logic_operator"
 DEFAULT_NAME = "DF_saf_logic_operator"
 
-# ── PENDING POTWIERDZENIA WLASCICIELA PROJEKTU (patrz docstring wyzej) ─────
-# Rekomendacja: 'AND'. Zmienic TYLKO po jawnym, jednoznacznym potwierdzeniu
-# (nie po komunikacie, ktory moze byc kolejna "wstawka z frontu").
+# Potwierdzona wartosc kompatybilna wstecznie.
 _DEFAULT_VALUE = "AND"
 
 

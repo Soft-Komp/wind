@@ -1107,8 +1107,17 @@ async def _fetch_voting_summary(
                 f"  ON s.[id_instance] = l.[id_instance] "
                 f"  AND s.[step_order] = l.[step_order_snapshot] "
                 f"WHERE l.[id_instance] = :iid "
+                # NAPRAWA (2026-08-04, zgloszenie frontu: dokument 2649,
+                # "Hurtownia Chemiczna Kleberg", 699 zl - krok ze
+                # samym forwarded/send_to_group znikal z sekcji "karta
+                # akceptacji" w PDF, mimo ze byl widoczny w plaskiej tabeli
+                # "Historia" (_fetch_log_entries, bez filtra po action).
+                # 'forwarded' i 'send_to_group' brakowaly w tej liscie -
+                # krok, ktorego JEDYNA akcja to jedna z tych dwoch, nigdy
+                # nie trafial do steps_rows, wiec cala jego karta znikala.
                 f"  AND l.[action] IN (N'accepted', N'rejected', N'dispatched', "
-                f"                     N'approved', N'rollback', N'cancelled') "
+                f"                     N'approved', N'rollback', N'cancelled', "
+                f"                     N'forwarded', N'send_to_group') "
                 f"  AND l.[id_group_snapshot] IS NOT NULL "
                 f"ORDER BY l.[step_order_snapshot] ASC"
             ),

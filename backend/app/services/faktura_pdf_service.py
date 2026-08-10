@@ -668,12 +668,7 @@ def _build_pdf_sync(ctx: _PDFKontekst) -> bytes:
             f'<font name="DejaVu-Bold">Nr dok. WAPRO:</font> {wapro_numer}',
             S_NORMAL,
         ))
-    if ctx.firma_nip:
-        prawa_naglowka.append(Paragraph(
-            f'<font name="DejaVu-Bold">NIP:</font> '
-            f'{_sanitize_str(ctx.firma_nip, 20)}',
-            S_MALY,
-        ))
+
 
     if logo_element:
         # Tabela 2-kolumnowa: logo | tekst

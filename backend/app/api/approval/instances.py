@@ -913,7 +913,9 @@ async def dispatch_document(
     summary="Szczegoly instancji obiegu",
     description=(
         "Dane z widoku `skw_v_approval_instance_detail`: dokument, "
-        "biezacy krok, grupa, postep, dyspozytor, deadline."
+        "biezacy krok, grupa, postep, dyspozytor, deadline. "
+        "Dodatkowo `extra_data` (sekcja techniczna) - dobudowane osobnym "
+        "zapytaniem, bo widok go nie zawiera (patrz NAPRAWA ponizej)."
     ),
     responses={404: {"description": "Instancja nie istnieje"}},
     dependencies=[require_permission("approval.view_queue")],
@@ -938,6 +940,31 @@ async def get_instance(
     for k, v in data.items():
         if hasattr(v, "isoformat"):
             data[k] = dt_utc(v)
+
+    # NAPRAWA (2026-08-04, zgloszenie frontu): skw_v_approval_instance_detail
+    # nie ma kolumny extra_data - endpoint nigdy jej nie zwracal, mimo ze
+    # sekcja techniczna w specyfikacji (Etap2_Scalony_Backend_Frontend.docx,
+    # 7.1) zaklada jej obecnosc w szczegolach dokumentu. Dobudowane tutaj,
+    # osobnym, lekkim zapytaniem po jednej kolumnie z tabeli bazowej -
+    # NIE modyfikujemy widoku (nie mamy jego pelnej definicji CREATE VIEW
+    # do bezpiecznej edycji w tej sesji). Parsowanie identyczne jak w
+    # innych miejscach tego pliku (np. dispatch_document): brak/uszkodzony
+    # JSON -> None, nie 500.
+    extra_row = await db.execute(
+        text(f"SELECT [extra_data] FROM [{_SCHEMA}].[skw_document_approval_instances] "
+             f"WHERE [id_instance] = :i"),
+        {"i": id_instance},
+    )
+    extra_raw = extra_row.scalar_one_or_none()
+    try:
+        data["extra_data"] = json.loads(extra_raw) if extra_raw else None
+    except (TypeError, ValueError):
+        logger.warning(
+            "get_instance: extra_data nie jest poprawnym JSON | id_instance=%s",
+            id_instance,
+        )
+        data["extra_data"] = None
+
     return data
 
 
@@ -2423,4 +2450,3 @@ async def get_instance_timeline(
         "total_events": len(timeline),
         "timeline":     timeline,
     }
- 

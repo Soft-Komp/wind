@@ -6,7 +6,7 @@ Odpowiedzialnosc:
     resolve_path() — glowna funkcja; zwraca id_path lub None.
 
 Algorytm (wg specyfikacji 3.7 + rozszerzenie AND/OR z 2026-07-31):
-    1. Pobierz aktywne filtry posortowane po priority DESC (wyzszy = wazniejszy).
+    1. Pobierz aktywne filtry posortowane po priority ASC; ostatnie dopasowanie ma najwyzszy priorytet.
     2. Dla kazdego filtra:
        a. Sprawdz typ: standard lub universal
        b. standard: oceń warunki przez evaluate_standard_filter() - logika
@@ -292,7 +292,7 @@ async def _evaluate_standard_filter(
     else:
         matched = all(r["result"] for r in results)
 
-    # Pelny log strukturalny JSON - absudalnie szczegolowy celowo, zgodnie
+    # Pelny log strukturalny JSON - bardzo szczegolowy celowo, zgodnie
     # z wymogiem pelnej odtwarzalnosci decyzji dispatchu.
     logger.info(json.dumps({
         "event": "filter_engine.evaluate_standard",
