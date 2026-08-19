@@ -2115,3 +2115,21 @@ def _hook_result_to_dict(hook_results: list) -> dict | None:
         "message":          first.message,
         "refresh_document": first.refresh_document,
     }
+
+async def _get_config_bool(
+    db: AsyncSession, redis: Redis, key: str, default: bool = False,
+) -> bool:
+    """Zwraca flage z SystemConfig jako bool (nie rzuca wyjatku, w odroznieniu
+    od _check_feature_flag). Brak wiersza = domyslny fallback OFF."""
+    cache_key = f"syscfg:{key}"
+    cached = await redis.get(cache_key)
+    if cached is None:
+        row = await db.execute(text(
+            f"SELECT [ConfigValue] FROM [{_SCHEMA}].[skw_SystemConfig] "
+            f"WHERE [ConfigKey] = :k AND [IsActive] = 1"), {"k": key})
+        result = row.fetchone()
+        value = result[0] if result else ("true" if default else "false")
+        await redis.set(cache_key, value, ex=300)
+    else:
+        value = cached.decode() if isinstance(cached, bytes) else cached
+    return value.lower() == "true"

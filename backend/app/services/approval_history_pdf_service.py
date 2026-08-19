@@ -1115,9 +1115,20 @@ async def _fetch_voting_summary(
                 # 'forwarded' i 'send_to_group' brakowaly w tej liscie -
                 # krok, ktorego JEDYNA akcja to jedna z tych dwoch, nigdy
                 # nie trafial do steps_rows, wiec cala jego karta znikala.
-                f"  AND l.[action] IN (N'accepted', N'rejected', N'dispatched', "
-                f"                     N'approved', N'rollback', N'cancelled', "
-                f"                     N'forwarded', N'send_to_group') "
+                #
+                # NAPRAWA (2026-08-12, UISA - front: "potrzebujemy dodac
+                # pelna historie", bez wskazania konkretnej listy statusow).
+                # Reczna lista IN (...) to mechanizm, ktory juz raz zawiodl
+                # (patrz wyzej) i wymaga rownoleglego utrzymania z kazdym
+                # nowym typem akcji obiegowej dodawanym w przyszlosci.
+                # Usunieto ja calkowicie - kryterium przynaleznosci do
+                # "karty" jest teraz identyczne jak w plaskiej tabeli
+                # Historia w tym samym PDF (_fetch_log_entries) oraz w
+                # GET /instances/{id}/history (get_instance_history):
+                # wylacznie obecnosc id_group_snapshot, bez wzgledu na typ
+                # akcji. Zgodne z MASTER_DOKUMENTACJA sekcja 7.9 ("pelna
+                # historia akcji instancji, wszystkie wpisy approval_log").
+                # Usuwa cala klase tego bledu na przyszlosc.
                 f"  AND l.[id_group_snapshot] IS NOT NULL "
                 f"ORDER BY l.[step_order_snapshot] ASC"
             ),
@@ -1269,12 +1280,59 @@ async def generate_approval_history_pdf(
             detail=f"Instancja obiegu ID={id_instance} nie istnieje.",
         )
 
-    # ── Krok 2: Cache Redis ────────────────────────────────────────────────────
-    # Fingerprint: status + completed_at + dispatched_at.
-    # Zakończone obiegi (approved/cancelled) cache'owane na pełne TTL.
-    # In_progress: inwalidacja przy zmianie stanu (completed_at=None → klucz stały).
+    # ── Krok 2a: Sygnatura biezacego stanu approval_log ────────────────────────
+    # ZNALEZISKO (2026-08-10, UISA - zgloszenie: PDF "karta akceptacji" nie
+    # pokazuje wszystkich wpisow z zakladki Historia). Nie jest to udokumen-
+    # towana decyzja projektowa - to bug znaleziony przy analizie kodu.
+    #
+    # Przyczyna: stary fingerprint (status+completed_at+dispatched_at) NIE
+    # zmienial sie przy czesciowych glosach AND, forwarded, send_to_group
+    # czy rollbacku-do-tego-samego-statusu - kazda z tych akcji dopisuje
+    # wiersz do skw_approval_log, ale bez zmiany tych 3 pol. PDF wygenero-
+    # wany i zcache'owany raz mogl byc serwowany ponownie w oknie TTL mimo
+    # nowych wpisow w logu dodanych PO jego wygenerowaniu.
+    #
+    # Naprawa: fingerprint dowiazany BEZPOSREDNIO do stanu approval_log
+    # (COUNT + MAX id_log + MAX logged_at, redundantnie), nie do pol
+    # instancji. Kazdy nowy wpis w logu, niezaleznie od typu akcji,
+    # gwarantowanie zmienia wszystkie trzy skladniki - nie trzeba juz
+    # pamietac o "liscie akcji, ktore inwaliduja cache" (to byl mechanizm,
+    # ktory juz raz zawiodl - patrz naprawa forwarded/send_to_group).
+    try:
+        log_sig_row = (await db.execute(
+            text(
+                f"SELECT COUNT(*), MAX(l.[id_log]), MAX(l.[logged_at]) "
+                f"FROM [{_SCHEMA}].[skw_approval_log] l "
+                f"WHERE l.[id_instance] = :iid"
+            ),
+            {"iid": id_instance},
+        )).fetchone()
+        log_count     = log_sig_row[0] if log_sig_row else 0
+        log_max_id    = log_sig_row[1] if log_sig_row else None
+        log_max_ts    = log_sig_row[2] if log_sig_row else None
+    except Exception as exc:
+        logger.warning(
+            orjson.dumps({
+                "event":       "approval_history_pdf_log_signature_error",
+                "id_instance": id_instance,
+                "error":       str(exc),
+            }).decode(),
+            exc_info=True,
+        )
+        # Fail-safe: przy błędzie zapytania sygnatury NIE ufamy cache -
+        # wartość oparta o zegar monotoniczny gwarantuje unikalny
+        # fingerprint, czyli zawsze cache-miss. Wolniej, ale nigdy nie
+        # zwrócimy potencjalnie nieaktualnego PDF-a.
+        log_count, log_max_id, log_max_ts = None, None, _time.monotonic_ns()
+
+    # ── Krok 2b: Cache Redis ────────────────────────────────────────────────────
+    # Fingerprint: status + completed_at + dispatched_at + sygnatura logu.
+    # Zakończone obiegi (approved/cancelled) — log się już nie zmienia
+    # (trigger DENY UPDATE/DELETE na approval_log), więc sygnatura logu
+    # jest wtedy również stała — pełne TTL nadal działa tak jak wcześniej.
     cache_fingerprint = hashlib.md5(
-        f"{id_instance}:{meta['status']}:{meta['completed_at']}:{meta['dispatched_at']}".encode()
+        f"{id_instance}:{meta['status']}:{meta['completed_at']}:{meta['dispatched_at']}:"
+        f"{log_count}:{log_max_id}:{log_max_ts}".encode()
     ).hexdigest()[:12]
     cache_key = f"approval_history_pdf:{id_instance}:{cache_fingerprint}"
 

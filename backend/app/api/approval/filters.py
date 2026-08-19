@@ -268,9 +268,9 @@ async def create_filter(
         text(
             f"INSERT INTO [{_SCHEMA}].[skw_approval_filters] "
             f"([filter_name],[filter_type],[id_path],[id_source],[priority],"
-            f" [universal_function],[logic_operator]) "
+            f" [universal_function],[logic_operator],[is_active]) "
             f"OUTPUT INSERTED.[id_filter] "
-            f"VALUES (:fn,:ft,:ip,:is,:pr,:uf,:lo)"
+            f"VALUES (:fn,:ft,:ip,:is,:pr,:uf,:lo,:ia)"
         ),
         {
             "fn": body.filter_name,
@@ -280,6 +280,16 @@ async def create_filter(
             "pr": body.priority,
             "uf": body.universal_function,
             "lo": logic_operator,
+            # NAPRAWA (2026-08-18, incydent id_instance=2930, FORTIS/UISA):
+            # filtr ZAWSZE powstaje jako nieaktywny. FilterCreateBody celowo
+            # nie ma pola is_active — nie ma go czym "przyslac", wiec nie ma
+            # czego tu ignorowac. Aktywacja WYLACZNIE przez oddzielny
+            # POST /{id_filter}/activate (patrz ZMIANA 3/4), ktory wymusza
+            # obecnosc >=1 warunku dla filtra standard. Eliminuje to u
+            # zrodla okno "aktywny, pusty filtr = catch-all" — auto_dispatch
+            # (worker) dopasowal dokument 2930 266ms po utworzeniu filtra
+            # 18, zanim jego pierwszy warunek zdazyl sie zapisac.
+            "ia": 0,
         },
     )
     new_id = int(result.fetchone()[0])
@@ -294,7 +304,11 @@ async def create_filter(
         entity_id=new_id,
         current_user=current_user,
         new_value=created_state,
-        details={"logic_operator": logic_operator},
+        details={
+            "logic_operator": logic_operator,
+            "is_active": False,
+            "activation_required_via": f"POST /approval/filters/{new_id}/activate",
+        },
     )
 
     return {
@@ -303,6 +317,11 @@ async def create_filter(
         "filter_type": body.filter_type,
         "priority": body.priority,
         "logic_operator": logic_operator,
+        "is_active": False,
+        "message": (
+            "Filtr utworzony jako NIEAKTYWNY. Dodaj warunki, a nastepnie "
+            f"aktywuj przez POST /approval/filters/{new_id}/activate."
+        ),
     }
 
 
@@ -446,8 +465,22 @@ async def update_filter(
         sets.append("[priority]=:pr")
         params["pr"] = body.priority
     if body.is_active is not None:
+        if body.is_active:
+            # NAPRAWA (2026-08-18): aktywacja WYLACZNIE przez dedykowany
+            # POST /{id_filter}/activate — jedyne miejsce, ktore wymusza
+            # obecnosc co najmniej jednego warunku przed przejsciem
+            # is_active 0 -> 1. Gdyby to pole zostalo dostepne rowniez tu,
+            # zwykly PATCH omijalby zabezpieczenie calkowicie.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Aktywacja filtra jest mozliwa wylacznie przez "
+                    f"POST /approval/filters/{id_filter}/activate "
+                    "(wymaga co najmniej jednego warunku dla filtra typu standard)."
+                ),
+            )
         sets.append("[is_active]=:a")
-        params["a"] = 1 if body.is_active else 0
+        params["a"] = 0
     if body.universal_function is not None:
         sets.append("[universal_function]=:uf")
         params["uf"] = body.universal_function
@@ -499,6 +532,86 @@ async def update_filter(
         "logic_operator": new_state["logic_operator"],
     }
 
+@router.post(
+    "/{id_filter}/activate",
+    summary="Aktywuj filtr (jedyna droga is_active 0 -> 1)",
+    description=(
+        "Dla filtra typu standard wymaga >=1 zapisanego warunku — inaczej "
+        "422. Dla filtra typu universal warunek nie jest wymagany "
+        "(uzywa universal_function, obowiazkowej juz przy tworzeniu). "
+        "NAPRAWA 2026-08-18 po incydencie id_instance=2930 (FORTIS/UISA, "
+        "id_filter=18): eliminuje mozliwosc istnienia aktywnego, pustego "
+        "filtra AND, ktory _evaluate_standard_filter() traktuje jako "
+        "catch-all (dopasowuje kazdy dokument)."
+    ),
+    responses={
+        404: {"description": "Filtr nie istnieje"},
+        422: {"description": "Filtr typu standard bez zadnego warunku"},
+    },
+    dependencies=[require_permission("approval.manage_filters")],
+)
+async def activate_filter(
+    id_filter: int,
+    current_user: CurrentUser,
+    db: DB,
+    redis: RedisClient,
+):
+    await _check_module_enabled(db, redis)
+
+    row = await _get_filter_row(db, id_filter)
+    if not row:
+        raise HTTPException(status_code=404, detail="Filtr nie istnieje.")
+    old_state = _filter_row_to_dict(row)
+
+    condition_count = 0
+    if old_state["filter_type"] == "standard":
+        count_row = (await db.execute(
+            text(
+                f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_approval_filter_conditions] "
+                f"WHERE [id_filter]=:f"
+            ),
+            {"f": id_filter},
+        )).fetchone()
+        condition_count = int(count_row[0]) if count_row else 0
+        if condition_count == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Filtr typu standard bez zadnego warunku nie moze zostac "
+                    "aktywowany — dzialalby jako catch-all (dopasowuje "
+                    "kazdy dokument). Dodaj co najmniej jeden warunek przez "
+                    f"POST /approval/filters/{id_filter}/conditions."
+                ),
+            )
+
+    await db.execute(
+        text(
+            f"UPDATE [{_SCHEMA}].[skw_approval_filters] "
+            f"SET [is_active]=1,[updated_at]=SYSUTCDATETIME() "
+            f"WHERE [id_filter]=:f"
+        ),
+        {"f": id_filter},
+    )
+    await db.commit()
+
+    updated_row = await _get_filter_row(db, id_filter)
+    new_state = _filter_row_to_dict(updated_row)
+    _audit_crud(
+        db,
+        action="approval_filter_activated",
+        entity_type="ApprovalFilter",
+        entity_id=id_filter,
+        current_user=current_user,
+        old_value=old_state,
+        new_value=new_state,
+        details={"condition_count": condition_count},
+    )
+
+    return {
+        "id_filter": id_filter,
+        "is_active": True,
+        "condition_count": condition_count,
+    }
 
 @router.delete(
     "/{id_filter}/initiate",
@@ -733,6 +846,47 @@ async def delete_condition(
         ),
         {"c": id_condition, "f": id_filter},
     )
+
+    # NAPRAWA (2026-08-18, incydent id_instance=2930): jesli to byl OSTATNI
+    # warunek aktywnego filtra standard — automatyczna dezaktywacja, zeby
+    # nie zostawic aktywnego, pustego AND-a (catch-all).
+    # ZALOZENIE (Claude, do potwierdzenia z Michalem — front napisal
+    # "albo blokuje operacje, albo automatycznie dezaktywuje", bez
+    # jednoznacznego wyboru): wybrano auto-dezaktywacje — mniej zaskakujaca
+    # dla wywolujacego (200 zamiast 409/422), filtr i tak przestaje
+    # dzialac zgodnie z oczekiwaniem. Jesli wolisz twarda blokade zamiast
+    # tego, przenies ponizszy warunek PRZED DELETE powyzej i zamien
+    # UPDATE is_active=0 na "raise HTTPException(409, ...)" bez wykonywania
+    # samego DELETE.
+    auto_deactivated = False
+    remaining_row = (await db.execute(
+        text(
+            f"SELECT COUNT(*) FROM [{_SCHEMA}].[skw_approval_filter_conditions] "
+            f"WHERE [id_filter]=:f"
+        ),
+        {"f": id_filter},
+    )).fetchone()
+    remaining_count = int(remaining_row[0]) if remaining_row else 0
+
+    filter_state_row = await _get_filter_row(db, id_filter)
+    filter_state = _filter_row_to_dict(filter_state_row) if filter_state_row else None
+
+    if (
+        remaining_count == 0
+        and filter_state is not None
+        and filter_state["filter_type"] == "standard"
+        and filter_state["is_active"]
+    ):
+        await db.execute(
+            text(
+                f"UPDATE [{_SCHEMA}].[skw_approval_filters] "
+                f"SET [is_active]=0,[updated_at]=SYSUTCDATETIME() "
+                f"WHERE [id_filter]=:f"
+            ),
+            {"f": id_filter},
+        )
+        auto_deactivated = True
+
     await db.commit()
 
     _audit_crud(
@@ -743,6 +897,35 @@ async def delete_condition(
         current_user=current_user,
         old_value=old_condition,
         new_value={"deleted": True},
-        details={"id_filter": id_filter},
+        details={"id_filter": id_filter, "auto_deactivated": auto_deactivated},
     )
-    return {"id_condition": id_condition, "deleted": True}
+    if auto_deactivated:
+        _audit_crud(
+            db,
+            action="approval_filter_auto_deactivated",
+            entity_type="ApprovalFilter",
+            entity_id=id_filter,
+            current_user=current_user,
+            old_value={"is_active": True},
+            new_value={"is_active": False},
+            details={
+                "reason": "last_condition_removed",
+                "id_condition_removed": id_condition,
+            },
+        )
+        logger.warning(
+            orjson.dumps({
+                "event": "approval_filter_auto_deactivated",
+                "id_filter": id_filter,
+                "reason": "last_condition_removed",
+                "id_condition_removed": id_condition,
+                "by_user": current_user.id_user,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }).decode()
+        )
+
+    return {
+        "id_condition": id_condition,
+        "deleted": True,
+        "filter_auto_deactivated": auto_deactivated,
+    }

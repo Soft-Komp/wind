@@ -34,7 +34,10 @@ from worker.tasks.source_sync_task import (
     source_sync_task as _source_sync_task,
     source_sync_task_single as _source_sync_task_single,
 )
-from worker.tasks.auto_dispatch_task import auto_dispatch_task as _auto_dispatch_task
+from worker.tasks.auto_dispatch_task import (
+    auto_dispatch_task as _auto_dispatch_task,
+    auto_dispatch_task_single as _auto_dispatch_task_single,
+)
 from worker.tasks.ksef_sync_task import ksef_sync_task as _ksef_sync_task
 # F7 — OCR
 from worker.tasks.ocr_task import ocr_task as _ocr_task
@@ -54,6 +57,7 @@ flush_approval_emails      = track_job("flush_approval_emails")(_flush_approval_
 source_sync_task           = track_job("source_sync_task")(_source_sync_task)
 ksef_sync_task              = track_job("ksef_sync_task")(_ksef_sync_task)
 auto_dispatch_task         = track_job("auto_dispatch_task")(_auto_dispatch_task)
+auto_dispatch_task_single  = track_job("auto_dispatch_task_single")(_auto_dispatch_task_single)
 ocr_task = track_job("ocr_task")(_ocr_task)
 source_config_snapshot_task = track_job("source_config_snapshot_task")(_source_config_snapshot_task)
 
@@ -198,6 +202,7 @@ class WorkerSettings:
         _source_sync_task_single,
         ksef_sync_task,
         auto_dispatch_task,
+        auto_dispatch_task_single,
         ocr_task,
         source_config_snapshot_task,
     ]

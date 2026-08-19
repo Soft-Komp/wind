@@ -1269,7 +1269,9 @@ async def cancel_instance(
     description=(
         "Wstawia grupe docelowa przed biezacym etapem. Biezacy przesuwa sie o +1. "
         "**Roznica od send-to-group:** nie unierwaznia glosow. "
-        "**Wymaga:** `approval.forward` + czlonkostwo. "
+        "**Wymaga:** `approval.forward` + (czlonkostwo w biezacej grupie LUB "
+        "`approval.supervise`, jesli flaga SystemConfig "
+        "APPROVAL_FORWARD_SUPERVISE_BYPASS_ENABLED='true'; domyslnie wylaczone). "
         "**409:** ta sama grupa docelowa."
     ),
     responses={
@@ -1289,6 +1291,11 @@ async def forward_instance(
     bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+    # FIX 2026-08-18: dodano has_supervise, zabezpieczone flaga configu
+    # APPROVAL_FORWARD_SUPERVISE_BYPASS_ENABLED (patrz approval_service_ext.forward()
+    # i migracja 0077). Wzorzec identyczny jak rollback_instance/reject_instance.
+    from app.core.dependencies import _get_role_permissions
+    perms = await _get_role_permissions(current_user.role_id, db, redis)
 
     result = await forward(
         db, redis,
@@ -1299,6 +1306,7 @@ async def forward_instance(
         comment=body.comment,
         deadline_hours=body.deadline_hours,
         has_forward_permission=True,
+        has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
 
@@ -1351,6 +1359,12 @@ async def send_to_group_instance(
     bg:           BackgroundTasks,
 ):
     ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+    # FIX 2026-08-10: brakowalo pobrania i przekazania has_supervise.
+    # Bez tego kazdy uzytkownik (nawet z approval.supervise) byl kierowany
+    # do sprawdzenia czlonkostwa w biezacej grupie -> falszywe 403.
+    # Wzorzec identyczny jak w rollback_instance/reject_instance (patrz wyzej).
+    from app.core.dependencies import _get_role_permissions
+    perms = await _get_role_permissions(current_user.role_id, db, redis)
 
     result = await send_to_group(
         db, redis,
@@ -1361,6 +1375,7 @@ async def send_to_group_instance(
         comment=body.comment,
         deadline_hours=body.deadline_hours,
         has_send_to_group_permission=True,
+        has_supervise="approval.supervise" in perms,
         ip_address=ip,
     )
 

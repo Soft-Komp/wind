@@ -6,7 +6,7 @@ Odpowiedzialnosc:
     resolve_path() — glowna funkcja; zwraca id_path lub None.
 
 Algorytm (wg specyfikacji 3.7 + rozszerzenie AND/OR z 2026-07-31):
-    1. Pobierz aktywne filtry posortowane po priority ASC; ostatnie dopasowanie ma najwyzszy priorytet.
+    1. Pobierz aktywne filtry posortowane po priority DESC (wyzszy = wazniejszy).
     2. Dla kazdego filtra:
        a. Sprawdz typ: standard lub universal
        b. standard: oceń warunki przez evaluate_standard_filter() - logika
@@ -111,6 +111,17 @@ async def resolve_path(
     # Pobierz aktywne filtry dla tego zrodla lub globalne (id_source IS NULL)
     # Posortowane: wyzszy priority = bardziej szczegolowy = OSTATNI (last match wins)
     # Dlatego sortujemy ASC — ostatni dopasowany (najwyzszy priority) wygra
+    #
+    # NAPRAWA 2026-08-10 (zgloszenie frontu, notatka auto-dispatch 2026-08-07,
+    # pkt 3.4 / sugestia 4.4): dotychczasowy ORDER BY priority ASC nie mial
+    # drugiego kryterium sortowania. Przy kilku filtrach o identycznym priority
+    # (front zglosil, ze to w praktyce czesty przypadek) o tym "ktory jest
+    # ostatni" decydowala niedeterministyczna kolejnosc zwracana przez MSSQL —
+    # mogla sie zmienic miedzy wywolaniami bez zadnej zmiany danych. Dodano
+    # id_filter ASC jako stabilny tie-break, doslownie wg sugestii frontu.
+    #
+    # BRAK FORMALNEJ SPECYFIKACJI dla tej zmiany — zaden dokument Etap2 nie
+    # okresla zachowania przy remisie priority. Patrz PODSUMOWANIE_zmian.md.
     filters_rows = await db.execute(
         text(
             f"SELECT f.[id_filter], f.[filter_type], f.[id_path], "
@@ -118,7 +129,7 @@ async def resolve_path(
             f"FROM [{_SCHEMA}].[skw_approval_filters] f "
             f"WHERE f.[is_active] = 1 "
             f"  AND (f.[id_source] = :src OR f.[id_source] IS NULL) "
-            f"ORDER BY f.[priority] ASC"
+            f"ORDER BY f.[priority] ASC, f.[id_filter] ASC"
         ),
         {"src": id_source},
     )
@@ -292,7 +303,7 @@ async def _evaluate_standard_filter(
     else:
         matched = all(r["result"] for r in results)
 
-    # Pelny log strukturalny JSON - bardzo szczegolowy celowo, zgodnie
+    # Pelny log strukturalny JSON - absudalnie szczegolowy celowo, zgodnie
     # z wymogiem pelnej odtwarzalnosci decyzji dispatchu.
     logger.info(json.dumps({
         "event": "filter_engine.evaluate_standard",

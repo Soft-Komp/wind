@@ -48,7 +48,8 @@ async def forward(
     comment: str,
     deadline_hours: int | None = None,
     has_forward_permission: bool,
-    ip_address: str | None = None,
+    has_supervise: bool = False,
+    ip_address: str | None = None
 ) -> dict:
     """
     Przekazuje dokument do innej grupy bez zaliczania biezacego etapu.
@@ -82,6 +83,7 @@ async def forward(
         _check_module_enabled, _check_ratelimit, _get_group_members_cached,
         _get_group_delegations_cached, _resolve_effective_users,
         _insert_approval_log, insert_group_into_snapshot, _jsonl_log,
+        _get_config_bool,
     )
 
     if not comment or not comment.strip():
@@ -150,14 +152,17 @@ async def forward(
         effective = _resolve_effective_users(members, delegations)
         is_member = id_user in members
         is_delegate = any(d == id_user for d in effective.values() if d is not None)
+        supervise_bypass_used = False
         if not is_member and not is_delegate:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "Brak uprawnienia do przekazania dokumentu. "
-                    "Wymagane czlonkostwo w grupie biezacego etapu."
-                ),
-            )
+            bypass_enabled = await _get_config_bool(
+                db, redis, key="APPROVAL_FORWARD_SUPERVISE_BYPASS_ENABLED", default=False)
+            if has_supervise and bypass_enabled:
+                supervise_bypass_used = True
+                logger.info("forward | SUPERVISE_OVERRIDE uzyty | id_user=%d ...", ...)
+            else:
+                raise HTTPException(403, detail="Brak uprawnienia... "
+                    + (" lub approval.supervise (funkcja wylaczona w konfiguracji)."
+                       if has_supervise and not bypass_enabled else "."))
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
